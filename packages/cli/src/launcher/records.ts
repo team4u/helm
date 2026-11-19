@@ -1,16 +1,16 @@
 /**
  * Launcher-owned state records: `hub.pid` (detached process identity) and `launch.json` (sticky
  * launch configuration). Release pointers (`current.json`) and cooldown markers
- * (`update-blocked.json`) are owned by the shared update engine (`@helm/env-io`) and used from there — the launcher keeps no
+ * (`update-blocked.json`) are owned by the shared update engine (`@helmx/env-io`) and used from there — the launcher keeps no
  * second copy of engine state. JSON reads are strict (explicit errors on corruption, `null` only
  * on ENOENT via the engine's `readStateJson`); writes are atomic (`0600`).
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
-import { atomicWriteJson } from '@helm/env-io';
-import { readStateJson } from '@helm/env-io';
-import { isStrictSemver } from '@helm/protocol';
+import { atomicWriteJson } from '@helmx/env-io';
+import { readStateJson } from '@helmx/env-io';
+import { isStrictSemver } from '@helmx/protocol';
 import { pathsOf } from './layout.js';
 
 function requireString(rec: Record<string, unknown>, key: string): string {
@@ -163,9 +163,9 @@ function parsePortEnv(value: string | undefined, label: string): number | undefi
 
 /**
  * Resolve the effective launch configuration. Precedence: explicit flags > environment variables
- * (`HELM_PORT`, `HELM_HOST`, `HELM_DATA_DIR`, `HELM_MODEL`, `HELM_WEB_DIST_DIR`) > persisted
- * `launch.json` > product defaults (port 3202, loopback host). `HELM_WEB_DIST_DIR=false` disables
- * static hosting (matches `@helm/hub` semantics).
+ * (`HELMX_PORT`, `HELMX_HOST`, `HELMX_DATA_DIR`, `HELMX_MODEL`, `HELMX_WEB_DIST_DIR`) > persisted
+ * `launch.json` > product defaults (port 3202, loopback host). `HELMX_WEB_DIST_DIR=false` disables
+ * static hosting (matches `@helmx/hub` semantics).
  */
 export function resolveEffectiveLaunchConfig(input: {
   flags?: LaunchConfig;
@@ -174,11 +174,11 @@ export function resolveEffectiveLaunchConfig(input: {
 }): EffectiveLaunchConfig {
   const flags = input.flags ?? {};
   const saved = input.saved ?? {};
-  const port = flags.port ?? parsePortEnv(input.env.HELM_PORT, 'HELM_PORT') ?? saved.port ?? 3202;
-  const host = flags.host ?? nonEmpty(input.env.HELM_HOST) ?? saved.host ?? '127.0.0.1';
-  const dataDir = flags.dataDir ?? nonEmpty(input.env.HELM_DATA_DIR) ?? saved.dataDir;
-  const model = flags.model ?? nonEmpty(input.env.HELM_MODEL) ?? saved.model;
-  const webDistEnv = nonEmpty(input.env.HELM_WEB_DIST_DIR);
+  const port = flags.port ?? parsePortEnv(input.env.HELMX_PORT, 'HELMX_PORT') ?? saved.port ?? 3202;
+  const host = flags.host ?? nonEmpty(input.env.HELMX_HOST) ?? saved.host ?? '127.0.0.1';
+  const dataDir = flags.dataDir ?? nonEmpty(input.env.HELMX_DATA_DIR) ?? saved.dataDir;
+  const model = flags.model ?? nonEmpty(input.env.HELMX_MODEL) ?? saved.model;
+  const webDistEnv = nonEmpty(input.env.HELMX_WEB_DIST_DIR);
   const webDistDir = flags.webDistDir ?? webDistEnv ?? saved.webDistDir;
   const resolved: EffectiveLaunchConfig = { port, host };
   if (dataDir !== undefined) resolved.dataDir = dataDir;

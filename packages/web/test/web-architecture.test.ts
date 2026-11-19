@@ -3,7 +3,7 @@
  * 1. 零 Emoji 铁律（packages/web/src、packages/plugin-client/src、index.html）；
  * 2. Radix / 受控原语纪律（零原生 <select>、零原生 type="checkbox"、零 window.confirm）；
  * 3. Fast Refresh 纪律（所有 .tsx 仅导出 PascalCase React 组件或 TS 类型）；
- * 4. 唯一 Hash 导航（仅 HelmStoreProvider.tsx 可直接操作 history.pushState / replaceState）；
+ * 4. 唯一 Hash 导航（仅 HelmxStoreProvider.tsx 可直接操作 history.pushState / replaceState）；
  * 5. 内核宿主壳零硬编码插件 ID / 工作流私有状态；
  * 6. index.html 移动端 viewport 与自适应明暗双模式 SVG Favicon。
  */
@@ -86,8 +86,8 @@ test('Fast Refresh 纪律：所有 .tsx 模块仅导出 PascalCase 组件与 TS 
   assert.deepEqual(violations, [], `违反 Fast Refresh 导出规范：\n${violations.join('\n')}`)
 })
 
-test('唯一 Hash 导航：仅 HelmStoreProvider.tsx 允许直接调用 history.pushState / replaceState', { timeout: 60_000 }, () => {
-  const allowed = join(WEB_SRC, 'lib', 'HelmStoreProvider.tsx')
+test('唯一 Hash 导航：仅 HelmxStoreProvider.tsx 允许直接调用 history.pushState / replaceState', { timeout: 60_000 }, () => {
+  const allowed = join(WEB_SRC, 'lib', 'HelmxStoreProvider.tsx')
   const violations: string[] = []
   for (const file of allClientFiles) {
     if (file === allowed) continue
@@ -149,7 +149,7 @@ test('PWA 清单与 HTML 元数据：manifest、apple-touch-icon 及移动宿主
   assert.match(indexHtml, /<meta\s+name=["']mobile-web-app-capable["']\s+content=["']yes["']\s*\/?>/i)
   assert.match(indexHtml, /<meta\s+name=["']apple-mobile-web-app-capable["']\s+content=["']yes["']\s*\/?>/i)
   assert.match(indexHtml, /<meta\s+name=["']apple-mobile-web-app-status-bar-style["']\s+content=["'][^"']+["']\s*\/?>/i)
-  assert.match(indexHtml, /<meta\s+name=["']apple-mobile-web-app-title["']\s+content=["']Helm["']\s*\/?>/i)
+  assert.match(indexHtml, /<meta\s+name=["']apple-mobile-web-app-title["']\s+content=["']Helmx["']\s*\/?>/i)
 
   const manifestRaw = readFileSync(join(WEB_PUBLIC, 'manifest.webmanifest'), 'utf8')
   assert.equal(EMOJI_RE.test(manifestRaw), false, 'manifest.webmanifest 严禁包含 Emoji')
@@ -167,9 +167,9 @@ test('PWA 清单与 HTML 元数据：manifest、apple-touch-icon 及移动宿主
     icons: Array<{ src: string; sizes: string; type: string; purpose?: string }>
   }
   assert.equal(manifest.id, '/')
-  assert.equal(manifest.name, 'Helm')
-  assert.equal(manifest.short_name, 'Helm')
-  assert.equal(manifest.description, 'Helm 主控台')
+  assert.equal(manifest.name, 'Helmx')
+  assert.equal(manifest.short_name, 'Helmx')
+  assert.equal(manifest.description, 'Helmx 主控台')
   assert.equal(manifest.start_url, '/')
   assert.equal(manifest.scope, '/')
   assert.equal(manifest.display, 'standalone')
@@ -212,7 +212,7 @@ test('public/sw.js 零缓存不变量：包含 notificationclick，绝无 fetch 
   assert.match(swSource, /skipWaiting/)
   assert.match(swSource, /clients\.claim/)
   assert.match(swSource, /notificationclick/)
-  assert.match(swSource, /helm:notification-click/)
+  assert.match(swSource, /helmx:notification-click/)
   assert.match(swSource, /openWindow/)
   assert.doesNotMatch(swSource, /\bfetch\b/, 'public/sw.js 严禁监听或触碰 fetch')
   assert.doesNotMatch(swSource, /\bcaches\b/, 'public/sw.js 严禁触碰 caches')

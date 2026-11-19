@@ -3,7 +3,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationSummary, Profile } from '@helm/protocol'
+import type { ConversationSummary, Profile } from '@helmx/protocol'
 import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
 import {
   applyScreenParamsPatch,

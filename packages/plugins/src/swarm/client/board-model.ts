@@ -9,7 +9,7 @@
  *   projection with headline, member live states, edges and recent posts;
  * - `board_status` / `board_read` action payloads for the explicit fallback.
  */
-import type { TimelineRendererProps } from '@helm/protocol'
+import type { TimelineRendererProps } from '@helmx/protocol'
 import type { SwarmIndexDoc } from './models.ts'
 
 export type WorkerAccess = 'readwrite' | 'readonly'
@@ -157,7 +157,7 @@ export interface BoardWakeupReceiptMeta {
 }
 
 // 本地宽松对象守卫：client bundle 的共享外部依赖白名单（CLIENT_SHARED_EXTERNALS）不含
-// @helm/protocol，浏览器侧不能运行时导入 protocol 的 isJsonObject，故保留等价私有实现。
+// @helmx/protocol，浏览器侧不能运行时导入 protocol 的 isJsonObject，故保留等价私有实现。
 export function isPlainObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v)
 }

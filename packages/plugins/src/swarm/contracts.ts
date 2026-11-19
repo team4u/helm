@@ -1,5 +1,5 @@
 import {
-  HelmError,
+  HelmxError,
   isJsonObject,
   type ConversationScope,
   type ConversationSummary,
@@ -7,7 +7,7 @@ import {
   type PluginDocHandle,
   type PluginSessionDocHandle,
   type TurnOutcome,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 
 // ---------------------------------------------------------------------------
 // 常量定义
@@ -409,8 +409,8 @@ export function isBoardPostKind(v: unknown): v is BoardPostKind {
 
 /** 即时读取并严格校验配置：非法显式抛错，绝不静默取默认。 */
 export function resolveSwarmConfig(raw: Record<string, unknown>): SwarmConfig {
-  const err = (msg: string): HelmError =>
-    new HelmError('swarm_config_invalid', `${SWARM_PLUGIN_ID} 配置非法：${msg}`, 500, { pluginId: SWARM_PLUGIN_ID })
+  const err = (msg: string): HelmxError =>
+    new HelmxError('swarm_config_invalid', `${SWARM_PLUGIN_ID} 配置非法：${msg}`, 500, { pluginId: SWARM_PLUGIN_ID })
   const readBoundedInt = (key: keyof SwarmConfig, min: number, max: number): number => {
     if (key in raw && raw[key] !== undefined) {
       const v = raw[key]
@@ -451,11 +451,11 @@ export function asConversationDeletedEvent(payload: unknown): number | undefined
 /** 成员短名强校验：小写字母开头，1..32 位小写字母/数字/连字符/下划线，且非保留字。 */
 export function assertMemberName(value: unknown): string {
   if (typeof value !== 'string') {
-    throw new HelmError('validation_error', `成员名必须是字符串（收到：${String(value)}）`, 400, {})
+    throw new HelmxError('validation_error', `成员名必须是字符串（收到：${String(value)}）`, 400, {})
   }
   const trimmed = value.trim()
   if (!MEMBER_NAME_RE.test(trimmed)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `成员名 '${value}' 非法（需 1..32 位小写字母开头，仅含 [a-z0-9_-]）`,
       400,
@@ -463,7 +463,7 @@ export function assertMemberName(value: unknown): string {
     )
   }
   if (RESERVED_MEMBER_NAMES.has(trimmed)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `成员名 '${trimmed}' 是系统保留字（禁止使用 coordinator / all / system）`,
       400,
@@ -476,11 +476,11 @@ export function assertMemberName(value: unknown): string {
 /** 频道名强校验：小写字母开头，1..40 位 [a-z0-9_-]（不带前导 #）。 */
 export function assertChannelName(value: unknown): string {
   if (typeof value !== 'string') {
-    throw new HelmError('validation_error', `频道名必须是字符串（收到：${String(value)}）`, 400, {})
+    throw new HelmxError('validation_error', `频道名必须是字符串（收到：${String(value)}）`, 400, {})
   }
   const trimmed = value.trim()
   if (!CHANNEL_NAME_RE.test(trimmed)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `频道名 '${value}' 非法（需 1..40 位小写字母开头，仅含 [a-z0-9_-]，不含前导 #）`,
       400,
@@ -493,18 +493,18 @@ export function assertChannelName(value: unknown): string {
 /** 协作组 ID 强校验（防路径穿越）。 */
 export function assertGroupId(value: unknown): string {
   if (typeof value !== 'string') {
-    throw new HelmError('validation_error', `groupId 必须是字符串（收到：${String(value)}）`, 400, {})
+    throw new HelmxError('validation_error', `groupId 必须是字符串（收到：${String(value)}）`, 400, {})
   }
   const trimmed = value.trim()
   if (!GROUP_ID_RE.test(trimmed)) {
-    throw new HelmError('validation_error', `groupId '${value}' 非法（需 1..64 位 [A-Za-z0-9_-]）`, 400, { groupId: value })
+    throw new HelmxError('validation_error', `groupId '${value}' 非法（需 1..64 位 [A-Za-z0-9_-]）`, 400, { groupId: value })
   }
   return trimmed
 }
 
 export function assertBoardPostKind(value: unknown): BoardPostKind {
   if (!isBoardPostKind(value)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `kind 非法（期望 ${BOARD_POST_KINDS.join(' | ')}，收到：${String(value)}）`,
       400,
@@ -530,8 +530,8 @@ export function toGroupSummary(record: CollabGroupRecord): CollabGroupSummary {
 }
 
 export function assertIndexDoc(value: unknown): SwarmIndexDoc {
-  const corrupt = (detail: string): HelmError =>
-    new HelmError('swarm_doc_corrupt', `插件 doc ${INDEX_DOC_NAME} ${detail}`, 500, { pluginId: SWARM_PLUGIN_ID })
+  const corrupt = (detail: string): HelmxError =>
+    new HelmxError('swarm_doc_corrupt', `插件 doc ${INDEX_DOC_NAME} ${detail}`, 500, { pluginId: SWARM_PLUGIN_ID })
   if (!isJsonObject(value) || !Array.isArray(value.workers) || !Array.isArray(value.groups)) {
     throw corrupt('结构非法（期望 { workers: [], groups: [] }）')
   }
@@ -591,7 +591,7 @@ function isNonEmptyString(v: unknown): v is string {
 function assertInflightBase(
   raw: unknown,
   label: string,
-  corrupt: (detail: string) => HelmError,
+  corrupt: (detail: string) => HelmxError,
 ): Record<string, unknown> {
   if (!isJsonObject(raw)) throw corrupt(`${label} 必须是对象`)
   if (!isNonEmptyString(raw.requestId)) throw corrupt(`${label}.requestId 非法`)
@@ -603,7 +603,7 @@ function assertInflightBase(
 function assertInflightRangeIntent(
   raw: unknown,
   label: string,
-  corrupt: (detail: string) => HelmError,
+  corrupt: (detail: string) => HelmxError,
 ): void {
   const obj = assertInflightBase(raw, label, corrupt)
   if (!isPosIntId(obj.fromSeq) || !isPosIntId(obj.toSeq) || obj.fromSeq > obj.toSeq) {
@@ -612,8 +612,8 @@ function assertInflightRangeIntent(
 }
 
 export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
-  const corrupt = (detail: string): HelmError =>
-    new HelmError('swarm_doc_corrupt', `协作组 meta.json 损坏：${detail}`, 500, { pluginId: SWARM_PLUGIN_ID })
+  const corrupt = (detail: string): HelmxError =>
+    new HelmxError('swarm_doc_corrupt', `协作组 meta.json 损坏：${detail}`, 500, { pluginId: SWARM_PLUGIN_ID })
   if (!isJsonObject(value)) throw corrupt('顶层必须是对象')
   if (typeof value.id !== 'string' || !GROUP_ID_RE.test(value.id)) throw corrupt('id 非法')
   if (typeof value.title !== 'string' || value.title.trim() === '') throw corrupt('title 非法')
@@ -723,8 +723,8 @@ export function assertCollabGroupRecord(value: unknown): CollabGroupRecord {
 }
 
 export function assertBoardPost(value: unknown): BoardPost {
-  const corrupt = (detail: string): HelmError =>
-    new HelmError('swarm_doc_corrupt', `协作组 board.jsonl 记录损坏：${detail}`, 500, { pluginId: SWARM_PLUGIN_ID })
+  const corrupt = (detail: string): HelmxError =>
+    new HelmxError('swarm_doc_corrupt', `协作组 board.jsonl 记录损坏：${detail}`, 500, { pluginId: SWARM_PLUGIN_ID })
   if (!isJsonObject(value)) throw corrupt('记录必须是对象')
   if (!isPosIntId(value.seq)) throw corrupt('seq 必须是正整数')
   if (typeof value.groupId !== 'string' || value.groupId.trim() === '') throw corrupt('groupId 非法')

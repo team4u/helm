@@ -11,7 +11,7 @@ When the user needs a tool that is "reusable, with its own UI and persistent dat
 ## L1 or L2: choose first
 
 - **L1 ephemeral card (```ui code block)**: data tables, metrics, and confirmation forms shown once inside the current conversation; they sink with the conversation, with no persistent state and no backend logic. See the generative-ui skill (`load_skill({ skillId: "generative-ui" })`).
-- **L2 full-stack micro-app (this skill)**: tool desks the user explicitly wants to "save/publish/open again later", or that need cross-conversation persistent data, custom backend actions, or a standalone UI. The artifact is a standard helm plugin package published to the app center via `builtin:apps`.
+- **L2 full-stack micro-app (this skill)**: tool desks the user explicitly wants to "save/publish/open again later", or that need cross-conversation persistent data, custom backend actions, or a standalone UI. The artifact is a standard helmx plugin package published to the app center via `builtin:apps`.
 
 When unsure, ask the user one question; do not guess for them.
 
@@ -44,31 +44,31 @@ Backend `index.ts` (a standard `PluginDefinition`):
 
 Frontend `client/index.tsx` (host shared SDK, import directly without installing):
 
-- **The only allowed runtime bare imports are host shared modules**: `react`, `react-dom`, `lucide-react`, `@helm/plugin-client`; types may use `import type ... from '@helm/protocol'`. For third-party npm packages, declare each one in `plugin.json.clientDependencies` or `package.json.helm.clientDependencies` first, then state the version range in `package.json.dependencies`; otherwise `apps_validate` fails explicitly on undeclared bare dependencies.
-- **The `@helm/plugin-client` shared export list**:
+- **The only allowed runtime bare imports are host shared modules**: `react`, `react-dom`, `lucide-react`, `@helmx/plugin-client`; types may use `import type ... from '@helmx/protocol'`. For third-party npm packages, declare each one in `plugin.json.clientDependencies` or `package.json.helmx.clientDependencies` first, then state the version range in `package.json.dependencies`; otherwise `apps_validate` fails explicitly on undeclared bare dependencies.
+- **The `@helmx/plugin-client` shared export list**:
   - **Reactive hooks**: `usePluginContext()` (provides `callAction` / `submitInput` / `openScreen` / `openSplitScreen` / `openConversationDrawer` / `openArtifact` / `openWorkbench` / `notify`), `usePluginDoc(name, pluginId?)`, `usePluginSessionDoc(name, opts?)`, `useConversations()`, `useConversation(id)`, `usePlugins()`, `useToolActivity(callId, active)`;
   - **Page layout primitives (prefer these over hand-rolled page scaffolding)**: `Screen` (fullscreen container + standard page header `title/subtitle/actions`), `ScreenSection` (section container `title/titleExtra`), `DataTable` (composable table shell with unified `loading/empty` placeholders; `thead/tbody` expressed as JSX), `KvGrid` (`items: [{ key, value }]` key-value grid);
-  - **Accessible controls and content components**: `HelmIcon`, `Switch`, `Select`, `MultiSelect`, `Checkbox`, `Tabs / TabsList / TabsTrigger / TabsContent`, `SegmentedControl`, `Dialog / DialogTrigger / DialogContent / DialogTitle / DialogDescription / DialogClose`, `Callout`, `MarkdownView`, `MarkdownText`, `CodeBlockView`, `CopyButton`, `ViewBoundary`, `PluginSlot`;
+  - **Accessible controls and content components**: `HelmxIcon`, `Switch`, `Select`, `MultiSelect`, `Checkbox`, `Tabs / TabsList / TabsTrigger / TabsContent`, `SegmentedControl`, `Dialog / DialogTrigger / DialogContent / DialogTitle / DialogDescription / DialogClose`, `Callout`, `MarkdownView`, `MarkdownText`, `CodeBlockView`, `CopyButton`, `ViewBoundary`, `PluginSlot`;
 - Styling uses host CSS variables (`var(--bg-elevated)`, `var(--border)` etc.) to stay dark/light adaptive; local `.css` files are bundled via `import './styles.css'`; never write the host's styles.css;
 - Component files export only components and types (Fast Refresh); the `module` path and named `export` referenced by `client` must match reality (doctor validates compiled artifact exports).
 
-Full runnable template: `load_skill({ skillId: "app-builder", path: "references/fullstack-template.md" })`; for advanced extension points (backend lifecycle hooks, `composerCompleter`, `artifactPreviewer`, workbench panels, etc.), consult `load_skill({ skillId: "helm-cli", path: "references/skill-and-plugin-dev.md" })` on demand.
+Full runnable template: `load_skill({ skillId: "app-builder", path: "references/fullstack-template.md" })`; for advanced extension points (backend lifecycle hooks, `composerCompleter`, `artifactPreviewer`, workbench panels, etc.), consult `load_skill({ skillId: "helmx-cli", path: "references/skill-and-plugin-dev.md" })` on demand.
 
 ### 3. Mandatory static self-check (Zero-Broken-App)
 
-After writing or modifying code you **must** invoke the `apps_validate` tool (CLI: `helm apps validate <dir> --json`). It runs the real four-phase checks: manifest / backend TS transpile / real registration assertions / client esbuild compile and export validation, plus the "at least one ctx.ui.screen" check.
+After writing or modifying code you **must** invoke the `apps_validate` tool (CLI: `helmx apps validate <dir> --json`). It runs the real four-phase checks: manifest / backend TS transpile / real registration assertions / client esbuild compile and export validation, plus the "at least one ctx.ui.screen" check.
 
 - When it returns `ok: false`, fix item by item per the `checks` report (TS types, schemas, or React export errors on the spot) until `ok: true`;
 - **Never skip the precheck and deliver anyway**; never fabricate check results.
 
 ### 4. Publish or deliver as draft
 
-- When the user wants it directly usable or wants to upgrade an existing app: call `apps_publish` (pass `dir` absolute path, `icon` (lucide name), `category` (productivity/devops/data/finance/automation/other)). On success, output a ```ui delivery card in the reply body with "open the app side-by-side on the right screen" (`{ "type": "helm:open", "target": "screen:<appId>/main", "split": true }`) and "go to the app center" (`{ "type": "helm:open", "target": "screen:builtin:apps/center" }`) buttons;
-- When the user wants to review first: only run `apps_validate` and output a ```ui preview card (app structure summary + a "one-click publish to app center" button bound to `{ "type": "helm:action", "pluginId": "builtin:apps", "actionId": "publish", "input": { "dir": "<absDir>", "category": "..." } }`), then wait for the user's click;
+- When the user wants it directly usable or wants to upgrade an existing app: call `apps_publish` (pass `dir` absolute path, `icon` (lucide name), `category` (productivity/devops/data/finance/automation/other)). On success, output a ```ui delivery card in the reply body with "open the app side-by-side on the right screen" (`{ "type": "helmx:open", "target": "screen:<appId>/main", "split": true }`) and "go to the app center" (`{ "type": "helmx:open", "target": "screen:builtin:apps/center" }`) buttons;
+- When the user wants to review first: only run `apps_validate` and output a ```ui preview card (app structure summary + a "one-click publish to app center" button bound to `{ "type": "helmx:action", "pluginId": "builtin:apps", "actionId": "publish", "input": { "dir": "<absDir>", "category": "..." } }`), then wait for the user's click;
 - Upgrading a published app: edit the same workspace source and run `apps_publish` again (same source takes the update hot-reload path; data is preserved).
 
 ## Boundary facts (tell the user honestly)
 
 - **No sandbox**: published apps are in-process trusted plugin code with host privileges (they can read/write files and execute across nodes); only publish code from trusted sources;
 - Path boundary: `validate` / `publish` accept only **Hub-local** (local node) paths; when the conversation is bound to a remote node they fail explicitly instead of guessing same-name paths on the Hub host;
-- Published artifacts install to `<dataDir>/plugins/<appId>` (a managed copy, not a symlink): after editing source, publish again to sync; `helm apps remove` uninstalls.
+- Published artifacts install to `<dataDir>/plugins/<appId>` (a managed copy, not a symlink): after editing source, publish again to sync; `helmx apps remove` uninstalls.

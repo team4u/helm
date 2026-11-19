@@ -6,9 +6,9 @@ import type {
   ConversationLive,
   ConversationSummary,
   ProfileStarterPrompt,
-} from '@helm/protocol/browser'
+} from '@helmx/protocol/browser'
 import { artifactsApi } from '../lib/api.js'
-import { HelmIcon, CopyButton } from '@helm/plugin-client'
+import { HelmxIcon, CopyButton } from '@helmx/plugin-client'
 import {
   useConversationDetail,
   useConversationSummary,
@@ -120,7 +120,7 @@ function AttachmentImage({ att, conversationId }: { att: ConversationAttachmentR
   if (failed !== null) {
     return (
       <span className="attachment-chip" title={t('conv.attachment.imageFailed', { reason: failed ?? '' })}>
-        <HelmIcon name="alert-triangle" size={11} />
+        <HelmxIcon name="alert-triangle" size={11} />
         {att.name}
       </span>
     )
@@ -128,7 +128,7 @@ function AttachmentImage({ att, conversationId }: { att: ConversationAttachmentR
   if (url === null) {
     return (
       <span className="attachment-chip">
-        <HelmIcon name="loader" size={11} />
+        <HelmxIcon name="loader" size={11} />
         {att.name}
       </span>
     )
@@ -165,7 +165,7 @@ function AttachmentChips({
             inline
             fallback={
               <span className="attachment-chip">
-                <HelmIcon name="file-text" size={11} />
+                <HelmxIcon name="file-text" size={11} />
                 {att.name}
               </span>
             }
@@ -182,7 +182,7 @@ function AttachmentChips({
               setActiveModal({ kind: 'artifact-preview', artifactId: att.id, conversationId })
             }
           >
-            <HelmIcon name="file-text" size={11} />
+            <HelmxIcon name="file-text" size={11} />
             <span>{att.name}</span>
             <span className="mono tabular-nums">{formatBytes(att.size)}</span>
           </button>
@@ -317,12 +317,12 @@ function HumanMessage({
     <div className={`msg-human-row${item.origin !== 'human' ? ' msg-human-row-external' : ''}`} tabIndex={0}>
       {item.queuedMode !== undefined ? (
         <span className="msg-origin-tag" role="status">
-          <HelmIcon name={QUEUED_MODE_ICON[item.queuedMode]} size={11} />
+          <HelmxIcon name={QUEUED_MODE_ICON[item.queuedMode]} size={11} />
           {queuedModeText(item.queuedMode, t)}
         </span>
       ) : item.origin !== 'human' ? (
         <span className="msg-origin-tag">
-          <HelmIcon name={item.origin === 'trigger' ? 'webhook' : 'bot'} size={11} />
+          <HelmxIcon name={item.origin === 'trigger' ? 'webhook' : 'bot'} size={11} />
           {originLabel(item.origin, t)}
         </span>
       ) : null}
@@ -336,7 +336,7 @@ function HumanMessage({
             aria-controls={collapseBodyId}
             onClick={() => setLongOpen((current) => !current)}
           >
-            <HelmIcon name={longOpen ? 'chevron-up' : 'chevron-down'} size={11} />
+            <HelmxIcon name={longOpen ? 'chevron-up' : 'chevron-down'} size={11} />
             <span>{longOpen ? t('common.collapse') : t('conv.human.expandFullText', { count: item.text.length })}</span>
           </button>
         ) : null}
@@ -368,7 +368,7 @@ function HumanMessage({
               disabled={withdrawing}
               onClick={() => void editRequest()}
             >
-              <HelmIcon name={withdrawing ? 'loader' : 'edit'} size={12} className={withdrawing ? 'spin-slow' : undefined} />
+              <HelmxIcon name={withdrawing ? 'loader' : 'edit'} size={12} className={withdrawing ? 'spin-slow' : undefined} />
             </button>
           ) : null}
           {item.queuedMode === undefined ? (
@@ -379,7 +379,7 @@ function HumanMessage({
               disabled={forking}
               onClick={() => void forkFromHere()}
             >
-              <HelmIcon name={forking ? 'loader' : 'git-fork'} size={12} />
+              <HelmxIcon name={forking ? 'loader' : 'git-fork'} size={12} />
             </button>
           ) : null}
         </span>
@@ -419,12 +419,12 @@ function ContextDivider({ item }: { item: DividerItem }) {
         <span className="context-divider-label">
           {item.pending === true ? (
             <>
-              <HelmIcon name="loader" size={11} className="spin-slow" />
+              <HelmxIcon name="loader" size={11} className="spin-slow" />
               {t('conv.divider.compacting')}
             </>
           ) : (
             <>
-              <HelmIcon name={item.divider === 'reset' ? 'rotate-ccw' : 'archive'} size={11} />
+              <HelmxIcon name={item.divider === 'reset' ? 'rotate-ccw' : 'archive'} size={11} />
               {item.divider === 'reset' ? t('conv.divider.reset') : t('conv.divider.compacted')}
             </>
           )}
@@ -436,7 +436,7 @@ function ContextDivider({ item }: { item: DividerItem }) {
           className="trace-group-summary context-divider-expand-btn"
           onClick={() => setOpen((v) => !v)}
         >
-          <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
+          <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
           {open ? t('conv.divider.collapse', { label: expandLabel }) : t('conv.divider.expand', { label: expandLabel })}
         </button>
       ) : null}
@@ -508,7 +508,7 @@ function ResolvedAskRow({ ask, status }: { ask: AskSpec; status: 'answered' | 'c
     <div className="trace-entry">
       <div className="trace-row" role="button" tabIndex={0} onClick={() => setOpen((v) => !v)}>
         <span className="trace-row-left">
-          <HelmIcon name="check-circle" size={12} />
+          <HelmxIcon name="check-circle" size={12} />
           <span className="trace-tool-name">{t('conv.ask.rowTitle')}</span>
           <span className="trace-tool-summary">{ask.title}</span>
         </span>
@@ -576,7 +576,7 @@ function TurnErrorNotice({
   const editTarget = useMemo(() => lastEditableHumanInput(detailEntries), [detailEntries])
   return (
     <div className="callout callout--error" role="alert" aria-label={t('conv.turnFailed.label')}>
-      <HelmIcon name="alert-triangle" size={12} />
+      <HelmxIcon name="alert-triangle" size={12} />
       <span className="callout-text">
         {t('conv.turnFailed.prefix')}{conversation.lastError?.trim() || t('conv.turnFailed.fallback')}
         {editTarget !== undefined ? (
@@ -589,7 +589,7 @@ function TurnErrorNotice({
               aria-label={t('conv.turnFailed.editLatest')}
               onClick={() => onRequestEdit(editTarget)}
             >
-              <HelmIcon name="edit" size={12} />
+              <HelmxIcon name="edit" size={12} />
               {t('conv.human.editAndResend')}
             </button>
           </>
@@ -870,7 +870,7 @@ export function ConversationTimeline({
       const root = rootRef.current
       if (root === null) return
       if (root.closest('.conversation-drawer') !== null) return
-      const myPanel = root.closest('[data-helm-panel]')?.getAttribute('data-helm-panel') ?? 'primary'
+      const myPanel = root.closest('[data-helmx-panel]')?.getAttribute('data-helmx-panel') ?? 'primary'
       if (panel !== myPanel) return
       const targetTurnKey = latestProcessTurnKeyRef.current
       if (targetTurnKey === undefined) return
@@ -885,8 +885,8 @@ export function ConversationTimeline({
         command: { open: !anyOpen, seq: nextSeq },
       })
     }
-    window.addEventListener('helm:shortcut', onShortcut)
-    return () => window.removeEventListener('helm:shortcut', onShortcut)
+    window.addEventListener('helmx:shortcut', onShortcut)
+    return () => window.removeEventListener('helmx:shortcut', onShortcut)
   }, [])
 
   // Historical row render containment (content-visibility): enabled only when the browser supports
@@ -1284,13 +1284,13 @@ export function ConversationTimeline({
           {historyError ? <p className="callout callout--error" role="alert">{historyError}</p> : null}
           {loading ? (
             <div className="timeline-loading-state">
-              <HelmIcon name="loader" size={14} className="spin-slow" />
+              <HelmxIcon name="loader" size={14} className="spin-slow" />
               {t('conv.timeline.loadingConversation')}
             </div>
           ) : null}
           {showEmptyState ? (
             <div className="timeline-empty-state">
-              <HelmIcon name="message-square" size={22} />
+              <HelmxIcon name="message-square" size={22} />
               <span>{t('conv.timeline.empty')}</span>
             </div>
           ) : null}
@@ -1304,7 +1304,7 @@ export function ConversationTimeline({
                   title={starter.prompt}
                   onClick={() => onRequestStarter?.(starter.prompt)}
                 >
-                  <HelmIcon name="corner-down-right" size={11} />
+                  <HelmxIcon name="corner-down-right" size={11} />
                   <span className="timeline-starter-label">{starter.label}</span>
                 </button>
               ))}
@@ -1412,7 +1412,7 @@ export function ConversationTimeline({
           title={t('conv.timeline.backToBottom')}
           onClick={scrollToBottomAndFollow}
         >
-          <HelmIcon name="arrow-down" size={16} />
+          <HelmxIcon name="arrow-down" size={16} />
           {isWorking || hasLiveTurn || sendingPending || hasUnreadScrollUpdates ? (
             <span className="timeline-scroll-bottom-dot" aria-hidden="true" />
           ) : null}

@@ -1,5 +1,5 @@
 /**
- * 后台结算汇报折叠展示测试（builtin:workflow 真实 client 编译产物 + @helm/plugin-client）：
+ * 后台结算汇报折叠展示测试（builtin:workflow 真实 client 编译产物 + @helmx/plugin-client）：
  * 1. 纯解析 model-background-report：直接读取 meta.report（string/JSON result 含 null/false/0/空串、
  *    failed/aborted、execution.conversationId、otherRunningTasks）；缺失/损坏 meta.report 返回 invalid
  *    并保留 rawText，绝不做正文换行/正则解析；
@@ -9,8 +9,8 @@
  */
 import assert from 'node:assert/strict'
 import { before, test } from 'node:test'
-import type { PluginClientHostPort } from '@helm/plugin-client'
-import type { ConversationEntry, PluginClientContext as PluginClientContextType, TimelineRendererProps } from '@helm/protocol'
+import type { PluginClientHostPort } from '@helmx/plugin-client'
+import type { ConversationEntry, PluginClientContext as PluginClientContextType, TimelineRendererProps } from '@helmx/protocol'
 import type { BackgroundReportParse } from '../src/workflow/client/model-background-report.ts'
 import {
   React,
@@ -58,9 +58,9 @@ function makeReportEntry(overrides: ReportOverrides = {}, entryId = '51'): Conve
   }
   return {
     id: entryId,
-    kind: 'helm.input',
+    kind: 'helmx.input',
     data: {
-      id: `helm:subagent-report:${runId}`,
+      id: `helmx:subagent-report:${runId}`,
       text:
         overrides.text ??
         `后台子代理任务已结算。以下为运行 ${runId} 的结果数据（仅代表本次任务；otherRunningTasks 是投递时其余在途运行的快照）：\n${JSON.stringify(report)}`,

@@ -8,9 +8,9 @@ import * as React from 'react'
 import * as ReactJsxRuntime from 'react/jsx-runtime'
 import * as LucideReact from 'lucide-react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { PluginClientContext as ClientContext, ProfileDetailSlotProps } from '@helm/protocol'
-import * as HelmPluginClient from '@helm/plugin-client'
-import { compilePluginClientModule } from '@helm/plugin-build'
+import type { PluginClientContext as ClientContext, ProfileDetailSlotProps } from '@helmx/protocol'
+import * as HelmxPluginClient from '@helmx/plugin-client'
+import { compilePluginClientModule } from '@helmx/plugin-build'
 
 // DOM 必须先于 react-dom/client 求值，合成 textarea 事件才会注册浏览器输入路径。
 GlobalRegistrator.register()
@@ -18,15 +18,15 @@ GlobalRegistrator.register()
 const { createRoot } = await import('react-dom/client')
 const { act } = React
 const e = React.createElement
-const cacheDir = mkdtempSync(join(tmpdir(), 'helm-memory-client-'))
+const cacheDir = mkdtempSync(join(tmpdir(), 'helmx-memory-client-'))
 let MemorySection: React.ComponentType<ProfileDetailSlotProps>
 
 before(async () => {
   Object.assign(globalThis, {
-    __helm_shared_react: React,
-    __helm_shared_react_jsx_runtime: ReactJsxRuntime,
-    __helm_shared_lucide_react: LucideReact,
-    __helm_shared_plugin_client: HelmPluginClient,
+    __helmx_shared_react: React,
+    __helmx_shared_react_jsx_runtime: ReactJsxRuntime,
+    __helmx_shared_lucide_react: LucideReact,
+    __helmx_shared_plugin_client: HelmxPluginClient,
   })
   const clientRoot = fileURLToPath(new URL('../../plugins/src/memory/client', import.meta.url))
   const { code } = await compilePluginClientModule('builtin:memory', clientRoot, 'index.tsx', cacheDir)
@@ -68,7 +68,7 @@ async function mount(callAction: ClientContext['callAction']) {
   const render = async (profileId: string, nextContext = activeContext) => {
     activeContext = nextContext
     await act(async () => {
-      root.render(e(HelmPluginClient.PluginClientContext.Provider, { value: activeContext },
+      root.render(e(HelmxPluginClient.PluginClientContext.Provider, { value: activeContext },
         e(MemorySection, { profileId, isNew: false, disabled: false })))
     })
   }

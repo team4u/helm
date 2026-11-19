@@ -4,7 +4,7 @@
  * No component exports in this file (Fast Refresh friendly).
  */
 import { useCallback, useEffect, useState } from 'react'
-import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, UsePluginsResult } from '@helm/protocol/browser'
+import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, UsePluginsResult } from '@helmx/protocol/browser'
 import { usePluginClientHost } from './host-port.js'
 import { usePluginContext } from './plugin-context.js'
 

@@ -1,14 +1,14 @@
 /**
- * Unit tests for event-validation pure functions: `assembleHelmEvent` (message envelope, unknown type passthrough,
+ * Unit tests for event-validation pure functions: `assembleHelmxEvent` (message envelope, unknown type passthrough,
  * explicit throw on invalid shape) and `pruneUndefined` (strip undefined, preserve non-plain values).
  * Runtime behavior through `EventHub.publish` is fully covered in `events.test.ts`; here we test the pure function boundaries directly.
  */
 
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import {
-  assembleHelmEvent,
+  assembleHelmxEvent,
   assertSessionDocUpdateShape,
   pruneUndefined,
   validateAndRedactConversationLive,
@@ -16,27 +16,27 @@ import {
 
 const identity = (t: string) => t
 
-describe('assembleHelmEvent', { timeout: 60_000 }, () => {
-  it('unknown type passes through unchanged as CustomHelmEvent (does not pretend to be notification)', { timeout: 60_000 }, () => {
-    const event = assembleHelmEvent('custom.thing', { a: 1 }, identity)
+describe('assembleHelmxEvent', { timeout: 60_000 }, () => {
+  it('unknown type passes through unchanged as CustomHelmxEvent (does not pretend to be notification)', { timeout: 60_000 }, () => {
+    const event = assembleHelmxEvent('custom.thing', { a: 1 }, identity)
     assert.deepEqual(event, { type: 'custom.thing', payload: { a: 1 } })
   })
 
   it('full message envelope: preserves same-named type field in payload without nesting', { timeout: 60_000 }, () => {
-    const event = assembleHelmEvent('conversation.deleted', { type: 'conversation.deleted', conversationId: 7 }, identity)
+    const event = assembleHelmxEvent('conversation.deleted', { type: 'conversation.deleted', conversationId: 7 }, identity)
     assert.deepEqual(event, { type: 'conversation.deleted', conversationId: 7 })
   })
 
-  it('invalid payload explicitly throws HelmError (never silently coerces)', { timeout: 60_000 }, () => {
-    assert.throws(() => assembleHelmEvent('', { a: 1 }, identity), HelmError)
-    assert.throws(() => assembleHelmEvent('notification', { level: 'verbose', title: 'x' }, identity), /notification/)
+  it('invalid payload explicitly throws HelmxError (never silently coerces)', { timeout: 60_000 }, () => {
+    assert.throws(() => assembleHelmxEvent('', { a: 1 }, identity), HelmxError)
+    assert.throws(() => assembleHelmxEvent('notification', { level: 'verbose', title: 'x' }, identity), /notification/)
     assert.throws(
-      () => assembleHelmEvent('plugin.session_doc.updated', { doc: { pluginId: 'p', name: 'n', conversationId: 1, value: 1 } }, identity),
+      () => assembleHelmxEvent('plugin.session_doc.updated', { doc: { pluginId: 'p', name: 'n', conversationId: 1, value: 1 } }, identity),
       /cannot enter the global event stream/,
     )
     assert.throws(
       () =>
-        assembleHelmEvent(
+        assembleHelmxEvent(
           'conversation.live',
           { live: { conversationId: 1, text: 'hi', tools: [], updatedAt: 1 } },
           identity,
@@ -63,17 +63,17 @@ describe('assembleHelmEvent', { timeout: 60_000 }, () => {
       createdAt: 1,
       updatedAt: 1,
     }
-    const ok = assembleHelmEvent('conversation.upsert', { ...base, lastEntryId: 42 }, identity)
+    const ok = assembleHelmxEvent('conversation.upsert', { ...base, lastEntryId: 42 }, identity)
     assert.equal((ok as { conversation: { lastEntryId?: number } }).conversation.lastEntryId, 42)
-    const zero = assembleHelmEvent('conversation.upsert', { ...base, lastEntryId: 0 }, identity)
+    const zero = assembleHelmxEvent('conversation.upsert', { ...base, lastEntryId: 0 }, identity)
     assert.equal((zero as { conversation: { lastEntryId?: number } }).conversation.lastEntryId, 0)
     for (const bad of [-1, 1.5, Number.NaN, '42', Number.MAX_SAFE_INTEGER + 1]) {
-      assert.throws(() => assembleHelmEvent('conversation.upsert', { ...base, lastEntryId: bad }, identity), HelmError)
+      assert.throws(() => assembleHelmxEvent('conversation.upsert', { ...base, lastEntryId: bad }, identity), HelmxError)
     }
   })
 
   it('valid notification payload preserves optional field default semantics', { timeout: 60_000 }, () => {
-    const event = assembleHelmEvent('notification', { level: 'warning', title: 't' }, identity)
+    const event = assembleHelmxEvent('notification', { level: 'warning', title: 't' }, identity)
     assert.deepEqual(event, { type: 'notification', level: 'warning', title: 't' })
   })
 })
@@ -110,7 +110,7 @@ describe('validateAndRedactConversationLive', { timeout: 60_000 }, () => {
       { conversationId: 1, text: '', tools: [], thinking: 42, updatedAt: 1 },
       { conversationId: 1, text: '', tools: [], queuedInputs: 'bad', updatedAt: 1 },
     ]) {
-      assert.throws(() => validateAndRedactConversationLive(bad, identity), HelmError)
+      assert.throws(() => validateAndRedactConversationLive(bad, identity), HelmxError)
     }
   })
 })
@@ -119,8 +119,8 @@ describe('assertSessionDocUpdateShape', { timeout: 60_000 }, () => {
   it('valid doc returns unchanged; invalid shape explicitly throws', { timeout: 60_000 }, () => {
     const doc = { pluginId: 'p', name: 'n', conversationId: 3, value: { x: 1 } }
     assert.equal(assertSessionDocUpdateShape({ doc }), doc)
-    assert.throws(() => assertSessionDocUpdateShape({}), HelmError)
-    assert.throws(() => assertSessionDocUpdateShape({ doc: { pluginId: '', name: 'n', conversationId: 3, value: 1 } }), HelmError)
+    assert.throws(() => assertSessionDocUpdateShape({}), HelmxError)
+    assert.throws(() => assertSessionDocUpdateShape({ doc: { pluginId: '', name: 'n', conversationId: 3, value: 1 } }), HelmxError)
     assert.throws(
       () => assertSessionDocUpdateShape({ doc: { pluginId: 'p', name: 'n', conversationId: 3, value: 1, deleted: false } }),
       /deleted/,

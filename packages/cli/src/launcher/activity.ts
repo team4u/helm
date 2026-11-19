@@ -1,6 +1,6 @@
 /**
- * Launcher-side reader of the Hub's activity heartbeat file (`@helm/kernel`'s
- * `activity-heartbeat.ts` writer; contract in `@helm/protocol`'s `activity.ts`).
+ * Launcher-side reader of the Hub's activity heartbeat file (`@helmx/kernel`'s
+ * `activity-heartbeat.ts` writer; contract in `@helmx/protocol`'s `activity.ts`).
  *
  * This is the update busy-gate's evidence source — a process-private local file instead of any
  * new user HTTP surface. Every step of the binding chain is fail-closed: any mismatch, staleness,
@@ -24,7 +24,7 @@
  */
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import { HUB_ACTIVITY_FILENAME, isHubActivityBusy, type HubActivityCounts, type HubActivityFile } from '@helm/protocol';
+import { HUB_ACTIVITY_FILENAME, isHubActivityBusy, type HubActivityCounts, type HubActivityFile } from '@helmx/protocol';
 import { readProcessStartTime, type HubPidRecord } from './records.js';
 import { isAliveOf, type LauncherIo } from './io.js';
 

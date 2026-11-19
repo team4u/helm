@@ -5,7 +5,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HelmError } from '@helm/protocol';
+import { HelmxError } from '@helmx/protocol';
 import { PluginHostGate } from '../src/plugins/plugin-host-gate.js';
 import {
   assertDependenciesSatisfied,
@@ -211,7 +211,7 @@ test('assertNoDependencyCycle allows acyclic graphs and explicitly rejects multi
   assert.throws(
     () => assertNoDependencyCycle(plugins, 'c', ['a']),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError);
+      assert.ok(err instanceof HelmxError);
       assert.equal(err.code, 'plugin_dependency_cycle');
       assert.equal(err.status, 409);
       assert.deepEqual((err.details as { cycle: string[] }).cycle, ['c', 'a', 'b', 'c']);
@@ -232,13 +232,13 @@ test('assertDependenciesSatisfied distinguishes missing, disabled, and transitio
 
   assert.throws(
     () => assertDependenciesSatisfied(plugins, 'consumer', ['missing']),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_dependency_missing' && err.status === 409,
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_dependency_missing' && err.status === 409,
   );
   for (const dep of ['off', 'defining', 'deactivating']) {
     assert.throws(
       () => assertDependenciesSatisfied(plugins, 'consumer', [dep]),
       (err: unknown) =>
-        err instanceof HelmError &&
+        err instanceof HelmxError &&
         err.code === 'plugin_dependency_not_enabled' &&
         err.status === 409,
     );
@@ -269,7 +269,7 @@ test('collectDependents / assertNoEnabledDependents / markDependentsBroken handl
 
   assert.throws(
     () => assertNoEnabledDependents(plugins, 'base'),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_in_use' && err.status === 409,
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use' && err.status === 409,
   );
 
   const changedIds: string[] = [];

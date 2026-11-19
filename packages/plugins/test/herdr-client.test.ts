@@ -11,11 +11,11 @@
 import assert from 'node:assert/strict'
 import { test, before, after } from 'node:test'
 import { join } from 'node:path'
-import { HelmError, type ConversationSummary } from '@helm/protocol'
+import { HelmxError, type ConversationSummary } from '@helmx/protocol'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
-import { compilePluginClientModule, createPluginBuildProvider } from '@helm/plugin-build'
+import { compilePluginClientModule, createPluginBuildProvider } from '@helmx/plugin-build'
 import { serveTransport } from './helpers/herdr-unit-fixture.js'
 import {
   MemoryConfigStore,
@@ -39,8 +39,8 @@ function emptyTransport(): import('../src/herdr/contracts.js').HerdrTransport {
       }
       return { type: 'ok' }
     },
-    async readOutput() { throw new HelmError('unsupported', 'client 编译测试不读交接文件', 501) },
-    async removeOutput() { throw new HelmError('unsupported', 'client 编译测试不删交接文件', 501) },
+    async readOutput() { throw new HelmxError('unsupported', 'client 编译测试不读交接文件', 501) },
+    async removeOutput() { throw new HelmxError('unsupported', 'client 编译测试不删交接文件', 501) },
     async runGate() { return { ok: true, output: '' } },
     async subscribe(_target, onEvent, onError) {
       void onEvent
@@ -60,7 +60,7 @@ function makeBackend(): PluginHostBackend {
     createConversation: async () => summary(42),
     listConversations: () => [summary(1)],
     getConversation: (id: number) => {
-      throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
     },
     updateConversation: async (id: number) => summary(id),
     manageConversation: () => () => {},
@@ -70,19 +70,19 @@ function makeBackend(): PluginHostBackend {
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
       return 'human'
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    execEnv: async () => { throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501) },
     withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     emitEvent: () => {},
   }
 }
 
 before(async () => {
-  dataDir = await makeTempDir('helm-herdr-client-')
+  dataDir = await makeTempDir('helmx-herdr-client-')
   // 受控空协议服务器：启用即连接（snapshot/subscribe 成功即注册完成）。
   const socketPath = join(dataDir, 'herdr.sock')
   served = await serveTransport(emptyTransport(), socketPath)
@@ -106,14 +106,14 @@ test('client/index.tsx 真实编译：产物含 HerdrOverviewScreen 导出与样
   const { code, contentHash } = await compilePluginClientModule('builtin:herdr', definition.clientRoot!, 'index.tsx', dataDir)
   assert.ok(typeof code === 'string' && code.length > 0, '编译产物非空')
   assert.ok(code.includes('HerdrOverviewScreen'), '产物含 HerdrOverviewScreen 具名导出')
-  // styles.css 经 esbuild 原生 CSS bundling 合并为 __helmClientCss 导出
-  assert.ok(code.includes('__helmClientCss'), '产物含样式文本导出 __helmClientCss')
+  // styles.css 经 esbuild 原生 CSS bundling 合并为 __helmxClientCss 导出
+  assert.ok(code.includes('__helmxClientCss'), '产物含样式文本导出 __helmxClientCss')
   assert.ok(contentHash.length > 0, '内容 hash 非空')
 })
 
 test('模型函数：筛选 / 统计 / 参数解析纯函数（models.ts 编译产物导入）', { timeout: 60_000 }, async (t) => {
   const definition = createHerdrPlugin()
-  const cacheDir = useTempDir(t, 'helm-herdr-models-')
+  const cacheDir = useTempDir(t, 'helmx-herdr-models-')
   const { code } = await compilePluginClientModule('builtin:herdr', definition.clientRoot!, 'models.ts', cacheDir)
     const mod = (await import(`data:text/javascript;base64,${Buffer.from(code, 'utf8').toString('base64')}`)) as Record<string, unknown>
     const parseFilters = mod['parseFilters'] as (p: Record<string, string>) => Record<string, string>
@@ -128,21 +128,21 @@ test('模型函数：筛选 / 统计 / 参数解析纯函数（models.ts 编译�
 
     // 深链参数解析：非法值回退 all
     assert.deepEqual(
-      parseFilters({ node: 'remote-1', owner: 'helm', status: 'bogus' }),
-      { node: 'remote-1', owner: 'helm', status: 'all' },
+      parseFilters({ node: 'remote-1', owner: 'helmx', status: 'bogus' }),
+      { node: 'remote-1', owner: 'helmx', status: 'all' },
     )
 
     // patch：'all' 以 undefined 清除（URL 最小化）
     assert.deepEqual(
-      filtersToParamsPatch({ node: 'all', owner: 'helm', status: 'all' }),
-      { node: undefined, owner: 'helm', status: undefined },
+      filtersToParamsPatch({ node: 'all', owner: 'helmx', status: 'all' }),
+      { node: undefined, owner: 'helmx', status: undefined },
     )
 
     // 筛选：node/owner/status 三维 AND
     const panes = [
-      { nodeId: 'local', paneId: 'p1', ownedBy: 'helm', agentStatus: 'working' },
+      { nodeId: 'local', paneId: 'p1', ownedBy: 'helmx', agentStatus: 'working' },
       { nodeId: 'remote', paneId: 'p2', ownedBy: 'human', agentStatus: 'idle' },
-      { nodeId: 'remote', paneId: 'p3', ownedBy: 'helm', agentStatus: 'blocked' },
+      { nodeId: 'remote', paneId: 'p3', ownedBy: 'helmx', agentStatus: 'blocked' },
     ]
     assert.equal(filterPanes(panes, { node: 'remote', owner: 'all', status: 'all' }).length, 2)
     assert.deepEqual(computeStats(panes, ['local', 'remote']), { total: 3, working: 1, blocked: 1, nodes: 2 })
@@ -166,20 +166,20 @@ test('模型函数：筛选 / 统计 / 参数解析纯函数（models.ts 编译�
     assert.equal(canFocusPane({ nodeId: 'local', paneId: 'w1:p1', ownedBy: 'human', agentStatus: 'idle' }), false)
     assert.equal(canSnapshotPane({ nodeId: 'local', paneId: 'w1:p1', ownedBy: 'human', agentStatus: 'idle' }), false)
 
-    // helm 受管行状态细分：
+    // helmx 受管行状态细分：
     // - 已聚焦窗格不展示聚焦按钮
-    assert.equal(canFocusPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helm', agentStatus: 'working', focused: true }), false)
+    assert.equal(canFocusPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helmx', agentStatus: 'working', focused: true }), false)
     // - 已收尾窗格不展示聚焦与快照按钮
-    assert.equal(canFocusPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helm', agentStatus: 'idle', outcome: 'settled' }), false)
-    assert.equal(canSnapshotPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helm', agentStatus: 'idle', outcome: 'settled' }), false)
+    assert.equal(canFocusPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helmx', agentStatus: 'idle', outcome: 'settled' }), false)
+    assert.equal(canSnapshotPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helmx', agentStatus: 'idle', outcome: 'settled' }), false)
     // - done 状态不展示聚焦按钮，但允许排查快照
-    assert.equal(canFocusPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helm', agentStatus: 'done' }), false)
-    assert.equal(canSnapshotPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helm', agentStatus: 'done' }), true)
+    assert.equal(canFocusPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helmx', agentStatus: 'done' }), false)
+    assert.equal(canSnapshotPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helmx', agentStatus: 'done' }), true)
     // - working / blocked / idle 等正常受管窗格允许聚焦与快照
-    assert.equal(canFocusPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helm', agentStatus: 'working', focused: false }), true)
-    assert.equal(canSnapshotPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helm', agentStatus: 'working' }), true)
-    assert.equal(canFocusPane({ nodeId: 'remote', paneId: 'p2', ownedBy: 'helm', agentStatus: 'blocked', focused: false }), true)
-    assert.equal(canSnapshotPane({ nodeId: 'remote', paneId: 'p2', ownedBy: 'helm', agentStatus: 'blocked' }), true)
+    assert.equal(canFocusPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helmx', agentStatus: 'working', focused: false }), true)
+    assert.equal(canSnapshotPane({ nodeId: 'local', paneId: 'p1', ownedBy: 'helmx', agentStatus: 'working' }), true)
+    assert.equal(canFocusPane({ nodeId: 'remote', paneId: 'p2', ownedBy: 'helmx', agentStatus: 'blocked', focused: false }), true)
+    assert.equal(canSnapshotPane({ nodeId: 'remote', paneId: 'p2', ownedBy: 'helmx', agentStatus: 'blocked' }), true)
 
     // 23 种 CLI 候选完整（Herdr detect::agent_label 全集）
     assert.equal(suggestions.length, 23)

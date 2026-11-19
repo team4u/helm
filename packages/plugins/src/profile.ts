@@ -2,7 +2,7 @@
  * builtin:profile: the resident roles-and-skills foundation (locked: true).
  *
  * Responsibilities (memory split to builtin:memory; this plugin has zero memory logic):
- * - Bootstrap the system-level built-in skill skills/helm-cli (managed overwrite) and the default
+ * - Bootstrap the system-level built-in skill skills/helmx-cli (managed overwrite) and the default
  *   assistant Profile's managed metadata at startup;
  * - before_turn injects profile.system (SYSTEM.md), profile.skills (the available skill
  *   catalog), profile.assets-missing (a missing-SYSTEM.md warning), and profile.agents /
@@ -12,13 +12,13 @@
  *   profile.catalog per the turn's actual turn.tools (the cross-Profile collaboration catalog;
  *   leaf subagents whose dispatch tools were stripped get no injection, and neither do turns without dispatch tools when builtin:workflow is disabled);
  * - registers the load_skill tool (Profile whitelist + live plugin enablement) and the
- *   idempotent list_mentionable action (the @ completion source, auto-mapped to HTTP / helm
+ *   idempotent list_mentionable action (the @ completion source, auto-mapped to HTTP / helmx
  *   list_mentionable CLI）；
  * - the left-sidebar assistant Profile standing navigation (conversation:profile:assistant, not
  *   dependent on any particular conversation existing).
  */
-import { HelmError, escapeXml, isSkillAvailable, type HelmHostProfilesPort, type PluginDefinition, type Profile, type SkillSummary } from '@helm/protocol';
-import { HELM_CLI_SKILL_ASSET, PROFILE_MANAGED_BY } from './profile/assets.js';
+import { HelmxError, escapeXml, isSkillAvailable, type HelmxHostProfilesPort, type PluginDefinition, type Profile, type SkillSummary } from '@helmx/protocol';
+import { HELMX_CLI_SKILL_ASSET, PROFILE_MANAGED_BY } from './profile/assets.js';
 import {
   activeRuntimeKinds,
   describeHint,
@@ -33,8 +33,8 @@ import { computeAgentsMdSection } from './profile/agents-md.js';
 const DEFAULT_PROFILE_ID = 'assistant';
 
 export {
-  HELM_CLI_SKILL_ID,
-  HELM_CLI_SKILL_ASSET,
+  HELMX_CLI_SKILL_ID,
+  HELMX_CLI_SKILL_ASSET,
   PROFILE_MANAGED_BY,
   renderSkillTemplate,
 } from './profile/assets.js'
@@ -64,7 +64,7 @@ export {
  * or already exists -- no old-data normalization); a missing default Profile is a kernel
  * not-initialized anomaly and propagates honestly.
  */
-async function ensureDefaultProfileManaged(profiles: HelmHostProfilesPort): Promise<void> {
+async function ensureDefaultProfileManaged(profiles: HelmxHostProfilesPort): Promise<void> {
   const existing = await profiles.get(DEFAULT_PROFILE_ID);
   if (existing === undefined) {
     throw new Error(
@@ -93,14 +93,14 @@ export function createProfilePlugin(): PluginDefinition {
     locked: true,
     definePlugin(ctx) {
       const { profiles, skills } = ctx.host;
-      // Sync the system-level built-in skill skills/helm-cli/ (Layer 1 + Layer 2) at startup:
+      // Sync the system-level built-in skill skills/helmx-cli/ (Layer 1 + Layer 2) at startup:
       // managed system assets are overwritten file-by-file per the source version, and missing files are
       // backfilled; writes through the regular interface are rejected.
       // managedByPlugin (ensureDefault does not normalize; this plugin bootstraps the declaration).
       ctx.service({
         id: 'profile-skills',
         async start() {
-          await skills.ensureSkill(HELM_CLI_SKILL_ASSET);
+          await skills.ensureSkill(HELMX_CLI_SKILL_ASSET);
           await ensureDefaultProfileManaged(profiles);
         },
         async stop() {},
@@ -122,7 +122,7 @@ export function createProfilePlugin(): PluginDefinition {
           missingNotified.delete(profileId) // stop once restored; can warn again if missing later
           return text
         } catch (err) {
-          if (err instanceof HelmError && err.code === 'not_found') {
+          if (err instanceof HelmxError && err.code === 'not_found') {
             if (!missingNotified.has(profileId)) {
               await ctx.host.emitEvent('notification', {
                 type: 'notification',
@@ -147,7 +147,7 @@ export function createProfilePlugin(): PluginDefinition {
       const listAvailableSkills = async (profileId: string): Promise<SkillSummary[]> => {
         const profile = await profiles.get(profileId)
         if (profile === undefined) {
-          throw new HelmError('profile_not_found', `conversation-bound profile '${profileId}' does not exist (the skill catalog cannot be filtered by Profile)`, 500, { profileId })
+          throw new HelmxError('profile_not_found', `conversation-bound profile '${profileId}' does not exist (the skill catalog cannot be filtered by Profile)`, 500, { profileId })
         }
         const enabledPluginIds = new Set(ctx.host.listPlugins().filter((p) => p.enabled).map((p) => p.id))
         const all = await skills.list()
@@ -219,7 +219,7 @@ export function createProfilePlugin(): PluginDefinition {
           const text = await profiles.getSystem(profileId)
           return extractSystemSummary(text)
         } catch (err) {
-          if (err instanceof HelmError && err.code === 'not_found') return undefined
+          if (err instanceof HelmxError && err.code === 'not_found') return undefined
           throw err
         }
       }
@@ -336,11 +336,11 @@ export function createProfilePlugin(): PluginDefinition {
           } else if (input.profileId !== undefined) {
             const profile = await profiles.get(input.profileId)
             if (profile === undefined) {
-              throw new HelmError('not_found', `profile does not exist: ${input.profileId}`, 404, { profileId: input.profileId })
+              throw new HelmxError('not_found', `profile does not exist: ${input.profileId}`, 404, { profileId: input.profileId })
             }
             targetProfileId = profile.id
           } else {
-            throw new HelmError(
+            throw new HelmxError(
               'validation_error',
               'Missing conversation or role context: Web completion carries it automatically; in the CLI, use --current or specify --conversation-id / --profile-id explicitly',
               400,
@@ -396,15 +396,15 @@ export function createProfilePlugin(): PluginDefinition {
           const profileId = conversation.profileId;
           const profile = await profiles.get(profileId);
           if (profile === undefined) {
-            throw new HelmError('profile_not_found', `conversation-bound profile '${profileId}' does not exist; cannot determine skill availability`, 500, { profileId });
+            throw new HelmxError('profile_not_found', `conversation-bound profile '${profileId}' does not exist; cannot determine skill availability`, 500, { profileId });
           }
           const enabledPluginIds = new Set(ctx.host.listPlugins().filter((p) => p.enabled).map((p) => p.id));
           const skill = (await skills.list()).find((s) => s.id === input.skillId);
           if (skill === undefined) {
-            throw new HelmError('not_found', `skill does not exist: ${input.skillId}`, 404, { skillId: input.skillId });
+            throw new HelmxError('not_found', `skill does not exist: ${input.skillId}`, 404, { skillId: input.skillId });
           }
           if (!isSkillAvailable(skill, profile, enabledPluginIds)) {
-            throw new HelmError(
+            throw new HelmxError(
               'skill_not_available',
               `skill '${input.skillId}' is unavailable for profile '${profileId}' (not whitelisted, or its managing plugin is disabled); adjust the profile skills config to use it`,
               403,

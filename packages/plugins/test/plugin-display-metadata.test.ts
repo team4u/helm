@@ -16,7 +16,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseNonEmptyLocalizedText, type LocalizedText, type PluginDefinition } from '@helm/protocol'
+import { parseNonEmptyLocalizedText, type LocalizedText, type PluginDefinition } from '@helmx/protocol'
 import { sanitizedHostEnv, useTempDir } from './helpers/plugin-test-env.js'
 
 import { createProfilePlugin } from '../src/profile.js'
@@ -34,7 +34,7 @@ import { createTokenSpeedPlugin } from '../src/token-speed.js'
 
 const timeout = { timeout: 60_000 } as const
 
-/** 全部内置插件工厂（与 @helm/hub 注册清单一一对应）。 */
+/** 全部内置插件工厂（与 @helmx/hub 注册清单一一对应）。 */
 const FACTORIES: ReadonlyArray<() => PluginDefinition> = [
   createProfilePlugin,
   createWorkflowPlugin,
@@ -306,7 +306,7 @@ function runLazyProbeSubprocess(opts: {
 test('懒加载边界：herdr 与 superagent 停用态注册不加载重型运行时子模块且保留完整声明元数据', timeout, (t) => {
   const testDir = dirname(fileURLToPath(import.meta.url))
   const repoRoot = join(testDir, '..', '..', '..')
-  const dataDir = useTempDir(t, 'helm-lazy-plugins-')
+  const dataDir = useTempDir(t, 'helmx-lazy-plugins-')
 
   // 1) 声明元数据同步采集仍完整暴露（herdr 4 动作；superagent 10 动作 + 7 工具）
   const registrations = recordAllPlugins()

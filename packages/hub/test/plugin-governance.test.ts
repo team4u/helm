@@ -1,19 +1,19 @@
 /**
- * 插件治理与故障隔离专项测试（共享 createHelm 实例覆盖外部故障恢复与 triggers 占用，配合内存 PluginHost 治理验证）：
+ * 插件治理与故障隔离专项测试（共享 createHelmx 实例覆盖外部故障恢复与 triggers 占用，配合内存 PluginHost 治理验证）：
  * 1. 外部插件故障隔离状态机：scan/load/define/enable 失败降级为 failed、loadFailed 409 与 reload 自愈、define/enable 修复后自愈且不覆盖磁盘开关；
  * 2. 持久资产占用（inUse）与停用预检：服务自报 + 宿主通用引用探针（profile_runtime / profile_model / conversation_model）+ liveTasks 硬阻断 + builtin:triggers 占用；
  * 3. turn_settled 单插件异常隔离 vs before_turn 严格 fail-closed vs handled 短路；
  * 4. 插件配置分层溯源（sources）、不固化 default、null 重置与 required 校验。
  */
-import { createPluginBuildProvider } from '@helm/plugin-build'
-import { HelmError, type ConversationSummary, type Profile } from '@helm/protocol'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
+import { HelmxError, type ConversationSummary, type Profile } from '@helmx/protocol'
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import { type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { PluginHost } from '../../kernel/src/plugins/plugin-host.js'
-import { HelmPluginConfigStore } from '../../kernel/src/runtime/plugin-config-store.js'
+import { HelmxPluginConfigStore } from '../../kernel/src/runtime/plugin-config-store.js'
 import { ConfigService, CredentialService } from '../../kernel/src/services/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import {
@@ -76,10 +76,10 @@ function writeExternalPlugin(pluginsDir: string, dir: string, entrySource: strin
   return dirPath
 }
 
-async function rejectsCode(promise: Promise<unknown>, code: string, status?: number): Promise<HelmError> {
-  let caught: HelmError | undefined
+async function rejectsCode(promise: Promise<unknown>, code: string, status?: number): Promise<HelmxError> {
+  let caught: HelmxError | undefined
   await assert.rejects(promise, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `expected HelmError, got: ${String(err)}`)
+    assert.ok(err instanceof HelmxError, `expected HelmxError, got: ${String(err)}`)
     assert.equal(err.code, code)
     if (status !== undefined) assert.equal(err.status, status)
     caught = err
@@ -89,11 +89,11 @@ async function rejectsCode(promise: Promise<unknown>, code: string, status?: num
 }
 
 // ---------------------------------------------------------------------------
-// 1. createHelm 端到端故障隔离、自愈恢复与 builtin:triggers inUse（共享单次 createHelm 启动）
+// 1. createHelmx 端到端故障隔离、自愈恢复与 builtin:triggers inUse（共享单次 createHelmx 启动）
 // ---------------------------------------------------------------------------
 
-test('createHelm 外部插件混合故障隔离、reload/enable 自愈恢复与 builtin:triggers 占用预检', { timeout: 60_000 }, async (t) => {
-  const dataDir = join(useTempDir(t, 'helm-gov-app-'), 'hub')
+test('createHelmx 外部插件混合故障隔离、reload/enable 自愈恢复与 builtin:triggers 占用预检', { timeout: 60_000 }, async (t) => {
+  const dataDir = join(useTempDir(t, 'helmx-gov-app-'), 'hub')
   const pluginsDir = join(dataDir, 'plugins')
   mkdirSync(pluginsDir, { recursive: true })
 
@@ -209,7 +209,7 @@ export default { id: 'svc-fail', name: 'svc-fail', async definePlugin(ctx) {
 // ---------------------------------------------------------------------------
 
 test('PluginHost 治理：内置注册严格抛错、手动启用失败透传、inUse/引用探针/liveTasks 门禁与三态语义', { timeout: 60_000 }, async (t) => {
-  const fixture = makeHostFixture(useTempDir(t, 'helm-gov-host-'))
+  const fixture = makeHostFixture(useTempDir(t, 'helmx-gov-host-'))
   t.after(() => fixture.close())
 
   // 1. 内置插件注册失败严格阻断（不降级 failed）
@@ -322,7 +322,7 @@ test('PluginHost 治理：内置注册严格抛错、手动启用失败透传、
 // ---------------------------------------------------------------------------
 
 test('Hook 隔离契约：turn_settled 隔离单插件抛错/坏返回并保留最新合法载荷，before_turn 严格 fail-closed，handled 正常短路', { timeout: 60_000 }, async (t) => {
-  const f1 = makeHostFixture(useTempDir(t, 'helm-gov-hook1-'))
+  const f1 = makeHostFixture(useTempDir(t, 'helmx-gov-hook1-'))
   t.after(() => f1.close())
 
   const seen: Array<{ outcome: string; error?: string }> = []
@@ -346,7 +346,7 @@ test('Hook 隔离契约：turn_settled 隔离单插件抛错/坏返回并保留�
   assert.equal(warnings.length, 3)
 
   // handled 短路与非法初始载荷直接报错
-  const f2 = makeHostFixture(useTempDir(t, 'helm-gov-hook2-'))
+  const f2 = makeHostFixture(useTempDir(t, 'helmx-gov-hook2-'))
   t.after(() => f2.close())
   let downstreamRan = false
   await f2.host.register({ id: 'handled:settle', definePlugin: (ctx) => { ctx.hook.onTurnSettled(() => ({ action: 'handled', result: { settled: true } }), { priority: 10 }) } })
@@ -367,10 +367,10 @@ test('Hook 隔离契约：turn_settled 隔离单插件抛错/坏返回并保留�
 // ---------------------------------------------------------------------------
 
 test('插件配置分层：磁盘不固化 default、sources 三态溯源、null 重置删除磁盘与机密桶、required 与未知字段校验', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-gov-cfg-')
+  const dataDir = useTempDir(t, 'helmx-gov-cfg-')
   const credentialsDir = join(dataDir, 'cred')
   mkdirSync(credentialsDir, { recursive: true })
-  const store = new HelmPluginConfigStore({
+  const store = new HelmxPluginConfigStore({
     config: new ConfigService(dataDir),
     credentials: new CredentialService(credentialsDir),
   })

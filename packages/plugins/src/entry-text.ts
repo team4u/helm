@@ -9,7 +9,7 @@
  * or an injected user text is returned as the member's reply summary.
  */
 
-import { HelmError, isAbsoluteAgentPath, redactJsonValue, type HelmHostApi } from '@helm/protocol'
+import { HelmxError, isAbsoluteAgentPath, redactJsonValue, type HelmxHostApi } from '@helmx/protocol'
 
 /** Last assistant text across entries (newest first, message-role checked; '' when none). */
 export function lastAssistantText(entries: Array<{ kind?: string; model?: unknown }>): string {
@@ -53,7 +53,7 @@ export function entryDigestText(entry: { kind: string; data?: unknown; model?: u
 
 /** 时间线条目受控摘要：assistant 取真实文本，其余取 JSON 概要（脱敏 + 截断）。 */
 export function recentEntrySummaries(
-  host: Pick<HelmHostApi, 'redact'>,
+  host: Pick<HelmxHostApi, 'redact'>,
   entries: Array<{ id: string; kind: string; data?: unknown; model?: unknown }>,
   maxEntries = 20,
 ): Array<{ id: string; kind: string; text: string }> {
@@ -67,7 +67,7 @@ export function recentEntrySummaries(
 
 export function assertWorkerConversationId(value: unknown): number {
   if (typeof value !== 'number' || !Number.isInteger(value) || value <= 0) {
-    throw new HelmError('validation_error', `workerConversationId 必须是正整数（收到：${String(value)}）`, 400, {})
+    throw new HelmxError('validation_error', `workerConversationId 必须是正整数（收到：${String(value)}）`, 400, {})
   }
   return value
 }
@@ -76,7 +76,7 @@ export function assertWorkerConversationId(value: unknown): number {
 export function assertWorkerCwd(value: string): string {
   const trimmed = value.trim()
   if (trimmed === '' || !isAbsoluteAgentPath(trimmed)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `cwd 必须是跨平台绝对路径（POSIX / 开头、Windows 盘符或 UNC；收到：${value}）`,
       400,
@@ -90,7 +90,7 @@ export function assertWorkerCwd(value: string): string {
 export function assertWorkerNodeId(value: string): string {
   const trimmed = value.trim()
   if (trimmed === '' || trimmed.length > 64 || /\s|[/\\]/.test(trimmed)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `nodeId 非法（非空 1..64 字符，不含空白与路径分隔符，收到：${value}）`,
       400,

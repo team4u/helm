@@ -1,5 +1,5 @@
 /**
- * @helm/plugin-client standalone package contract tests (no web/kernel
+ * @helmx/plugin-client standalone package contract tests (no web/kernel
  * implementation dependency):
  * 1. Export symbols are bidirectionally locked against the protocol
  *    PLUGIN_CLIENT_SHARED_EXPORTS list (every listed symbol actually exists at
@@ -26,7 +26,7 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
-import { PLUGIN_CLIENT_SHARED_EXPORTS, resolveLocalizedText } from '@helm/protocol'
+import { PLUGIN_CLIENT_SHARED_EXPORTS, resolveLocalizedText } from '@helmx/protocol'
 import * as SDK from '../src/index.js'
 
 const e = React.createElement
@@ -43,7 +43,7 @@ GlobalRegistrator.register()
 test('every symbol in PLUGIN_CLIENT_SHARED_EXPORTS actually exists in this package runtime namespace', { timeout: 60_000 }, () => {
   const exportedNames = new Set(Object.keys(SDK))
   for (const name of PLUGIN_CLIENT_SHARED_EXPORTS) {
-    assert.ok(exportedNames.has(name), `@helm/plugin-client is missing manifest symbol ${name} (PLUGIN_CLIENT_SHARED_EXPORTS drifted from the implementation)`)
+    assert.ok(exportedNames.has(name), `@helmx/plugin-client is missing manifest symbol ${name} (PLUGIN_CLIENT_SHARED_EXPORTS drifted from the implementation)`)
     assert.ok((SDK as Record<string, unknown>)[name] !== undefined, `symbol ${name} must not be undefined`)
   }
 })
@@ -347,7 +347,7 @@ test('createPluginClientContext: missing port locale falls back to the default l
   delete port.locale
   delete port.translate
   const ctx = SDK.createPluginClientContext(port, 'p1', 7)
-  assert.equal(ctx.locale, 'en', 'missing port locale falls back to DEFAULT_HELM_LOCALE')
+  assert.equal(ctx.locale, 'en', 'missing port locale falls back to DEFAULT_HELMX_LOCALE')
   assert.equal(ctx.translate({ en: 'Hi', 'zh-CN': '你好' }), 'Hi', 'derived translator resolves using the fallback locale')
   assert.equal(ctx.translate({ 'zh-CN': '你好' }), '你好', 'derived translator falls back to the only declared locale')
 })
@@ -401,18 +401,18 @@ test('shared primitives update labels with the host locale without changing sele
     assert.equal(host.querySelector('button')?.getAttribute('title'), 'Copy')
     assert.equal(host.querySelector('[role="status"]')?.textContent, 'Loading…')
     assert.equal(host.querySelector('.table-empty')?.textContent, 'No data')
-    assert.equal(host.querySelector('.helm-select-label')?.textContent, '2 selected')
+    assert.equal(host.querySelector('.helmx-select-label')?.textContent, '2 selected')
     assert.equal(host.querySelector('input')?.getAttribute('placeholder'), 'Search options…')
     act(() => root.render(tree('zh-CN')))
     assert.equal(host.querySelector('button')?.getAttribute('title'), '复制')
     assert.equal(host.querySelector('[role="status"]')?.textContent, '加载中…')
     assert.equal(host.querySelector('.table-empty')?.textContent, '暂无数据')
-    assert.equal(host.querySelector('.helm-select-label')?.textContent, '已选择 2 项')
+    assert.equal(host.querySelector('.helmx-select-label')?.textContent, '已选择 2 项')
     assert.equal(host.querySelector('input')?.getAttribute('placeholder'), '搜索选项…')
     assert.equal(host.querySelectorAll('[role="option"][aria-selected="true"]').length, 2)
     assert.deepEqual(changes, [], 'changing locale never submits a selection change')
     act(() => root.render(tree('en')))
-    assert.equal(host.querySelector('.helm-select-label')?.textContent, '2 selected')
+    assert.equal(host.querySelector('.helmx-select-label')?.textContent, '2 selected')
     assert.equal(host.querySelector('button')?.getAttribute('title'), 'Copy')
   } finally {
     act(() => root.unmount())

@@ -3,7 +3,7 @@
  *
  * Contract (emitSettled):
  * - Top-level human direct conversation completed -> unread=true / status=done (existing semantics unchanged);
- * - Background spawned sub-conversation (ownedBy=helm/bot and parentConversationId present, such as managed
+ * - Background spawned sub-conversation (ownedBy=helmx/bot and parentConversationId present, such as managed
  *   subagent / SuperAgent Worker) completed -> unread=false / status=idle,
  *   never fabricating human unread noise; completion state stays consistent with turn_settled event semantics;
  * - Human fork (has parent chain, human ownership) completed -> unread=true (not treated uniformly as background);
@@ -14,7 +14,7 @@
  */
 
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import type { ConversationSummary, TurnSettledPayload } from '@helm/protocol'
+import type { ConversationSummary, TurnSettledPayload } from '@helmx/protocol'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
@@ -46,7 +46,7 @@ async function collectSettled(kernel: KernelRuntime): Promise<TurnSettledPayload
 let root: string
 
 before(async () => {
-  root = await makeTempDir('helm-unread-governance-')
+  root = await makeTempDir('helmx-unread-governance-')
 })
 
 after(async () => {
@@ -83,7 +83,7 @@ describe('turn settlement unread governance', { timeout: 60_000 }, () => {
       await kernel.waitForIdle(child.id)
 
       const fresh = kernel.getConversation(child.id) as ConversationSummary & { ownedBy?: string }
-      assert.equal(fresh.ownedBy, 'helm', 'native subagent is owned by helm')
+      assert.equal(fresh.ownedBy, 'helmx', 'native subagent is owned by helmx')
       assert.equal(fresh.parentConversationId, 1)
       assert.equal(fresh.unread, false, 'background subagent completion must not fabricate human unread state')
       assert.equal(fresh.status, 'idle', 'completion status when unread=false should be idle (matching unread semantics)')
@@ -133,7 +133,7 @@ describe('turn settlement unread governance', { timeout: 60_000 }, () => {
       await kernel.submitInput(forked.id, 'post-fork question')
       await kernel.waitForIdle(forked.id)
       const fresh = kernel.getConversation(forked.id) as ConversationSummary & { ownedBy?: string }
-      assert.notEqual(fresh.ownedBy, 'helm')
+      assert.notEqual(fresh.ownedBy, 'helmx')
       assert.notEqual(fresh.ownedBy, 'bot')
       assert.equal(fresh.unread, true, 'human fork completion still marks conversation unread')
       assert.equal(fresh.status, 'done')

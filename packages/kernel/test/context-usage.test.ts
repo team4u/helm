@@ -21,9 +21,9 @@ import { join } from 'node:path'
 import type { ContextView } from '@earendil-works/pi-durable'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import type { AssistantMessage, Message, SystemMessage, Tool, UserMessage } from '@earendil-works/pi-ai'
-import type { ConversationSummary, HelmEventFrame } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
-import type { ProviderConfig } from '@helm/protocol'
+import type { ConversationSummary, HelmxEventFrame } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
+import type { ProviderConfig } from '@helmx/protocol'
 import { cleanupDir, makeFauxModels, makeTempDir, waitFor as waitForCondition } from './helpers.js'
 import {
   assembleContextUsage,
@@ -83,7 +83,7 @@ interface ViewSpec {
   headKind?: 'pi.compaction' | 'pi.reset'
   /** [entryId, contribution messages] (targets invalidated by omit use empty arrays). */
   entries: Array<[number, Message[]]>
-  /** Entry IDs carrying non-empty edits (e.g. helm.rewind; omitted targets are simulated with empty contributions, viewOf marks boundary). */
+  /** Entry IDs carrying non-empty edits (e.g. helmx.rewind; omitted targets are simulated with empty contributions, viewOf marks boundary). */
   editEntryIds?: number[]
 }
 
@@ -100,7 +100,7 @@ function viewOf(spec: ViewSpec): ContextView {
     kind: 'pi.assistant',
     ...(editIds.has(id) ? { edits: [{ target: 1, action: 'omit' }] } : {}),
   } as never))
-  // Entries with edits have no model field (helm.rewind writes only edits/data), so empty contribution.
+  // Entries with edits have no model field (helmx.rewind writes only edits/data), so empty contribution.
   const contributions = spec.entries.map(([id, messages]) => (editIds.has(id) ? [] : messages))
   const messages = spec.entries.flatMap(([id, msgs]) => (editIds.has(id) ? [] : msgs))
   return { head, entries, contributions, messages } as unknown as ContextView
@@ -217,7 +217,7 @@ describe('estimateContextUsage: parity with pi-agent getContextUsage (pinned exp
       editEntryIds: [9],
       entries: [
         [8, [anchor]],
-        [9, []], // helm.rewind: carries edits without model
+        [9, []], // helmx.rewind: carries edits without model
         [10, []], // omitted target entry
         [11, [newUser]],
       ],
@@ -458,7 +458,7 @@ describe('event boundary: conversation.upsert contextUsage shape validation', { 
     for (const contextUsage of rejects) {
       assert.throws(
         () => hub.publish('conversation.upsert', { conversation: { ...baseSummary, contextUsage } }),
-        (error: unknown) => error instanceof HelmError,
+        (error: unknown) => error instanceof HelmxError,
         `must reject ${JSON.stringify(contextUsage)}`,
       )
     }
@@ -476,7 +476,7 @@ type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 let root = ''
 
 before(async () => {
-  root = await makeTempDir('helm-context-usage-')
+  root = await makeTempDir('helmx-context-usage-')
 })
 
 after(async () => {
@@ -501,7 +501,7 @@ function recordUpserts(kernel: KernelRuntime, conversationId: number): {
   stop: () => void
 } {
   const frames: ConversationSummary[] = []
-  const unsubscribe = kernel.events.subscribe((frame: HelmEventFrame) => {
+  const unsubscribe = kernel.events.subscribe((frame: HelmxEventFrame) => {
     if (frame.event.type !== 'conversation.upsert') return
     const conversation = (frame.event as { conversation?: ConversationSummary }).conversation
     if (conversation?.id === conversationId) frames.push(conversation)
@@ -514,7 +514,7 @@ function recordCompactionFailureNotices(kernel: KernelRuntime, conversationId: n
   stop: () => void
 } {
   const notices: Array<{ title: string; body?: string }> = []
-  const unsubscribe = kernel.events.subscribe((frame: HelmEventFrame) => {
+  const unsubscribe = kernel.events.subscribe((frame: HelmxEventFrame) => {
     if (frame.event.type !== 'notification') return
     const event = frame.event as { level?: string; title?: string; body?: string; conversationId?: number }
     if (event.conversationId !== conversationId || event.title !== 'Context compaction failed') return

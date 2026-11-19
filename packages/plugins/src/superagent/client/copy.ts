@@ -9,8 +9,8 @@
  * IDs (#42), profileIds, threadKeys and raw outcome identifiers stay as-is
  * (mono identifiers, not copy).
  */
-import type { HelmLocale, LocalizedText } from '@helm/plugin-client'
-import { resolveLocalizedText } from '@helm/plugin-client'
+import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText } from '@helmx/plugin-client'
 
 // ---------------------------------------------------------------------------
 // Shared bits: loading states, table chrome, row actions
@@ -29,7 +29,7 @@ export const SA_LOADING_SUBSCRIPTIONS: LocalizedText = { en: 'Loading subscripti
 /** Loading label for the managed-state settings panel. */
 export const SA_LOADING_MANAGED: LocalizedText = { en: 'Loading managed state…', 'zh-CN': '托管状态读取中…' }
 
-/** Empty-table cell shared by every hand-rolled helm-table here. */
+/** Empty-table cell shared by every hand-rolled helmx-table here. */
 export const SA_NO_DATA: LocalizedText = { en: 'No data', 'zh-CN': '暂无数据' }
 
 /** Hand-rolled table column headers (mono identifiers like Profile/ThreadKey stay verbatim). */
@@ -54,7 +54,7 @@ export const SA_ACTION_SPLIT_OPEN: LocalizedText = { en: 'Open side-by-side in s
 export const SA_WIDGET_TITLE: LocalizedText = { en: 'Hub status', 'zh-CN': '中枢态势' }
 
 /** One-line widget summary: active workers and event subscriptions. */
-export function saWidgetSummary(workers: number, subscriptions: number, locale: HelmLocale): string {
+export function saWidgetSummary(workers: number, subscriptions: number, locale: HelmxLocale): string {
   return resolveLocalizedText(
     {
       en: `Active workers: ${workers}; event subscriptions: ${subscriptions}.`,
@@ -93,7 +93,7 @@ export const SA_DISPATCH_FAILED: LocalizedText = { en: 'Dispatch failed', 'zh-CN
 export const SA_DISPATCH_DONE: LocalizedText = { en: 'Dispatch completed', 'zh-CN': '派工完成' }
 
 /** Success line naming the spawned worker conversation. */
-export function saDispatchedWorker(workerConversationId: number, locale: HelmLocale): string {
+export function saDispatchedWorker(workerConversationId: number, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Dispatched worker #${workerConversationId}`, 'zh-CN': `已派工 Worker #${workerConversationId}` },
     locale,
@@ -111,7 +111,7 @@ export const SA_WORKER_REPORT: LocalizedText = { en: 'Worker report', 'zh-CN': '
 export const SA_OUTCOME_UNKNOWN: LocalizedText = { en: 'Unknown', 'zh-CN': '未知' }
 
 /** Artifact button tooltip (name is a passthrough identifier). */
-export function saArtifactTitle(name: string, size: number, locale: HelmLocale): string {
+export function saArtifactTitle(name: string, size: number, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Artifact ${name} (${size} bytes)`, 'zh-CN': `产物 ${name}（${size} 字节）` },
     locale,
@@ -128,7 +128,7 @@ export const SA_RECALL_TITLE: LocalizedText = { en: 'RecallGraph memory graph', 
 export const SA_SUBSCRIPTIONS_TITLE: LocalizedText = { en: 'Event subscriptions', 'zh-CN': '事件订阅' }
 
 /** Screen subtitle counts; appends the split marker in split mode. */
-export function saRecallSubtitle(nodes: number, subscriptions: number, isSplit: boolean, locale: HelmLocale): string {
+export function saRecallSubtitle(nodes: number, subscriptions: number, isSplit: boolean, locale: HelmxLocale): string {
   const split = isSplit
     ? resolveLocalizedText({ en: ' · Split', 'zh-CN': ' · 分屏' }, locale)
     : ''

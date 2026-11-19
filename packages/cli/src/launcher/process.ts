@@ -4,8 +4,8 @@
  * - `startHub` spawns the committed payload entry (`start.mjs start`) detached with stdio
  *   redirected to `logs/hub.log` (file-backed output survives launcher exit; no pipes that could
  *   break a detached child), gates readiness primarily on the candidate's own stdout
- *   `Helm Hub: <url>` listen-success line appearing in the log after spawn plus the child staying
- *   alive (`@helm/hub` prints that line only after the HTTP server is listening) and the URL
+ *   `Helmx Hub: <url>` listen-success line appearing in the log after spawn plus the child staying
+ *   alive (`@helmx/hub` prints that line only after the HTTP server is listening) and the URL
  *   matching the launch configuration, and only then persists `hub.pid` plus the sticky
  *   `launch.json`. On Linux the pid record also carries the `/proc` start time as a reuse proof.
  *   `onSpawn` hands the spawned `ChildProcess` to callers that keep supervising it (`run`), so
@@ -31,7 +31,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import process from 'node:process';
-import { killProcessTree } from '@helm/env-io';
+import { killProcessTree } from '@helmx/env-io';
 import { DEFAULTS, assertInstallIsolation, pathsOf } from './layout.js';
 import {
   assertEntryExists,
@@ -53,8 +53,8 @@ import { readCurrentEntry } from './current.js';
 
 const EXIT_POLL_MS = 100;
 const LOG_TAIL_LINES = 40;
-/** `@helm/hub` prints `Helm Hub: <url>` right after `startHub` resolves (server listening). Multiline + global: the banner may follow earlier log lines in the same read, and `matchAll` requires global matching. */
-const LISTEN_LINE_PATTERN = /^Helm Hub: (\S+)\s*$/gm;
+/** `@helmx/hub` prints `Helmx Hub: <url>` right after `startHub` resolves (server listening). Multiline + global: the banner may follow earlier log lines in the same read, and `matchAll` requires global matching. */
+const LISTEN_LINE_PATTERN = /^Helmx Hub: (\S+)\s*$/gm;
 
 export interface StartHubOptions {
   /** Explicit flags (highest precedence) folded into the effective launch configuration. */
@@ -195,7 +195,7 @@ async function assertNoLiveHub(
 }
 
 /**
- * The listen line must describe the configured endpoint, not just any `Helm Hub: ` output: a
+ * The listen line must describe the configured endpoint, not just any `Helmx Hub: ` output: a
  * mismatch means the candidate bound somewhere other than the requested host/port and is surfaced
  * as an explicit failure instead of a false-ready.
  */
@@ -219,7 +219,7 @@ function assertListenUrlMatches(listenUrl: string, config: EffectiveLaunchConfig
 }
 
 /**
- * Primary readiness gate: the candidate's own `Helm Hub: <url>` listen line in `hub.log` (only
+ * Primary readiness gate: the candidate's own `Helmx Hub: <url>` listen line in `hub.log` (only
  * content appended after spawn counts) while the child stays alive. The URL's port must match the
  * launch config — a banner naming a different endpoint is not this candidate's listen success and
  * keeps the wait going; a port-matching line is then host-checked before being accepted. Rejects
@@ -240,7 +240,7 @@ async function waitForListenLine(
       const tail = await readLogTail(logFile, LOG_TAIL_LINES);
       const detail = options.exitDetail();
       throw new Error(
-        `hub process exited before reporting readiness${detail !== null ? ` ${detail}` : ''} (no "Helm Hub: " listen line)${tail !== '' ? `\n--- ${logFile} last ${LOG_TAIL_LINES} lines ---\n${tail}` : ''}`,
+        `hub process exited before reporting readiness${detail !== null ? ` ${detail}` : ''} (no "Helmx Hub: " listen line)${tail !== '' ? `\n--- ${logFile} last ${LOG_TAIL_LINES} lines ---\n${tail}` : ''}`,
       );
     }
     const chunk = await readLogFrom(logFile, offset);
@@ -259,7 +259,7 @@ async function waitForListenLine(
     if (Date.now() >= deadline) {
       const tail = await readLogTail(logFile, LOG_TAIL_LINES);
       throw new Error(
-        `hub readiness timed out after ${options.timeoutMs}ms: no "Helm Hub: " listen line in ${logFile}${tail !== '' ? `\n--- last ${LOG_TAIL_LINES} lines ---\n${tail}` : ''}`,
+        `hub readiness timed out after ${options.timeoutMs}ms: no "Helmx Hub: " listen line in ${logFile}${tail !== '' ? `\n--- last ${LOG_TAIL_LINES} lines ---\n${tail}` : ''}`,
       );
     }
     await new Promise((resolve) => setTimeout(resolve, options.pollMs));
@@ -290,13 +290,13 @@ export async function startHubLocked(root: string, io: LauncherIo, options: Star
   const launchId = randomUUID();
   const childEnv: NodeJS.ProcessEnv = {
     ...io.env,
-    HELM_PORT: String(config.port),
-    HELM_HUB_ACTIVITY_LAUNCH_ID: launchId,
-    HELM_HOST: config.host,
+    HELMX_PORT: String(config.port),
+    HELMX_HUB_ACTIVITY_LAUNCH_ID: launchId,
+    HELMX_HOST: config.host,
   };
-  if (config.dataDir !== undefined) childEnv.HELM_DATA_DIR = config.dataDir;
-  if (config.model !== undefined) childEnv.HELM_MODEL = config.model;
-  if (config.webDistDir !== undefined) childEnv.HELM_WEB_DIST_DIR = config.webDistDir;
+  if (config.dataDir !== undefined) childEnv.HELMX_DATA_DIR = config.dataDir;
+  if (config.model !== undefined) childEnv.HELMX_MODEL = config.model;
+  if (config.webDistDir !== undefined) childEnv.HELMX_WEB_DIST_DIR = config.webDistDir;
   let child: ReturnType<typeof spawn>;
   try {
     child = spawn(process.execPath, [current.entryPath, 'start'], {

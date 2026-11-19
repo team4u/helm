@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { ConversationEntry } from '@helm/protocol'
+import type { ConversationEntry } from '@helmx/protocol'
 import {
   buildActiveEntryIndex,
   buildToolViewProps,
@@ -89,10 +89,10 @@ const entry = (id: string, kind: string, extra?: Partial<ConversationEntry>): Co
 
 test('buildActiveEntryIndex：rewind 覆盖区间与 marker 自身都被排除，其余按 id 索引', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [
-    entry('1', 'helm.input', { data: { text: 'a', origin: 'human' } }),
+    entry('1', 'helmx.input', { data: { text: 'a', origin: 'human' } }),
     entry('2', 'pi.assistant'),
     entry('3', 'pi.assistant'),
-    entry('9', 'helm.rewind', { data: { fromEntryId: 2, throughEntryId: 3 } }),
+    entry('9', 'helmx.rewind', { data: { fromEntryId: 2, throughEntryId: 3 } }),
   ]
   const index = buildActiveEntryIndex(entries)
   assert.deepEqual([...index.keys()], ['1'])

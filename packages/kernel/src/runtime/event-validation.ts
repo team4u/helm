@@ -3,29 +3,29 @@
  *
  * Discipline (original semantics preserved):
  * - Publish side performs unified JSON validation + redaction (both strings and keys are redacted); invalid payloads
- *   throw HelmError immediately without silent fallbacks. Core types accept either a raw payload or a full event envelope
+ *   throw HelmxError immediately without silent fallbacks. Core types accept either a raw payload or a full event envelope
  *   (e.g., PluginHost emitEvent('plugin.changed', {type, plugin})), unwrapping envelopes without double-nesting.
- *   Unknown event types pass through verbatim as CustomHelmEvent {type, payload} without masquerading as notifications.
+ *   Unknown event types pass through verbatim as CustomHelmxEvent {type, payload} without masquerading as notifications.
  * - "May be omitted, must never be wrong": optional fields are validated whenever present via precompiled TypeBox
  *   schemas + explicit semantic checks and fail rather than being silently coerced.
  */
 import { Type, type Static, type TSchema } from 'typebox'
 import { Compile, type Validator } from 'typebox/compile'
 import type { TLocalizedValidationError } from 'typebox/error'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type {
   AskSpec,
   ConversationEntry,
   ConversationLive,
   ConversationSummary,
-  CustomHelmEvent,
-  HelmEvent,
-  HelmSnapshot,
+  CustomHelmxEvent,
+  HelmxEvent,
+  HelmxSnapshot,
   NodeInfo,
   PublicPluginDoc,
   PublicPluginSessionDoc,
   SecretLifetime,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { redactJsonValue } from '../redact.js'
 import { validateSecretLifetime } from '../services/secret-stash.js'
 
@@ -80,7 +80,7 @@ function parseEventShape<T extends TSchema>(
   what: string,
 ): Static<T> {
   if (!validator.Check(value)) {
-    throw new HelmError('invalid_event', `${what}: ${formatTypeBoxErrors(validator.Errors(value))}`, 500)
+    throw new HelmxError('invalid_event', `${what}: ${formatTypeBoxErrors(validator.Errors(value))}`, 500)
   }
   return value as Static<T>
 }
@@ -116,7 +116,7 @@ const CONVERSATION_SUMMARY_SCHEMA = Type.Object({
   updatedAt: Type.Number(),
   parentConversationId: Type.Optional(Type.Integer()),
   parentToolCallId: Type.Optional(Type.String()),
-  ownedBy: Type.Optional(Type.Enum(['human', 'helm', 'bot'] as const)),
+  ownedBy: Type.Optional(Type.Enum(['human', 'helmx', 'bot'] as const)),
   nodeId: Type.Optional(Type.String()),
   thinkingLevelOverride: Type.Optional(Type.String()),
   doing: Type.Optional(Type.String()),
@@ -200,12 +200,12 @@ function assertAskSpecShape(value: unknown): AskSpec {
   for (const field of ask.fields) {
     if (field.secretLifetime !== undefined) {
       if (field.secret !== true) {
-        throw new HelmError('invalid_event', 'ask.upsert secretLifetime is only allowed on secret fields', 500)
+        throw new HelmxError('invalid_event', 'ask.upsert secretLifetime is only allowed on secret fields', 500)
       }
       try {
         validateSecretLifetime(field.secretLifetime as SecretLifetime, 'ask.upsert field.secretLifetime')
       } catch (error) {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_event',
           error instanceof Error ? error.message : 'ask.upsert field.secretLifetime has invalid format',
           500,
@@ -213,7 +213,7 @@ function assertAskSpecShape(value: unknown): AskSpec {
       }
     }
     if (field.type === 'select' && (!field.options || field.options.length === 0)) {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_event',
         'ask.upsert select field requires non-empty options (consistent with createAsk validation)',
         500,
@@ -290,7 +290,7 @@ const SESSION_DOC_UPDATE_CHECKER = Compile(
   }),
 )
 
-type CoreEventAssembler = (source: Record<string, unknown> | undefined) => HelmEvent
+type CoreEventAssembler = (source: Record<string, unknown> | undefined) => HelmxEvent
 
 /** Table-driven core event assemblers; custom/unknown event types pass through outside this table. */
 const CORE_EVENT_ASSEMBLERS: Readonly<Record<string, CoreEventAssembler>> = {
@@ -320,7 +320,7 @@ const CORE_EVENT_ASSEMBLERS: Readonly<Record<string, CoreEventAssembler>> = {
   },
   'conversation.live': () => {
     // Transient live frames bypass EventHub.publish / seq / replay ring; callers must use publishTransientLive().
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_event',
       'conversation.live is transient and cannot enter the durable EventHub.publish stream (use publishTransientLive)',
       500,
@@ -342,8 +342,8 @@ const CORE_EVENT_ASSEMBLERS: Readonly<Record<string, CoreEventAssembler>> = {
     )
     return {
       type: 'plugin.changed',
-      plugin: parsed.plugin as HelmSnapshot['plugins'][number],
-      ui: parsed.ui as HelmSnapshot['ui'],
+      plugin: parsed.plugin as HelmxSnapshot['plugins'][number],
+      ui: parsed.ui as HelmxSnapshot['ui'],
     }
   },
   'plugin.doc.updated': (source) => {
@@ -356,7 +356,7 @@ const CORE_EVENT_ASSEMBLERS: Readonly<Record<string, CoreEventAssembler>> = {
   },
   'plugin.session_doc.updated': () => {
     // Defensive rejection on the global stream: session doc events belong exclusively on SessionDocEventHub.
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_event',
       'plugin.session_doc.updated cannot enter the global event stream (dedicated session-doc SSE stream only)',
       500,
@@ -391,18 +391,18 @@ const CORE_EVENT_ASSEMBLERS: Readonly<Record<string, CoreEventAssembler>> = {
 }
 
 /**
- * Assemble (type, payload) into a protocol HelmEvent; prunes optional undefined values first, then applies recursive
+ * Assemble (type, payload) into a protocol HelmxEvent; prunes optional undefined values first, then applies recursive
  * JSON redaction across both string values and keys. Core types accept a raw payload or a full event envelope;
- * unknown types pass through verbatim as CustomHelmEvent {type, payload} (never masquerading as notification);
- * any invalid JSON value (cycles, Date, Map, etc.) or mismatched core shape throws HelmError with no silent fallback or coercion.
+ * unknown types pass through verbatim as CustomHelmxEvent {type, payload} (never masquerading as notification);
+ * any invalid JSON value (cycles, Date, Map, etc.) or mismatched core shape throws HelmxError with no silent fallback or coercion.
  */
-export function assembleHelmEvent(
+export function assembleHelmxEvent(
   type: string,
   payload: unknown,
   redact: (text: string) => string,
-): HelmEvent {
+): HelmxEvent {
   if (typeof type !== 'string' || type.length === 0) {
-    throw new HelmError('invalid_event', 'event type must be a non-empty string', 500)
+    throw new HelmxError('invalid_event', 'event type must be a non-empty string', 500)
   }
   const clean = pruneUndefined(payload, new WeakSet())
   const redacted = redactJsonValue(clean, (t) => redact(t))
@@ -414,8 +414,8 @@ export function assembleHelmEvent(
   if (assembler !== undefined) {
     return assembler(envelope ?? record)
   }
-  // CustomHelmEvent: pass unknown types through verbatim without masquerading as notifications.
-  const custom: CustomHelmEvent = { type: String(type), payload: redacted }
+  // CustomHelmxEvent: pass unknown types through verbatim without masquerading as notifications.
+  const custom: CustomHelmxEvent = { type: String(type), payload: redacted }
   return custom
 }
 

@@ -1,9 +1,9 @@
 /**
- * One-shot Q&A command: helm ask = create conversation + submit input + wait for answer.
+ * One-shot Q&A command: helmx ask = create conversation + submit input + wait for answer.
  * Reuses existing endpoints (POST /api/conversations + POST .../input?wait=1) with no new HTTP routes.
  * stdout outputs only the answer text by default (script/pipeline-friendly); on error, keeps the conversation and includes its ID in the error message for inspection.
  */
-import type { ConversationInputResult, ConversationSummary } from '@helm/protocol'
+import type { ConversationInputResult, ConversationSummary } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags, type FlagSpec } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'
@@ -33,7 +33,7 @@ function combinePrompt(positional: string | undefined, stdinText: string | undef
  * Preserves original code/exitCode and merges conversationId into details for script callers.
  */
 function rethrowWithConversation(err: unknown, conversationId: number, lead: string): never {
-  const hint = `${lead} (conversation #${conversationId} kept: run helm conversations get ${conversationId} to inspect / helm conversations delete ${conversationId} to clean up)`
+  const hint = `${lead} (conversation #${conversationId} kept: run helmx conversations get ${conversationId} to inspect / helmx conversations delete ${conversationId} to clean up)`
   if (err instanceof CliError) {
     const base = err.details !== null && typeof err.details === 'object' && !Array.isArray(err.details)
       ? { ...(err.details as Record<string, unknown>) }

@@ -50,9 +50,9 @@ export const Tabs = forwardRef<React.ComponentRef<typeof TabsPrimitive.Root>, Ta
     }
 
     const rootClass = [
-      'helm-tabs',
-      variant && `helm-tabs-${variant}`,
-      size && `helm-tabs-${size}`,
+      'helmx-tabs',
+      variant && `helmx-tabs-${variant}`,
+      size && `helmx-tabs-${size}`,
       className,
     ]
       .filter(Boolean)

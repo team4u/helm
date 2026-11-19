@@ -1,8 +1,8 @@
 /**
- * `@helm/plugins` 测试公共环境基座。
+ * `@helmx/plugins` 测试公共环境基座。
  *
  * 集中提供插件测试常用的内存存储（`MemoryDocStore` / `MemoryConfigStore`）、
- * `makeFauxModels()` 假模型工厂，并统一转发 `@helm/test-kit` 各子入口常用辅助，
+ * `makeFauxModels()` 假模型工厂，并统一转发 `@helmx/test-kit` 各子入口常用辅助，
  * 消除各测试文件重复定义样板。
  */
 
@@ -25,23 +25,23 @@ export {
   waitFor,
   type Deferred,
   type WaitForOptions,
-} from '@helm/test-kit'
+} from '@helmx/test-kit'
 
 export {
   assertRejectsCode,
   cleanupDir,
-  HOST_MANAGED_HELM_ENV_NAMES,
+  HOST_MANAGED_HELMX_ENV_NAMES,
   makeTempDir,
   sanitizedHostEnv,
   useTempDir,
   type CleanupRegistrar,
-} from '@helm/test-kit/node'
+} from '@helmx/test-kit/node'
 
 export {
   createGitTemplate,
   initGitRepo,
   type GitTemplate,
-} from '@helm/test-kit/git'
+} from '@helmx/test-kit/git'
 
 export type { FauxProviderHandle, RegisterFauxProviderOptions }
 

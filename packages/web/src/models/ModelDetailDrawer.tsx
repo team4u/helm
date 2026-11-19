@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { assetsApi, type ModelDescriptor } from '../lib/api.js'
-import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
+import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helmx/plugin-client'
 import { useOptionalModels, useOptionalStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
@@ -362,7 +362,7 @@ export function ModelDetailDrawer({
                   aria-label={t('common.close')}
                   title={t('common.close')}
                 >
-                  <HelmIcon name="x" size={14} />
+                  <HelmxIcon name="x" size={14} />
                 </button>
               </DialogClose>
             </div>
@@ -379,7 +379,7 @@ export function ModelDetailDrawer({
                   <div className="section-flat">
                     <div className="section-flat-header flex-row-between">
                       <div className="flex-row">
-                        <HelmIcon name="key" size={14} />
+                        <HelmxIcon name="key" size={14} />
                         <span className="section-flat-title">{t('models.drawer.credentialsSection')}</span>
                       </div>
                       {provider.dynamic && (
@@ -390,7 +390,7 @@ export function ModelDetailDrawer({
                           disabled={refreshingCatalog}
                           title={t('models.drawer.resyncTitle')}
                         >
-                          <HelmIcon
+                          <HelmxIcon
                             name="refresh-cw"
                             size={12}
                             className={refreshingCatalog ? 'spin' : ''}
@@ -470,7 +470,7 @@ export function ModelDetailDrawer({
                         onClick={handleTest}
                         disabled={testing}
                       >
-                        <HelmIcon name="activity" size={12} />
+                        <HelmxIcon name="activity" size={12} />
                         <span>{testing ? t('models.test.testing') : t('models.test.action')}</span>
                       </button>
 
@@ -481,7 +481,7 @@ export function ModelDetailDrawer({
                           onClick={() => setDeleteConfirmOpen(true)}
                           disabled={deleting}
                         >
-                          <HelmIcon name="trash" size={12} />
+                          <HelmxIcon name="trash" size={12} />
                           <span>{t('models.credentials.delete')}</span>
                         </button>
                       )}
@@ -492,7 +492,7 @@ export function ModelDetailDrawer({
                         className={`callout ${testResult.success ? 'callout-ok' : 'callout-error'}`}
                         role={testResult.success ? 'status' : 'alert'}
                       >
-                        <HelmIcon
+                        <HelmxIcon
                           name={testResult.success ? 'check' : 'alert-circle'}
                           size={13}
                         />
@@ -509,7 +509,7 @@ export function ModelDetailDrawer({
                   <div className="section-flat">
                     <div className="section-flat-header flex-row-between">
                       <div className="flex-row">
-                        <HelmIcon name="cpu" size={14} />
+                        <HelmxIcon name="cpu" size={14} />
                         <span className="section-flat-title">{t('models.models.section')}</span>
                       </div>
                       <span className="badge badge-neutral mono tabular-nums">
@@ -535,7 +535,7 @@ export function ModelDetailDrawer({
                         {/* Action toolbar: filter search and bulk controls */}
                         <div className="mbulk model-chips-toolbar">
                           <div className="search-box flex-1">
-                            <HelmIcon name="search" size={13} />
+                            <HelmxIcon name="search" size={13} />
                             <input
                               type="text"
                               placeholder={t('models.models.filterPlaceholder')}
@@ -597,7 +597,7 @@ export function ModelDetailDrawer({
                                   )}
                                 >
                                   <span className="mchip-check" aria-hidden="true">
-                                    <HelmIcon name="check" size={10} />
+                                    <HelmxIcon name="check" size={10} />
                                   </span>
                                   <span>{model.name}</span>
                                   {model.tags?.map((tag) => (
@@ -627,7 +627,7 @@ export function ModelDetailDrawer({
                                   ? t('models.models.expandAllHidden', { count: hiddenModelCount })
                                   : t('models.models.expandAll')}
                             </span>
-                            <HelmIcon name={isExpanded ? 'chevron-up' : 'chevron-down'} size={12} />
+                            <HelmxIcon name={isExpanded ? 'chevron-up' : 'chevron-down'} size={12} />
                           </button>
                         )}
                       </div>
@@ -647,7 +647,7 @@ export function ModelDetailDrawer({
                 )}
                 {saveError && (
                   <div className="callout callout-error" role="alert">
-                    <HelmIcon name="alert-circle" size={13} />
+                    <HelmxIcon name="alert-circle" size={13} />
                     <span className="callout-text">{saveError}</span>
                   </div>
                 )}
@@ -658,7 +658,7 @@ export function ModelDetailDrawer({
                 onClick={handleSaveProvider}
                 disabled={saving || !provider}
               >
-                <HelmIcon name="check" size={14} />
+                <HelmxIcon name="check" size={14} />
                 <span>{saving ? t('models.saving') : t('models.saveConfig')}</span>
               </button>
             </div>

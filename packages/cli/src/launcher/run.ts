@@ -1,5 +1,5 @@
 /**
- * `helm update --watch` — the supervised foreground lifecycle.
+ * `helmx update --watch` — the supervised foreground lifecycle.
  *
  * One long-running launcher process owns the local Hub end to end:
  *
@@ -26,8 +26,8 @@
 import type { ChildProcess } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import process from 'node:process';
-import { killProcessTree } from '@helm/env-io';
-import { readCurrentRelease } from '@helm/env-io';
+import { killProcessTree } from '@helmx/env-io';
+import { readCurrentRelease } from '@helmx/env-io';
 import { DEFAULTS, pathsOf } from './layout.js';
 import { readPidRecord, removePidFileIfMatch, type LaunchConfig } from './records.js';
 import { isAliveOf, UsageError, type LauncherIo } from './io.js';
@@ -306,7 +306,7 @@ export async function runSupervised(options: RunLauncherOptions): Promise<number
     const record = await readPidRecord(root);
     if (record !== null && isAlive(record.pid)) {
       throw new UsageError(
-        `a hub is already running (pid ${record.pid}, version ${record.version}) that this launcher did not start; stop it first (helm update --stop) or keep managing it manually`,
+        `a hub is already running (pid ${record.pid}, version ${record.version}) that this launcher did not start; stop it first (helmx update --stop) or keep managing it manually`,
         'run_refuses_existing_hub',
       );
     }

@@ -1,14 +1,14 @@
 /**
  * Contract tests for `sanitizedHostEnv`: ensures that when the host carries
- * managed `HELM_*` variables, the test child-process baseline strips every managed
+ * managed `HELMX_*` variables, the test child-process baseline strips every managed
  * variable, preserves ordinary variables, and never mutates `process.env`.
- * This keeps `packages/node` tests stable even inside a Helm-managed host shell.
+ * This keeps `packages/node` tests stable even inside a Helmx-managed host shell.
  */
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import process from 'node:process';
-import { HOST_MANAGED_HELM_ENV_NAMES, sanitizedHostEnv } from './helpers/sanitized-env.js';
+import { HOST_MANAGED_HELMX_ENV_NAMES, sanitizedHostEnv } from './helpers/sanitized-env.js';
 
 /** Temporarily set keys on `process.env` and restore exact prior values (including unset keys) afterward. */
 function withEnv(vars: Record<string, string>, run: () => void): void {
@@ -25,19 +25,19 @@ function withEnv(vars: Record<string, string>, run: () => void): void {
   }
 }
 
-test('sanitizedHostEnv leaves no managed HELM_* variables when host defines all of them', { timeout: 60_000 }, () => {
+test('sanitizedHostEnv leaves no managed HELMX_* variables when host defines all of them', { timeout: 60_000 }, () => {
   const fixture: Record<string, string> = {};
-  for (const name of HOST_MANAGED_HELM_ENV_NAMES) fixture[name] = `host-managed-${name.toLowerCase()}`;
+  for (const name of HOST_MANAGED_HELMX_ENV_NAMES) fixture[name] = `host-managed-${name.toLowerCase()}`;
   let result: NodeJS.ProcessEnv | undefined;
   withEnv(fixture, () => {
     result = sanitizedHostEnv();
     // Helper must not mutate process.env itself
-    for (const name of HOST_MANAGED_HELM_ENV_NAMES) {
+    for (const name of HOST_MANAGED_HELMX_ENV_NAMES) {
       assert.equal(process.env[name], fixture[name], `helper must not mutate process.env.${name}`);
     }
   });
   assert.ok(result !== undefined);
-  for (const name of HOST_MANAGED_HELM_ENV_NAMES) {
+  for (const name of HOST_MANAGED_HELMX_ENV_NAMES) {
     assert.equal(name in result, false, `managed variable ${name} must be stripped`);
     assert.equal(result[name], undefined, `managed variable ${name} must have no remaining value`);
   }
@@ -57,7 +57,7 @@ test('sanitizedHostEnv preserves ordinary variables like PATH and returns an ind
 test('sanitizedHostEnv strips case variants of managed variables (Windows case-insensitive env semantics)', { timeout: 60_000 }, () => {
   // Set only variant names without canonical names (on Windows process.env is case-insensitive,
   // whereas on Linux they are distinct keys; both platforms must strip them).
-  const variants = { helm_token: 'lower-host-token', Helm_Hub_Url: 'mixed-host-url', helm_node_instance_id: 'lower-instance' };
+  const variants = { helmx_token: 'lower-host-token', Helmx_Hub_Url: 'mixed-host-url', helmx_node_instance_id: 'lower-instance' };
   let result: NodeJS.ProcessEnv | undefined;
   withEnv(variants, () => {
     result = sanitizedHostEnv();
@@ -69,13 +69,13 @@ test('sanitizedHostEnv strips case variants of managed variables (Windows case-i
 });
 
 test('explicit test overrides take precedence over sanitizedHostEnv baseline', { timeout: 60_000 }, () => {
-  const fixture = { HELM_HUB_URL: 'http://host-real-hub:3202', HELM_VERSION_OVERRIDE: 'host-9.9.9' };
+  const fixture = { HELMX_HUB_URL: 'http://host-real-hub:3202', HELMX_VERSION_OVERRIDE: 'host-9.9.9' };
   let composed: NodeJS.ProcessEnv | undefined;
   withEnv(fixture, () => {
     // Spread sanitizedHostEnv baseline first, then apply explicit test overrides
-    composed = { ...sanitizedHostEnv(), HELM_HUB_URL: 'http://127.0.0.1:fixture', HELM_VERSION_OVERRIDE: '0.1.0' };
+    composed = { ...sanitizedHostEnv(), HELMX_HUB_URL: 'http://127.0.0.1:fixture', HELMX_VERSION_OVERRIDE: '0.1.0' };
   });
   assert.ok(composed !== undefined);
-  assert.equal(composed['HELM_HUB_URL'], 'http://127.0.0.1:fixture', 'explicit test HELM_HUB_URL must take effect');
-  assert.equal(composed['HELM_VERSION_OVERRIDE'], '0.1.0', 'explicit test HELM_VERSION_OVERRIDE must take effect');
+  assert.equal(composed['HELMX_HUB_URL'], 'http://127.0.0.1:fixture', 'explicit test HELMX_HUB_URL must take effect');
+  assert.equal(composed['HELMX_VERSION_OVERRIDE'], '0.1.0', 'explicit test HELMX_VERSION_OVERRIDE must take effect');
 });

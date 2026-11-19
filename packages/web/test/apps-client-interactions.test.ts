@@ -12,8 +12,8 @@ import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { PluginClientContext as PluginClientContextType, ScreenProps } from '@helm/protocol'
-import { PluginClientContext, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
+import type { PluginClientContext as PluginClientContextType, ScreenProps } from '@helmx/protocol'
+import { PluginClientContext, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
 import { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClientStub } from './helpers/builtin-clients.js'
 
 const e = React.createElement
@@ -39,7 +39,7 @@ interface SpyCtx extends PluginClientContextType {
   actionCalls: Array<{ actionId: string; input: unknown }>
 }
 
-function makeSpyCtx(locale: HelmLocale = 'en'): SpyCtx {
+function makeSpyCtx(locale: HelmxLocale = 'en'): SpyCtx {
   const screenCalls: string[] = []
   const splitCalls: string[] = []
   const actionCalls: Array<{ actionId: string; input: unknown }> = []
@@ -76,7 +76,7 @@ function stubStore(plugins: Array<Record<string, unknown>>, screens: Array<{ plu
     docs: catalog !== undefined ? { catalog } : {},
   })
   // 直接替换共享命名空间中的 usePlugins（编译产物持有该对象引用）
-  const ns = (globalThis as Record<string, unknown>)['__helm_shared_plugin_client'] as Record<string, unknown>
+  const ns = (globalThis as Record<string, unknown>)['__helmx_shared_plugin_client'] as Record<string, unknown>
   ns['usePlugins'] = () => usePluginsResult
 }
 

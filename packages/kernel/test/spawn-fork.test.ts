@@ -24,25 +24,25 @@ import {
   fauxToolCall,
   type FauxResponseFactory,
 } from '@earendil-works/pi-ai/providers/faux'
-import { createNodeDaemon } from '@helm/node'
-import { type HelmHostApi } from '@helm/protocol'
+import { createNodeDaemon } from '@helmx/node'
+import { type HelmxHostApi } from '@helmx/protocol'
 import { startHub } from '../src/http/index.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { selectCleanForkAnchorEntryId } from '../src/runtime/spawn-fork.js'
 import { assertRejectsCode, makeFauxModels } from './helpers.js'
 
-let savedHelmModel: string | undefined
+let savedHelmxModel: string | undefined
 let tmpRoot: string
 
 before(() => {
-  savedHelmModel = process.env['HELM_MODEL']
-  delete process.env['HELM_MODEL']
-  tmpRoot = mkdtempSync(join(tmpdir(), 'helm-spawn-fork-'))
+  savedHelmxModel = process.env['HELMX_MODEL']
+  delete process.env['HELMX_MODEL']
+  tmpRoot = mkdtempSync(join(tmpdir(), 'helmx-spawn-fork-'))
 })
 
 after(() => {
-  if (savedHelmModel === undefined) delete process.env['HELM_MODEL']
-  else process.env['HELM_MODEL'] = savedHelmModel
+  if (savedHelmxModel === undefined) delete process.env['HELMX_MODEL']
+  else process.env['HELMX_MODEL'] = savedHelmxModel
   rmSync(tmpRoot, { recursive: true, force: true })
 })
 
@@ -849,7 +849,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
       assert.ok(await daemonParent.waitUntilRegistered(), 'node-parent should register successfully')
       assert.ok(await daemonProfile.waitUntilRegistered(), 'node-profile should register successfully')
 
-      let hostApi!: HelmHostApi
+      let hostApi!: HelmxHostApi
       await kernel.plugins.register({
         id: 'test:remote-resolve-target',
         definePlugin(ctx) {
@@ -933,7 +933,7 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
     }
   })
 
-  it('fork after helm.rewind (replaceFromEntryId) inherits only rewritten clean history and excludes erased turns', { timeout: 60_000 }, async () => {
+  it('fork after helmx.rewind (replaceFromEntryId) inherits only rewritten clean history and excludes erased turns', { timeout: 60_000 }, async () => {
     const dir = join(tmpRoot, 'rewind-then-fork')
     const { models, faux } = makeFauxModels({ models: [{ id: 'faux-1', reasoning: true }] })
 
@@ -966,9 +966,9 @@ describe('KernelRuntime.spawnAgent({ fork: true }) integration contracts', { tim
 
       const detail = await kernel.getConversationDetail(1, { limit: 50 })
       const eraseEntry = detail.entries.find(
-        (e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('ERASE_ME_222'),
+        (e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('ERASE_ME_222'),
       )
-      assert.ok(eraseEntry, 'must find target helm.input entry to rewind')
+      assert.ok(eraseEntry, 'must find target helmx.input entry to rewind')
 
       await kernel.submitInput(1, 'turn 2 rewritten message REWRITTEN_333', {
         replaceFromEntryId: Number(eraseEntry!.id),
@@ -1130,7 +1130,7 @@ describe('KernelRuntime.forkConversation optional entryId clean anchor', { timeo
     })
     try {
       let capturedForkIds: { defaultId: number; workerId: number } | undefined
-      let pluginHost: HelmHostApi | undefined
+      let pluginHost: HelmxHostApi | undefined
       await kernel.plugins.register({
         id: 'test:conv-forker',
         definePlugin(ctx) {

@@ -1,7 +1,7 @@
 /**
  * Error contracts shared by every consumer of the update engine.
  *
- * Both classes are part of the cross-process contract: `@helm/node` maps
+ * Both classes are part of the cross-process contract: `@helmx/node` maps
  * `UpgradeRejectedError` to RPC `invalid` / 4xx and walks `cause` chains for
  * `UpgradeCommitUnconfirmedError` to decide "never roll back". Consumers must import
  * them from this package only, so a single process never holds two module copies

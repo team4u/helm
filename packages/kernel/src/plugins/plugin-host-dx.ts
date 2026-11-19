@@ -3,13 +3,13 @@
  */
 import { join } from 'node:path';
 import {
-  HelmError,
+  HelmxError,
   type PluginBuildProvider,
   type PluginDoctorReport,
   type PluginReloadResult,
   type PluginRescanResult,
   type PluginSummary,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import { registerPluginTsRoot } from './backend-ts-loader.js';
 import type { PluginDocRegistry } from './doc-registry.js';
 import { assertDoctorTargetDir } from './doctor-target.js';
@@ -55,7 +55,7 @@ function requireSummary(
   error: { code: string; message: string; details?: Record<string, unknown> },
 ): PluginSummary {
   const summary = host.list().find((s) => s.id === pluginId);
-  if (!summary) throw new HelmError(error.code, error.message, 500, error.details);
+  if (!summary) throw new HelmxError(error.code, error.message, 500, error.details);
   return summary;
 }
 
@@ -67,16 +67,16 @@ export async function doctorExternalPluginDir(
   let requestedId: string | undefined;
   if (target.id !== undefined) {
     if (target.dir !== undefined) {
-      throw new HelmError('validation_error', 'doctor target id and dir/path mutual exclusion (choose one provide)', 400);
+      throw new HelmxError('validation_error', 'doctor target id and dir/path mutual exclusion (choose one provide)', 400);
     }
     if (target.id.trim().length === 0) {
-      throw new HelmError('validation_error', 'doctor target id must be a non-empty string', 400);
+      throw new HelmxError('validation_error', 'doctor target id must be a non-empty string', 400);
     }
     const source = await findSourceDirByPluginId(options.dataDir, target.id, {
       transform: options.buildProvider?.transformBackendTs,
     });
     if (source === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_source_missing',
         `in ${join(options.dataDir, 'plugins')} under not found id is ${target.id} external plugin source directory`,
         404,
@@ -89,7 +89,7 @@ export async function doctorExternalPluginDir(
     assertDoctorTargetDir(target.dir, 'dir');
     dir = target.dir;
   } else {
-    throw new HelmError('validation_error', 'doctor must provide target:dir/path(directory absolute path) or id(registered plugin)', 400);
+    throw new HelmxError('validation_error', 'doctor must provide target:dir/path(directory absolute path) or id(registered plugin)', 400);
   }
   const report = await doctorPluginDir(dir, { buildProvider: options.buildProvider });
   return requestedId === undefined ? report : { ...report, requestedId };
@@ -116,7 +116,7 @@ export async function reloadExternalPluginFlow(
           const report = await doctorPluginDir(dir, { buildProvider: deps.buildProvider });
           if (!report.ok) {
             const first = report.checks.find((c) => c.error !== undefined);
-            throw new HelmError(
+            throw new HelmxError(
               'plugin_reload_preflight_failed',
               `Plugin ${pluginId} reload preflight failed (${first ? `${first.label}: ${first.error!.message}` : 'unknown check failed'}); keeping existing instance`,
               422,
@@ -156,7 +156,7 @@ export function createPackageManagerHost(deps: DxCoordinatorDeps): PackageManage
       try {
         const entryPath = await resolvePluginEntry(dir);
         if (entryPath === undefined) {
-          throw new HelmError(
+          throw new HelmxError(
             'plugin_entry_missing',
             `Managed install directory contains no plugin entry (missing plugin.json and conventional entrypoints): ${dir}`,
             500,

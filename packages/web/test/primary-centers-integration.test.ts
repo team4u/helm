@@ -57,7 +57,7 @@ const e = React.createElement
 // ---------------------------------------------------------------------------
 
 /** 记录真实 openTarget 调用序列（委托真实导航动作）。 */
-function spyOpenTarget(store: import('../src/lib/helm-store.js').HelmExternalStore, opened: unknown[]): void {
+function spyOpenTarget(store: import('../src/lib/helmx-store.js').HelmxExternalStore, opened: unknown[]): void {
   ;(store.actions as unknown as { openTarget: (target: unknown) => void }).openTarget = (target) => {
     opened.push(target)
     if (typeof target !== 'string') {
@@ -167,7 +167,7 @@ test('URL hash contract: four-center round-trip encoding and sub-item deep links
     { hash: '#/settings/profiles', state: { primaryTarget: { kind: 'profiles' as const } } },
     { hash: '#/settings/profiles/watchdog', state: { primaryTarget: { kind: 'profiles' as const, profileId: 'watchdog' } } },
     { hash: '#/settings/skills', state: { primaryTarget: { kind: 'skills' as const } } },
-    { hash: '#/settings/skills/helm-cli', state: { primaryTarget: { kind: 'skills' as const, skillId: 'helm-cli' } } },
+    { hash: '#/settings/skills/helmx-cli', state: { primaryTarget: { kind: 'skills' as const, skillId: 'helmx-cli' } } },
     { hash: '#/settings/nodes', state: { primaryTarget: { kind: 'nodes' as const } } },
     { hash: '#/settings/nodes/local', state: { primaryTarget: { kind: 'nodes' as const, nodeId: 'local' } } },
     { hash: '#/settings/models', state: { primaryTarget: { kind: 'models' as const } } },
@@ -241,9 +241,9 @@ test('four-center drawer wiring: carrying a sub-item ID auto-opens the matching 
   // 2. Skills opens the drawer when carrying a skillId
   const skillStore = makeTestStore({
     skills: [
-      { id: 'helm-cli', name: 'Helm CLI', description: '命令行', references: [] }, // zh fixtures
+      { id: 'helmx-cli', name: 'Helmx CLI', description: '命令行', references: [] }, // zh fixtures
     ],
-    primaryTarget: { kind: 'skills', skillId: 'helm-cli' },
+    primaryTarget: { kind: 'skills', skillId: 'helmx-cli' },
   })
   const skillHtml = renderToString(
     e(HostStoreProviders, { value: skillStore }, e(SkillCenter, { inlineDrawer: true })),

@@ -1,6 +1,6 @@
 import { useContext, useMemo, useState } from 'react'
-import type { ConversationEntry, ConversationSummary } from '@helm/protocol/browser'
-import { CopyButton, HelmIcon, ToolActivityContext } from '@helm/plugin-client'
+import type { ConversationEntry, ConversationSummary } from '@helmx/protocol/browser'
+import { CopyButton, HelmxIcon, ToolActivityContext } from '@helmx/plugin-client'
 import { useGroupedUi } from '../lib/store-context.js'
 import { PluginMicroAction } from '../ui/PluginMicroAction.js'
 import { matchTimelineEntryActions, timelineEntryActionContextOf } from './action-model.js'
@@ -28,7 +28,7 @@ export function AssistantModelBoundary({ model }: { model: AssistantModelIdentit
       title={t('conv.model.boundarySwitched', { model: full })}
     >
       <span className="model-boundary-label">
-        <HelmIcon name="cpu" size={11} />
+        <HelmxIcon name="cpu" size={11} />
         <span className="mono">{assistantModelShortLabel(model)}</span>
       </span>
     </div>
@@ -42,7 +42,7 @@ export function AssistantModelBoundary({ model }: { model: AssistantModelIdentit
 export interface AssistantTurnViewProps {
   turn: AssistantTurn
   conversation: ConversationSummary
-  siblingCalls: ReadonlyArray<import('@helm/protocol/browser').ToolViewSiblingCall>
+  siblingCalls: ReadonlyArray<import('@helmx/protocol/browser').ToolViewSiblingCall>
   isLatestTurn?: boolean
   /** 回合锚点对应的真实持久化 pi.assistant 条目（见 resolveAssistantAnchorEntry）。 */
   anchorEntry?: ConversationEntry
@@ -170,7 +170,7 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
           {showModelTag ? (
             <Tooltip content={t('conv.model.effective', { model: modelFull })}>
               <span className="msg-time-meta" title={t('conv.model.effective', { model: modelFull })}>
-                <HelmIcon name="cpu" size={11} />
+                <HelmxIcon name="cpu" size={11} />
                 <span className="mono">{modelShort}</span>
               </span>
             </Tooltip>
@@ -206,7 +206,7 @@ function AssistantTurnContent({ turn, conversation, siblingCalls, isLatestTurn =
                 disabled={forking || turn.entryIds.length === 0}
                 onClick={() => void forkFromHere()}
               >
-                <HelmIcon name={forking ? 'loader' : 'git-fork'} size={12} />
+                <HelmxIcon name={forking ? 'loader' : 'git-fork'} size={12} />
               </button>
             </span>
           ) : null}

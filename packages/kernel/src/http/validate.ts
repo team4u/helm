@@ -1,6 +1,6 @@
 /**
  * Boundary field validation: mechanical type/shape/unknown-field rules use TypeBox schemas
- * compiled via AJV (sharing @helm/protocol's `validateOrThrow` cache used by plugin action inputs);
+ * compiled via AJV (sharing @helmx/protocol's `validateOrThrow` cache used by plugin action inputs);
  * complex cross-field semantics, UTF-16 code-unit caps, trim rules, and path absoluteness remain
  * hand-written. Invalid input always fails with 400 validation_error.
  *
@@ -8,7 +8,7 @@
  */
 import { Type, type Static, type TSchema } from 'typebox'
 import {
-  HelmError,
+  HelmxError,
   PROFILE_STARTERS_MAX_ITEMS,
   PROFILE_STARTER_LABEL_MAX_LENGTH,
   PROFILE_STARTER_PROMPT_MAX_LENGTH,
@@ -22,7 +22,7 @@ import {
   type ProfileStarterPrompt,
   type ProviderConfig,
   type WhenBusy,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 /** Node ID rule (starts with an ASCII letter or digit; may contain . _ -, length 1..128). */
@@ -34,7 +34,7 @@ const SKILL_ID_PATTERN_SOURCE = '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$'
 const RUNTIME_KIND_PATTERN_SOURCE = '^[a-z][a-z0-9_-]{0,31}$'
 const THINKING_LEVELS = ['', 'off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const
 
-// Reusable TypeBox schema primitives (valid JSON Schema consumed by @helm/protocol's AJV validator).
+// Reusable TypeBox schema primitives (valid JSON Schema consumed by @helmx/protocol's AJV validator).
 const IdString = Type.String({ pattern: ID_PATTERN.source })
 const NodeIdString = Type.String({ pattern: NODE_ID_PATTERN_SOURCE })
 const NonEmptyString = Type.String({ minLength: 1 })
@@ -42,14 +42,14 @@ const SafePositiveInt = Type.Integer({ minimum: 1, maximum: MAX_SAFE_INTEGER })
 const SafeNonNegativeInt = Type.Integer({ minimum: 0, maximum: MAX_SAFE_INTEGER })
 const ThinkingLevelSchema = Type.Enum(THINKING_LEVELS)
 
-export class ValidationError extends HelmError {
+export class ValidationError extends HelmxError {
   constructor(message: string, details?: unknown) {
     super('validation_error', message, 400, details)
   }
 }
 
 /**
- * JSON Schema body validation: reuses @helm/protocol's AJV wrapper (compiled schema cache,
+ * JSON Schema body validation: reuses @helmx/protocol's AJV wrapper (compiled schema cache,
  * $async rejection, field-path diagnostics) and translates failures into HTTP-boundary
  * ValidationError (same 400 validation_error contract; message includes instancePath, details
  * carries the AJV error list). Rejects non-plain class instances (e.g. Date/Map) that AJV
@@ -65,7 +65,7 @@ export function assertBodySchema(schema: JsonSchema, value: unknown, what: strin
   try {
     validateOrThrow(schema, value, what)
   } catch (error) {
-    if (error instanceof HelmError && error.code === 'validation_error') {
+    if (error instanceof HelmxError && error.code === 'validation_error') {
       const ajvErrors = (
         error.details as { errors?: Array<{ keyword?: string; params?: { additionalProperty?: unknown } }> } | undefined
       )?.errors

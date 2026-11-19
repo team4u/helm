@@ -6,11 +6,11 @@
 import { readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import {
-  HelmError,
+  HelmxError,
   parseNonEmptyLocalizedText,
   type PluginDefinition,
   type PluginDiagnosticError,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import { nextPluginGeneration, registerPluginTsRoot, type BackendTsTransformFn } from './backend-ts-loader.js';
 import { isBuiltinPluginDataDirName } from './plugin-dir-name.js';
 import {
@@ -76,7 +76,7 @@ async function registerScanFailure(
 ): Promise<void> {
   if (plugins.registerFailed === undefined) throw err;
   const error: PluginDiagnosticError =
-    err instanceof HelmError
+    err instanceof HelmxError
       ? {
           code: err.code,
           message: err.message,
@@ -160,7 +160,7 @@ async function visitExternalPluginDirs(params: ScanVisitParams): Promise<void> {
           policy.onSkipped();
           continue;
         }
-        throw new HelmError(
+        throw new HelmxError(
           'plugin_already_registered',
           `External plugin ${dirPath} id collides with an already registered plugin: ${definition.id}`,
           409,

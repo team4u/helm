@@ -9,14 +9,14 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { HelmError, type ConversationSummary, type MaybePromise } from '@helm/protocol'
+import { HelmxError, type ConversationSummary, type MaybePromise } from '@helmx/protocol'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import {
   registerSuperAgentWatchdog,
 } from '../src/superagent/watchdog.js'
 import type { SuperAgentWatchdogRuntime } from '../src/superagent/contracts.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   MemoryDocStore,
   deferred,
@@ -27,7 +27,7 @@ import {
 const makeSummary = (id: number): ConversationSummary => makeConversationSummary({ id, model: '' })
 
 test('service stop 等待已进入采集的在途 tick，插件释放前完成 Doc 写入', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-tick-close-')
+  const dataDir = useTempDir(t, 'helmx-tick-close-')
   const conversations = new Map<number, ConversationSummary>([[1, makeSummary(1)]])
   const eventListeners = new Map<string, Array<(payload: unknown) => MaybePromise<void>>>()
   const entered = deferred()
@@ -45,9 +45,9 @@ test('service stop 等待已进入采集的在途 tick，插件释放前完成 D
     updateConversation: async (id) => conversations.get(id)!,
     manageConversation: () => () => {},
     markConversationOwnership: () => {},
-    getConversationOwnership: () => 'helm',
+    getConversationOwnership: () => 'helmx',
     isClosing: () => false,
-    createAsk: async () => { throw new HelmError('unsupported', '本测试不建 Ask', 400) },
+    createAsk: async () => { throw new HelmxError('unsupported', '本测试不建 Ask', 400) },
     cancelAsk: async () => {},
     registerAskSeqResolver: () => () => {},
     onEvent: (type, listener) => {
@@ -74,7 +74,7 @@ test('service stop 等待已进入采集的在途 tick，插件释放前完成 D
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    execEnv: async () => { throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501) },
   }
 
   const runtime: SuperAgentWatchdogRuntime = {
@@ -116,6 +116,6 @@ test('service stop 等待已进入采集的在途 tick，插件释放前完成 D
   // 停用后动作显式拒绝（无幻影入口）。
   await assert.rejects(
     host.invokeAction('builtin:superagent', 'watchdog_tick', {}),
-    (error: unknown) => error instanceof HelmError,
+    (error: unknown) => error instanceof HelmxError,
   )
 })

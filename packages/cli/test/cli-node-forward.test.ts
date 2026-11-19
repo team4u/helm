@@ -1,5 +1,5 @@
 /**
- * Contract tests for `helm nodes forward`: mock HTTP server simulating Hub
+ * Contract tests for `helmx nodes forward`: mock HTTP server simulating Hub
  * (same pattern as cli-nodes-env.test.ts), verifying POST/DELETE routes,
  * request bodies, argument validation (host:port parsing / IPv6 brackets / bare port),
  * error exit codes, and --json.
@@ -41,7 +41,7 @@ const defaultForwardEventsRoute: Record<string, MockRouteHandler> = {
 }
 
 test('nodes forward: POST creates forward with exact body mapping; unexpected stream drop exits non-zero', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-forward-')
+  const dir = useTempDir(t, 'helmx-cli-forward-')
   const hub = await startMockHub(
     {
       'POST /api/nodes/node-a/forward': (body) => {
@@ -71,7 +71,7 @@ test('nodes forward: POST creates forward with exact body mapping; unexpected st
 })
 
 test('nodes forward: bare target port defaults to 127.0.0.1; IPv6 bracketed listen address parsed', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-forward-')
+  const dir = useTempDir(t, 'helmx-cli-forward-')
   const hub = await startMockHub(
     {
       ...defaultForwardEventsRoute,
@@ -90,7 +90,7 @@ test('nodes forward: bare target port defaults to 127.0.0.1; IPv6 bracketed list
 })
 
 test('nodes forward: argument validation rejects missing positionals, bad ports, and bare listen port', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-forward-')
+  const dir = useTempDir(t, 'helmx-cli-forward-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
   for (const [argv, pattern] of [
@@ -112,7 +112,7 @@ test('nodes forward: argument validation rejects missing positionals, bad ports,
 })
 
 test('nodes forward: Hub validation error (400 validation_error) exits non-zero', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-forward-')
+  const dir = useTempDir(t, 'helmx-cli-forward-')
   const hub = await startMockHub(
     {
       'POST /api/nodes/node-c/forward': () => ({
@@ -128,7 +128,7 @@ test('nodes forward: Hub validation error (400 validation_error) exits non-zero'
 })
 
 test('nodes forward: exits 0 on stopped terminal event (both human and --json modes)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-forward-')
+  const dir = useTempDir(t, 'helmx-cli-forward-')
   for (const json of [false, true]) {
     const hub = await startMockHub({
       ...defaultForwardEventsRoute,
@@ -151,7 +151,7 @@ test('nodes forward: exits 0 on stopped terminal event (both human and --json mo
 })
 
 test('nodes forward: non-404 cleanup failure exits non-zero without falsely reporting success', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-forward-')
+  const dir = useTempDir(t, 'helmx-cli-forward-')
   const hub = await startMockHub(
     {
       ...defaultForwardEventsRoute,
@@ -171,8 +171,8 @@ test('nodes forward: non-404 cleanup failure exits non-zero without falsely repo
   assert.match(result.err, /forward_cleanup_failed|cleanup failed/, 'explicitly reports cleanup failure')
 })
 
-test('nodes forward: --current resolves HELM_NODE_ID; mutually exclusive with explicit nodeId', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-forward-')
+test('nodes forward: --current resolves HELMX_NODE_ID; mutually exclusive with explicit nodeId', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-forward-')
   const hub = await startMockHub(
     {
       ...defaultForwardEventsRoute,
@@ -182,23 +182,23 @@ test('nodes forward: --current resolves HELM_NODE_ID; mutually exclusive with ex
     { autoRegisterCleanup: t },
   )
   const base = makeCliEnv(hub.url, dir)
-  const env = { ...base, HELM_NODE_ID: 'from-env' }
+  const env = { ...base, HELMX_NODE_ID: 'from-env' }
   const result = await runCliCaptured(['nodes', 'forward', '--current', '127.0.0.1:18080', 'db.internal:5432'], env)
   const post = hub.hits.find((h) => h.method === 'POST')
-  assert.ok(post !== undefined && post.path.includes('from-env'), '--current resolves HELM_NODE_ID')
+  assert.ok(post !== undefined && post.path.includes('from-env'), '--current resolves HELMX_NODE_ID')
   void result
   // Mutual exclusion: explicit nodeId and --current.
   const both = await runCliCaptured(['nodes', 'forward', 'node-a', '--current', '127.0.0.1:18080', '5432'], env)
   assert.equal(both.code, 1)
   assert.match(both.err, /mutually exclusive/)
-  // Missing HELM_NODE_ID.
+  // Missing HELMX_NODE_ID.
   const missing = await runCliCaptured(['nodes', 'forward', '--current', '127.0.0.1:18080', '5432'], base)
   assert.equal(missing.code, 1)
-  assert.match(missing.err, /HELM_NODE_ID/)
+  assert.match(missing.err, /HELMX_NODE_ID/)
 })
 
 test('nodes forwards / forward-inspect / forward-stop: human output and --json', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-forward-')
+  const dir = useTempDir(t, 'helmx-cli-forward-')
   const hub = await startMockHub(
     {
       'GET /api/nodes/forward': () => ({ status: 200, body: [{ ...SESSION }] }),

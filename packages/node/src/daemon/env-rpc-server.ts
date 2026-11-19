@@ -14,12 +14,12 @@
 import type { Duplex } from 'node:stream';
 import {
   LocalExecutionEnv,
-  isManagedHelmEnvKey,
+  isManagedHelmxEnvKey,
   type BinaryReader,
   type DirReader,
   type TextLineReader,
 } from './local-env.js';
-import { createNodePathUsageIo, scanPathUsage, setEnvEntry } from '@helm/env-io';
+import { createNodePathUsageIo, scanPathUsage, setEnvEntry } from '@helmx/env-io';
 import type {
   EnvExecInput,
   EnvExecOk,
@@ -30,7 +30,7 @@ import type {
   NodePathUsage,
   NodeTunnelOpenInput,
   RpcResult,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import { drainingRejection, invalidInput, isRecord, rpcFail } from './env-rpc-shared.js';
 import { createIpcBridge, resolveHerdrIpcEndpoint } from './env-rpc-ipc.js';
 import { createTunnelHandler } from './env-rpc-tunnel.js';
@@ -43,7 +43,7 @@ export interface NodeEnvRpcServerOptions {
   defaultCwd: string;
   /** Callback forwarding shell stdout/stderr chunks back to the Hub (`onEnvExecOutput`). */
   onExecOutput?: (event: EnvExecOutputEvent) => void;
-  /** Daemon-injected base env vars for shell commands (e.g. `HELM_HUB_URL`). */
+  /** Daemon-injected base env vars for shell commands (e.g. `HELMX_HUB_URL`). */
   shellEnv?: Record<string, string | undefined>;
   /** Maximum characters per streamed output chunk (>= 1; defaults to 256 KiB chars). */
   maxOutputChunkChars?: number;
@@ -224,14 +224,14 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
     return result.ok ? { ok: true, value: (result.value ?? null) as R } : rpcFail(result.error);
   };
 
-  /** Build child env while stripping daemon credentials (`HELM_TOKEN` / `HELM_EXECUTION_SCOPE`) unless explicitly supplied in `input.env`. */
+  /** Build child env while stripping daemon credentials (`HELMX_TOKEN` / `HELMX_EXECUTION_SCOPE`) unless explicitly supplied in `input.env`. */
   const buildExecEnv = (
     input: { env?: Record<string, string>; inheritEnv?: boolean },
   ): { env: Record<string, string>; inheritEnv: false } => {
     const merged: Record<string, string> = {};
     if (input.inheritEnv !== false) {
       for (const [key, value] of Object.entries(process.env)) {
-        if (value === undefined || isManagedHelmEnvKey(key)) continue;
+        if (value === undefined || isManagedHelmxEnvKey(key)) continue;
         setEnvEntry(merged, key, value);
       }
     }
@@ -407,7 +407,7 @@ export function createNodeEnvRpcServer(options: NodeEnvRpcServerOptions): NodeEn
       return unwrap(envFor(cwd).exists(target));
     },
 
-    /** Scan `/proc` via `@helm/env-io` to report processes referencing `path` (read-only). */
+    /** Scan `/proc` via `@helmx/env-io` to report processes referencing `path` (read-only). */
     async envPathUsage(raw: unknown): Promise<RpcResult<NodePathUsage>> {
       if (!isRecord(raw) || Array.isArray(raw)) {
         return invalidInput('envPathUsage input must be a plain object');

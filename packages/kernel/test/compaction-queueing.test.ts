@@ -5,7 +5,7 @@
  * Covers (real KernelRuntime + SQLite + fauxProvider latches):
  * 1. submitInput (steer / followUp) during manual compaction enters pi.inbox queue (visible in live.queuedInputs);
  *    whenBusy='reject' returns 409 conversation_busy; post-compaction pi.compaction persists before
- *    helm.input, and assistant runs against the compacted summary context;
+ *    helmx.input, and assistant runs against the compacted summary context;
  * 2. withdrawQueuedInput cleanly withdraws queued input during manual compaction;
  * 3. abortConversation aborts active compaction, withdraws queued input, and never misreports unnecessary compaction;
  * 4. Empty-skip manual compaction (both short context <20000 tokens and beforeCompact decline latch):
@@ -19,8 +19,8 @@ import { after, before, describe, it } from 'node:test'
 import { join } from 'node:path'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { CompactionTask, defineExtension, hook } from '@earendil-works/pi-durable'
-import type { ConversationLive, HelmEventFrame } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { ConversationLive, HelmxEventFrame } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
@@ -54,7 +54,7 @@ function recordNotifications(kernel: KernelRuntime, conversationId: number): {
   stop: () => void
 } {
   const notices: CapturedNotice[] = []
-  const unsubscribe = kernel.events.subscribe((frame: HelmEventFrame) => {
+  const unsubscribe = kernel.events.subscribe((frame: HelmxEventFrame) => {
     if (frame.event.type !== 'notification') return
     const ev = frame.event as { level?: string; title?: string; body?: string; conversationId?: number }
     if (ev.conversationId !== conversationId) return
@@ -81,7 +81,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
   let root = ''
 
   before(async () => {
-    root = await makeTempDir('helm-compact-queue-')
+    root = await makeTempDir('helmx-compact-queue-')
   })
 
   after(async () => {
@@ -120,7 +120,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
     await waitFor(() => (kernel.getConversation(1).contextUsage?.tokens ?? 0) > 30_000, 20_000)
   }
 
-  it('queues steer/followUp during compaction, rejects 409 when reject, and commits pi.compaction before helm.input', { timeout: 60_000 }, async () => {
+  it('queues steer/followUp during compaction, rejects 409 when reject, and commits pi.compaction before helmx.input', { timeout: 60_000 }, async () => {
     const { kernel, faux } = await openRuntime('queue-and-flush')
     let releaseSummary = () => {}
     try {
@@ -150,7 +150,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       // whenBusy='reject' must explicitly fail with 409 during compaction rather than silently queueing or starting a run.
       await assert.rejects(
         () => kernel.submitInput(1, 'rejected input during compaction', { whenBusy: 'reject' }),
-        (err: unknown) => err instanceof HelmError && err.code === 'conversation_busy' && err.status === 409,
+        (err: unknown) => err instanceof HelmxError && err.code === 'conversation_busy' && err.status === 409,
       )
 
       // followUp and steer submitted during compaction enter pi.inbox and appear in live.queuedInputs.
@@ -174,7 +174,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       assert.equal(midDetail.entries.some((e) => e.kind === 'pi.compaction'), false)
       assert.equal(
         midDetail.entries.some(
-          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'follow-up question after compaction',
+          (e) => e.kind === 'helmx.input' && (e.data as { text?: string } | undefined)?.text === 'follow-up question after compaction',
         ),
         false,
       )
@@ -190,14 +190,14 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       const finalDetail = await kernel.getConversationDetail(1, { limit: 100 })
       const compactionIdx = finalDetail.entries.findIndex((e) => e.kind === 'pi.compaction')
       const steerIdx = finalDetail.entries.findIndex(
-        (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'steer instruction after compaction',
+        (e) => e.kind === 'helmx.input' && (e.data as { text?: string } | undefined)?.text === 'steer instruction after compaction',
       )
       const followUpIdx = finalDetail.entries.findIndex(
-        (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'follow-up question after compaction',
+        (e) => e.kind === 'helmx.input' && (e.data as { text?: string } | undefined)?.text === 'follow-up question after compaction',
       )
       assert.ok(compactionIdx >= 0, 'pi.compaction entry must be persisted')
-      assert.ok(steerIdx > compactionIdx, 'pi.compaction must persist before queued steer helm.input')
-      assert.ok(followUpIdx > compactionIdx, 'pi.compaction must persist before queued followUp helm.input')
+      assert.ok(steerIdx > compactionIdx, 'pi.compaction must persist before queued steer helmx.input')
+      assert.ok(followUpIdx > compactionIdx, 'pi.compaction must persist before queued followUp helmx.input')
       assert.ok(
         finalDetail.entries.some(
           (e) => e.kind === 'pi.assistant' && extractText(e.model?.[0] && (e.model[0] as { content?: unknown }).content).includes('reply based on compacted summary'),
@@ -253,7 +253,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       assert.ok(detail.entries.some((e) => e.kind === 'pi.compaction'), 'compaction should still finish normally')
       assert.equal(
         detail.entries.some(
-          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'input to withdraw during compaction',
+          (e) => e.kind === 'helmx.input' && (e.data as { text?: string } | undefined)?.text === 'input to withdraw during compaction',
         ),
         false,
         'withdrawn input must never persist or execute',
@@ -310,7 +310,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       assert.equal(detail.entries.some((e) => e.kind === 'pi.compaction'), false)
       assert.equal(
         detail.entries.some(
-          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'input dropped upon abort',
+          (e) => e.kind === 'helmx.input' && (e.data as { text?: string } | undefined)?.text === 'input dropped upon abort',
         ),
         false,
       )
@@ -399,7 +399,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
         assert.equal(detail.entries.some((e) => e.kind === 'pi.compaction'), false, 'empty skip must not write pi.compaction')
         assert.ok(
           detail.entries.some(
-            (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'queued question during empty-skip compaction',
+            (e) => e.kind === 'helmx.input' && (e.data as { text?: string } | undefined)?.text === 'queued question during empty-skip compaction',
           ),
           'queued input should execute and persist via continue',
         )
@@ -463,7 +463,7 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       const detail = await kernel.getConversationDetail(1, { limit: 100 })
       assert.equal(
         detail.entries.some(
-          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'input kept in queue after failure',
+          (e) => e.kind === 'helmx.input' && (e.data as { text?: string } | undefined)?.text === 'input kept in queue after failure',
         ),
         false,
         'must not execute queued input on uncompacted context after failure',
@@ -484,8 +484,8 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       await seedLargeContext(kernel, faux)
 
       const preDetail = await kernel.getConversationDetail(1, { limit: 50 })
-      const lastHumanEntry = [...preDetail.entries].reverse().find((e) => e.kind === 'helm.input')
-      assert.ok(lastHumanEntry, 'must contain editable helm.input entry')
+      const lastHumanEntry = [...preDetail.entries].reverse().find((e) => e.kind === 'helmx.input')
+      assert.ok(lastHumanEntry, 'must contain editable helmx.input entry')
       const targetEntryId = Number(lastHumanEntry!.id)
 
       let summaryEntered!: () => void
@@ -509,10 +509,10 @@ describe('Compaction queueing, empty-skip reconciliation & rewind guard', { time
       await new Promise((r) => setTimeout(r, 80))
 
       const finalDetail = await kernel.getConversationDetail(1, { limit: 50 })
-      assert.ok(finalDetail.entries.some((e) => e.kind === 'helm.rewind'), 'must persist helm.rewind marker')
+      assert.ok(finalDetail.entries.some((e) => e.kind === 'helmx.rewind'), 'must persist helmx.rewind marker')
       assert.ok(
         finalDetail.entries.some(
-          (e) => e.kind === 'helm.input' && (e.data as { text?: string } | undefined)?.text === 'new issue replacing history during compaction',
+          (e) => e.kind === 'helmx.input' && (e.data as { text?: string } | undefined)?.text === 'new issue replacing history during compaction',
         ),
         'must persist replacement input',
       )

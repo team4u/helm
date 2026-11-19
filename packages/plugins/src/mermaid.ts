@@ -8,7 +8,7 @@
 import { existsSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmError, type PluginDefinition } from '@helm/protocol'
+import { HelmxError, type PluginDefinition } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 
 const MERMAID_PLUGIN_ID = 'builtin:mermaid'
@@ -22,7 +22,7 @@ function resolvePluginsPackageRoot(): string {
     if (parent === root) break
     root = parent
   }
-  throw new HelmError('mermaid_dependency_missing', 'the built-in Mermaid plugin runtime dependency is not installed', 500)
+  throw new HelmxError('mermaid_dependency_missing', 'the built-in Mermaid plugin runtime dependency is not installed', 500)
 }
 
 export function createMermaidPlugin(): PluginDefinition {

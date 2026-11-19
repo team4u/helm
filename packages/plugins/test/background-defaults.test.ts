@@ -1,14 +1,14 @@
 /**
  * subagent / SubagentWorkflow 工具 background 缺省策略端到端测试
- * （真实 createHelm + faux provider + 真内核 + 真引擎）。
+ * （真实 createHelmx + faux provider + 真内核 + 真引擎）。
  *
  * 缺省语义（以内核权威归属 getConversationOwnership 判定，不按 profileId/
  * runtime 角色枚举）：
  * - 人类交互会话（未标记归属 = human）缺省 background=true：工具在执行环境
  *   就绪 / durable running 快照落盘后立即返回（runId + running），后台完成后
  *   向父会话幂等 steer 汇报（origin=agent、meta.backgroundRunId、
- *   requestId helm:<kind>-report:<runId>）；父回合结束不误杀后台任务；
- * - 自动化会话（归属 helm/bot，如受管子代理、驻留 Worker）缺省同步等待最终
+ *   requestId helmx:<kind>-report:<runId>）；父回合结束不误杀后台任务；
+ * - 自动化会话（归属 helmx/bot，如受管子代理、驻留 Worker）缺省同步等待最终
  *   结果；显式 background=true 被显式拒绝（subagent_failed / workflow_failed
  *   + 归属事实），不派生、不建 run，绝不静默改写为同步；
  * - 显式 background:false 在人类交互会话保留同步路径。
@@ -24,12 +24,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { createHelm } from '../../hub/src/app.js'
+import { createHelmx } from '../../hub/src/app.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { makeFauxProvider } from './helpers/plugin-test-env.js'
 
-type App = Awaited<ReturnType<typeof createHelm>>
+type App = Awaited<ReturnType<typeof createHelmx>>
 
 /** 工具结果 entry 文本（pi.tool-result 的 model[0].content 文本块拼接）。 */
 function toolResultText(detail: { entries: Array<{ kind: string; model?: unknown[] }> }, toolName: string): string {
@@ -49,7 +49,7 @@ function toolNameOf(model: unknown[] | undefined): string | undefined {
   return message?.toolName
 }
 
-/** 会话的后台汇报 helm.input（origin=agent 且带 meta.backgroundRunId）。 */
+/** 会话的后台汇报 helmx.input（origin=agent 且带 meta.backgroundRunId）。 */
 async function backgroundReports(
   app: App,
   conversationId: number,
@@ -57,7 +57,7 @@ async function backgroundReports(
   const detail = await app.kernel.getConversationDetail(conversationId, { limit: 500 })
   const out: Array<{ id: unknown; origin: unknown; kind: unknown; backgroundRunId?: string; renderer?: unknown; text?: string }> = []
   for (const entry of detail.entries) {
-    if (entry.kind !== 'helm.input') continue
+    if (entry.kind !== 'helmx.input') continue
     const data = entry.data as
       | { id?: unknown; origin?: unknown; text?: unknown; meta?: { backgroundRunId?: unknown; kind?: unknown; renderer?: unknown } }
       | undefined
@@ -104,7 +104,7 @@ async function untilValue<T>(resolve: () => Promise<T | undefined> | T | undefin
 let rootDir: string
 
 before(() => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-bg-defaults-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-bg-defaults-'))
 })
 
 after(() => {
@@ -115,7 +115,7 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
   it('人类交互会话缺省后台：立即返回 runId/running；后台完成后父会话恰收一次 subagent_report 汇报', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'bg1')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       // faux 全共享 FIFO 队列：首个必须 toolCall；其后消费点（父工具结果回合 /
       // 后台子代理回合 / 汇报触发的父回合）次序不确定——一律供给良性文本。
@@ -145,21 +145,21 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
       await until(async () => (await backgroundReports(app, 1)).some((r) => r.backgroundRunId === runId), 'subagent_report 汇报到达')
       const reports = (await backgroundReports(app, 1)).filter((r) => r.backgroundRunId === runId)
       assert.equal(reports.length, 1, '后台子代理结算汇报恰一次')
-      assert.equal(reports[0]!.id, `helm:subagent-report:${runId}`)
+      assert.equal(reports[0]!.id, `helmx:subagent-report:${runId}`)
       assert.equal(reports[0]!.origin, 'agent')
       assert.equal(reports[0]!.kind, 'subagent_report')
       // 轻量渲染标记（timeline.renderer 精确接管）；payload 契约仍是引导语+换行+JSON。
       assert.equal(reports[0]!.renderer, 'workflow:background-report')
       const reportJson = JSON.parse(reports[0]!.text!.slice(reports[0]!.text!.indexOf('\n') + 1)) as { name?: string }
       assert.equal(reportJson.name, '人类后台任务')
-      // 宿主侧注册同步锁定：kinds 限定 helm.input + matchMeta 精确匹配 + client 导出名。
+      // 宿主侧注册同步锁定：kinds 限定 helmx.input + matchMeta 精确匹配 + client 导出名。
       const rendererSpec = app.kernel.plugins
         .listUi()
         .find((u) => u.pluginId === 'builtin:workflow' && u.surface === 'timeline.renderer')?.spec as
         | { kinds?: string[]; matchMeta?: { renderer?: string }; client?: { module: string; export: string } }
         | undefined
       assert.ok(rendererSpec, 'builtin:workflow 应注册 timeline.renderer')
-      assert.deepEqual(rendererSpec!.kinds, ['helm.input'])
+      assert.deepEqual(rendererSpec!.kinds, ['helmx.input'])
       assert.equal(rendererSpec!.matchMeta?.renderer, 'workflow:background-report')
       assert.equal(rendererSpec!.client?.export, 'BackgroundReportCard')
       await app.kernel.waitForIdle(1).catch(() => {})
@@ -171,7 +171,7 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
   it('人类交互会话显式 background:false：同步路径携带业务结果（durable 前台 run，可 detach）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'bg2')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       faux.setResponses([
         fauxAssistantMessage(
@@ -202,14 +202,14 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
     }
   })
 
-  it('helm-owned 会话缺省同步；显式 background:true 显式拒绝（不派生、不建 run、不静默改写）', { timeout: 60_000 }, async () => {
+  it('helmx-owned 会话缺省同步；显式 background:true 显式拒绝（不派生、不建 run、不静默改写）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'bg3')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
-      // 自动化会话：受管子代理/驻留 Worker 派生登记即标 helm——直接以内核权威
+      // 自动化会话：受管子代理/驻留 Worker 派生登记即标 helmx——直接以内核权威
       // 归属标记构造（与真实派生同权：ownership doc 是唯一判定源）。
-      app.kernel.markConversationOwnership(1, 'helm')
+      app.kernel.markConversationOwnership(1, 'helmx')
 
       // 缺省（省略 background）：同步等待业务结果。
       faux.setResponses([
@@ -243,7 +243,7 @@ describe('subagent 工具 background 缺省（权威 ownership 判定）', { tim
       detail = await app.kernel.getConversationDetail(1, { limit: 50 })
       text = toolResultText(detail, 'subagent')
       assert.ok(
-        text.includes('subagent_failed') && text.includes('background') && text.includes('helm'),
+        text.includes('subagent_failed') && text.includes('background') && text.includes('helmx'),
         `拒绝信息应显式指出 background=true 不被允许并携带归属事实：${text.slice(0, 300)}`,
       )
       assert.equal((await runsOf(app, 1)).length, 1, '被拒调用不得新增 run 记录（仅剩同步那一个）')
@@ -266,7 +266,7 @@ describe('SubagentWorkflow 工具 background 缺省', { timeout: 60_000 }, () =>
   it('人类交互会话缺省后台：立即返回 background:true + running summary；结算后父会话恰收一次 workflow_report', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'wfbg1')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       faux.setResponses([
         fauxAssistantMessage(
@@ -296,7 +296,7 @@ describe('SubagentWorkflow 工具 background 缺省', { timeout: 60_000 }, () =>
       await until(async () => (await backgroundReports(app, 1)).some((r) => r.backgroundRunId === runId), 'workflow_report 汇报到达')
       const reports = (await backgroundReports(app, 1)).filter((r) => r.backgroundRunId === runId)
       assert.equal(reports.length, 1, '后台工作流结算汇报恰一次')
-      assert.equal(reports[0]!.id, `helm:workflow-report:${runId}`)
+      assert.equal(reports[0]!.id, `helmx:workflow-report:${runId}`)
       assert.equal(reports[0]!.origin, 'agent')
       assert.equal(reports[0]!.kind, 'workflow_report')
       assert.equal(reports[0]!.renderer, 'workflow:background-report')
@@ -308,12 +308,12 @@ describe('SubagentWorkflow 工具 background 缺省', { timeout: 60_000 }, () =>
     }
   })
 
-  it('helm-owned 会话缺省同步：等待终态返回 summary（status completed + result）；显式 background:true 显式拒绝', { timeout: 60_000 }, async () => {
+  it('helmx-owned 会话缺省同步：等待终态返回 summary（status completed + result）；显式 background:true 显式拒绝', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'wfbg2')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
-      app.kernel.markConversationOwnership(1, 'helm')
+      app.kernel.markConversationOwnership(1, 'helmx')
       const fastScript = 'export const meta = { name: "sync-default-wf", description: "t" }\nreturn 7'
 
       // 缺省：同步等待终态。
@@ -343,7 +343,7 @@ describe('SubagentWorkflow 工具 background 缺省', { timeout: 60_000 }, () =>
       detail = await app.kernel.getConversationDetail(1, { limit: 50 })
       text = toolResultText(detail, 'SubagentWorkflow')
       assert.ok(
-        text.includes('workflow_failed') && text.includes('background') && text.includes('helm'),
+        text.includes('workflow_failed') && text.includes('background') && text.includes('helmx'),
         `拒绝信息应显式指出 background=true 不被允许并携带归属事实：${text.slice(0, 300)}`,
       )
       assert.equal((await runsOf(app, 1)).length, 1, '被拒调用不得创建新 run（仅剩同步那次）')
@@ -382,7 +382,7 @@ describe('同步运行 detach 转后台（subagent / SubagentWorkflow 工具链�
   it('同步 subagent 阻塞等待中 detach：工具立即返回后台句柄，run 继续并恰收一次汇报', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'fgdetach1')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       const gate = makeGate()
       faux.setResponses([
@@ -435,12 +435,12 @@ describe('同步运行 detach 转后台（subagent / SubagentWorkflow 工具链�
     }
   })
 
-  it('helm 归属会话的前台 run 拒绝 detach（automation 同步等待防早结算）', { timeout: 60_000 }, async () => {
+  it('helmx 归属会话的前台 run 拒绝 detach（automation 同步等待防早结算）', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'fgdetach2')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
-      app.kernel.markConversationOwnership(1, 'helm')
+      app.kernel.markConversationOwnership(1, 'helmx')
       const gate = makeGate()
       faux.setResponses([
         fauxAssistantMessage([fauxToolCall('subagent', { prompt: '自动化同步任务' })], { stopReason: 'toolUse' }),
@@ -453,7 +453,7 @@ describe('同步运行 detach 转后台（subagent / SubagentWorkflow 工具链�
       }, '前台同步 run 就绪')
       await assert.rejects(
         () => app.kernel.plugins.invokeAction('builtin:workflow', 'detach', { runId: run.id }, { conversationId: 1 }),
-        (err: unknown) => err instanceof Error && /归属 helm/.test(err.message),
+        (err: unknown) => err instanceof Error && /归属 helmx/.test(err.message),
       )
       // 拒绝不影响同步等待：放行后正常携带业务结果返回。
       gate.release(fauxAssistantMessage('自动化子代理回答'))
@@ -472,7 +472,7 @@ describe('同步运行 detach 转后台（subagent / SubagentWorkflow 工具链�
   it('同步 SubagentWorkflow 阻塞等待中 detach：返回后台句柄形状，终态 steer 汇报', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'fgdetach3')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       // 人类交互会话显式同步工作流（automation 拒绝已由上一用例覆盖）：脚本带
       // agent 节点（子会话经 gate 挂起），run 停留在 running 供 detach。

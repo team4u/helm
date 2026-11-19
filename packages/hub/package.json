@@ -1,12 +1,12 @@
 {
-  "name": "@helm/hub",
+  "name": "@helmx/hub",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "helm-hub": "./dist/main.js"
+    "helmx-hub": "./dist/main.js"
   },
   "exports": {
     ".": {
@@ -21,17 +21,17 @@
     "test": "tsx --test"
   },
   "dependencies": {
-    "@helm/kernel": "workspace:*",
-    "@helm/plugin-build": "workspace:*",
-    "@helm/plugins": "workspace:*",
-    "@helm/protocol": "workspace:*"
+    "@helmx/kernel": "workspace:*",
+    "@helmx/plugin-build": "workspace:*",
+    "@helmx/plugins": "workspace:*",
+    "@helmx/protocol": "workspace:*"
   },
   "devDependencies": {
     "@earendil-works/chord": "1.5.2",
     "@earendil-works/pi-ai": "1.5.2",
     "@earendil-works/pi-durable": "1.5.2",
-    "@helm/node": "workspace:*",
-    "@helm/test-kit": "workspace:*",
+    "@helmx/node": "workspace:*",
+    "@helmx/test-kit": "workspace:*",
     "@types/ws": "^8.18.0",
     "birpc": "^2.9.0",
     "ws": "^8.18.0"

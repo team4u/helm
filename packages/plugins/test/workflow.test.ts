@@ -26,10 +26,10 @@ import { chmodSync, mkdtempSync, readFileSync, writeFileSync, mkdirSync, rmSync,
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Worker } from 'node:worker_threads'
-import type { EnvExecResponse } from '@helm/protocol'
+import type { EnvExecResponse } from '@helmx/protocol'
 import type { WorkflowJournalEntry } from '../src/workflow/engine/journal.js'
-import { HelmError } from '@helm/protocol'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { HelmxError } from '@helmx/protocol'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   JournalWriter,
   actionJournalKey,
@@ -1367,7 +1367,7 @@ describe('WorkflowService', () => {
     const service = new WorkflowService({ dataDir, host, state: makeStateStore() })
     await assert.rejects(
       () => service.run({ script: META('missing-target') + 'return 1' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400 && /目标会话/.test(err.message),
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400 && /目标会话/.test(err.message),
     )
 
     const first = await service.run({ script: META('resume-target') + 'return 2', conversationId: 2 })
@@ -1377,7 +1377,7 @@ describe('WorkflowService', () => {
     assert.equal(resumed.conversationId, 2, 'resume 缺省目标取原 run 所属会话，不猜测 ID 1')
     await assert.rejects(
       () => service.run({ resumeFromRunId: first.id, conversationId: 1 }),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400 && /目标不匹配/.test(err.message),
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400 && /目标不匹配/.test(err.message),
     )
     await service.close()
   })
@@ -1453,7 +1453,7 @@ describe('WorkflowService', () => {
       script: META('svc2') + 'const v = await action("update.memory", {})\nreturn v',
     })
     const badResult = await service.wait(bad.id)
-    // 歧义短 id 在 resolveActionId 抛 HelmError；引擎把 action 失败折叠为 null。
+    // 歧义短 id 在 resolveActionId 抛 HelmxError；引擎把 action 失败折叠为 null。
     assert.equal(badResult, null)
     const badSummary = service.getRun(bad.id)
     const nodes = badSummary.nodes ?? []
@@ -1538,7 +1538,7 @@ describe('WorkflowService', () => {
     await assert.rejects(
       () => service.run({ resumeFromRunId: first.id }),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'workflow_action_uncertain')
         return true
       },
@@ -1562,9 +1562,9 @@ describe('WorkflowService', () => {
     await assert.rejects(
       () => service.run({ resumeFromRunId: first.id }),
       (error: unknown) => {
-        assert.ok(error instanceof HelmError)
+        assert.ok(error instanceof HelmxError)
         assert.equal(error.code, 'workflow_action_uncertain')
-        assert.ok((error as HelmError).message.includes('ok:false'))
+        assert.ok((error as HelmxError).message.includes('ok:false'))
         return true
       },
     )
@@ -1590,7 +1590,7 @@ describe('WorkflowService', () => {
       await assert.rejects(
         () => service.run({ resumeFromRunId: first.id }),
         (error: unknown) => {
-          assert.ok(error instanceof HelmError)
+          assert.ok(error instanceof HelmxError)
           assert.equal(error.code, 'journal_read_failed')
           return true
         },
@@ -2032,11 +2032,11 @@ describe('WorkflowService', () => {
         if (actionId === 'good_act') {
           const raw = input as Record<string, unknown>
           if (typeof raw?.count !== 'number') {
-            throw new HelmError('validation_error', 'count must be number', 400)
+            throw new HelmxError('validation_error', 'count must be number', 400)
           }
           return { idempotent: true }
         }
-        throw new HelmError('unknown_action', `unknown action: ${actionId}`, 404)
+        throw new HelmxError('unknown_action', `unknown action: ${actionId}`, 404)
       },
     }
     const state = makeStateStore()
@@ -2233,7 +2233,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
         host: {
           spawnAgent: (request) => runtime.spawnAgent(request),
           invokeAction: async (pluginId, actionId, input) => {
-            throw new HelmError('unknown_action', `测试宿主无动作：${pluginId}.${actionId}`, 404)
+            throw new HelmxError('unknown_action', `测试宿主无动作：${pluginId}.${actionId}`, 404)
           },
           listActions: () => [],
           getConversation: (id) => runtime.getConversation(id),
@@ -2311,11 +2311,11 @@ describe('workflow real-SDK integration (faux provider)', () => {
   })
 
   it('real env.exec child processes are cancelled on early return and script failure', timeout, async () => {
-    const { createHelm } = await import('../../hub/src/app.js')
-    const { createPluginBuildProvider } = await import('@helm/plugin-build')
+    const { createHelmx } = await import('../../hub/src/app.js')
+    const { createPluginBuildProvider } = await import('@helmx/plugin-build')
     const dataDir = mkdtempSync(join(tmpdir(), 'wf-exec-cleanup-'))
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
     // 插件化后编排引擎仅经 builtin:workflow 动作总线驱动（不再暴露 app.workflows）。
     const workflows = app.kernel.plugins!
     const runWorkflow = (request: Record<string, unknown>) =>
@@ -2345,7 +2345,7 @@ describe('workflow real-SDK integration (faux provider)', () => {
               `if (!ready?.ok) throw new Error("child readiness check failed");\n${ending}`,
             wait: true,
           }),
-          (error: unknown) => error instanceof HelmError && error.code === 'workflow_failed',
+          (error: unknown) => error instanceof HelmxError && error.code === 'workflow_failed',
         )
         const listed = (await workflows.invokeAction('builtin:workflow', 'runs', {})) as unknown as {
           runs: Array<import('../src/contracts.js').WorkflowRunSummary>

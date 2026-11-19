@@ -12,33 +12,33 @@
  *    action）必须是 run 发起会话的自身或祖先（与 runs 会话分片投影的可见
  *    面一致）；人工 HTTP/CLI 无会话上下文，以 run 发起会话为权威上下文放行；
  * 4. 原生路径：子会话父链必须可达 run 发起会话（防记录漂移/伪装）；归属
- *    human 显式拒绝（看门狗红线），bot/helm 经 ctx.host.submitInputGuarded
+ *    human 显式拒绝（看门狗红线），bot/helmx 经 ctx.host.submitInputGuarded
  *    在内核提交点原子复核（expectedOwnership/expectedStateSeq）；
  * 5. 外部路径：依据节点 controls.steer 动态 invokeAction（pluginId/actionId
  *    全部来自记录，零硬编码插件 ID）；委托输入为 ExternalSteerRequest 标准
  *    契约（executionId/nodeId/workflowRunId/parentConversationId/text），
  *    透传原调用 context（含 signal，绝不伪造 caller）；产物按
  *    ExternalSteerResult 逐字段核销（steered/executionId/nodeId/ownership
- *    'helm'/stateChangeSeq 非负安全整数/guardLevel 'cas' 或 'preflight'），任何坏产物显式
+ *    'helmx'/stateChangeSeq 非负安全整数/guardLevel 'cas' 或 'preflight'），任何坏产物显式
  *    拒绝。控制动作非幂等：超时/断线不重试、不伪造成功（invokeAction 单次
  *    调用即终局）。steered 仅代表投递成功，不代表指导已执行完成。
  *
  * 本模块零引擎依赖（不 import engine/），全部宿主端口经参数注入，
  * 供 workflow.ts 动作注册与确定性单测共用。
  */
-import { HelmError, type ConversationSummary } from '@helm/protocol'
+import { HelmxError, type ConversationSummary } from '@helmx/protocol'
 import { type ExternalSteerResult, type WorkflowRunSummary } from '../contracts.js'
 import { isAncestorOrSelf } from '../lineage.js'
 
 /** steer 所需宿主端口（ctx.host 子集；注入确定性 fake 即可全覆盖测试）。 */
 interface SteerHostPorts {
   getConversation(id: number): ConversationSummary
-  getConversationOwnership(id: number): 'helm' | 'bot' | 'human'
+  getConversationOwnership(id: number): 'helmx' | 'bot' | 'human'
   submitInputGuarded(
     conversationId: number,
     text: string,
     opts: { origin: 'agent'; whenBusy: 'steer'; whenIdle: 'reject'; meta: Record<string, unknown> },
-    guard: { expectedOwnership: 'bot' | 'helm'; expectedStateSeq: number },
+    guard: { expectedOwnership: 'bot' | 'helmx'; expectedStateSeq: number },
   ): Promise<unknown>
   /** 宿主动作调用端口（外部执行委托；输出已经宿主 outputSchema 校验）。 */
   invokeAction(
@@ -67,7 +67,7 @@ type SteerActionOutput =
       runId: string
       targetKind: 'native'
       conversationId: number
-      ownership: 'bot' | 'helm'
+      ownership: 'bot' | 'helmx'
       stateChangeSeq: number
       guardLevel: 'cas'
     }
@@ -77,7 +77,7 @@ type SteerActionOutput =
       targetKind: 'external'
       executionId: string
       nodeId: string
-      ownership: 'helm'
+      ownership: 'helmx'
       stateChangeSeq: number
       guardLevel: ExternalSteerResult['guardLevel']
     }
@@ -87,8 +87,8 @@ interface SteerActionContext {
   signal?: AbortSignal
 }
 
-function steerError(code: string, message: string, status: number, details?: Record<string, unknown>): HelmError {
-  return new HelmError(code, message, status, details)
+function steerError(code: string, message: string, status: number, details?: Record<string, unknown>): HelmxError {
+  return new HelmxError(code, message, status, details)
 }
 
 /** 外部委托产物严格核销（见 ExternalSteerResult；任何坏产物显式拒绝）。 */
@@ -96,7 +96,7 @@ export function parseExternalSteerResult(
   raw: unknown,
   expected: { executionId: string; nodeId: string; pluginId: string; actionId: string },
 ): Pick<ExternalSteerResult, 'stateChangeSeq' | 'guardLevel'> {
-  const invalid = (reason: string): HelmError =>
+  const invalid = (reason: string): HelmxError =>
     steerError(
       'steer_delegate_invalid',
       `外部执行 steer 委托 ${expected.pluginId}.${expected.actionId} 返回非法产物（${reason}）：拒绝采信，绝不伪造成功`,
@@ -113,7 +113,7 @@ export function parseExternalSteerResult(
   if (source['steered'] !== true) throw invalid('steered 必须为 true')
   if (source['executionId'] !== expected.executionId) throw invalid('executionId 与目标节点不一致')
   if (source['nodeId'] !== expected.nodeId) throw invalid('nodeId 与目标节点不一致')
-  if (source['ownership'] !== 'helm') throw invalid("ownership 必须为 'helm'")
+  if (source['ownership'] !== 'helmx') throw invalid("ownership 必须为 'helmx'")
   const guardLevel = source['guardLevel']
   if (guardLevel !== 'cas' && guardLevel !== 'preflight') throw invalid("guardLevel 必须为 'cas' 或 'preflight'")
   const seq = source['stateChangeSeq']
@@ -124,7 +124,7 @@ export function parseExternalSteerResult(
 }
 
 /**
- * 后台子代理安全插话主入口。任何不支持情况显式抛 HelmError（错误码
+ * 后台子代理安全插话主入口。任何不支持情况显式抛 HelmxError（错误码
  * 稳定，见各分支）；内核 guarded 端口的 409/404 冲突原样透传（确定性放弃，
  * 调用方可重读事实后重试，绝无静默降级）。
  */
@@ -182,7 +182,7 @@ export async function steerBackgroundSubagent(
     try {
       return ports.getConversation(id).parentConversationId
     } catch (error) {
-      if (error instanceof HelmError && error.code === 'not_found') return undefined
+      if (error instanceof HelmxError && error.code === 'not_found') return undefined
       throw error
     }
   }
@@ -293,7 +293,7 @@ export async function steerBackgroundSubagent(
       targetKind: 'external',
       executionId: target.executionId,
       nodeId: target.nodeId,
-      ownership: 'helm',
+      ownership: 'helmx',
       stateChangeSeq: parsed.stateChangeSeq,
       guardLevel: parsed.guardLevel,
     }
@@ -320,7 +320,7 @@ export async function steerBackgroundSubagent(
   if (ownership === 'human') {
     throw steerError(
       'steer_human_owned',
-      `子会话 ${childId} 归属 human（人类直连/终端窗格），禁止自动化插话（看门狗红线；仅 bot/helm 归属的后台会话可 steer）`,
+      `子会话 ${childId} 归属 human（人类直连/终端窗格），禁止自动化插话（看门狗红线；仅 bot/helmx 归属的后台会话可 steer）`,
       403,
       { runId, conversationId: childId, ownership },
     )
@@ -362,7 +362,7 @@ export async function steerBackgroundSubagent(
   }
 }
 
-function ambiguousError(runId: string, reason: string): HelmError {
+function ambiguousError(runId: string, reason: string): HelmxError {
   return steerError(
     'steer_ambiguous_subagent',
     `运行 ${runId} ${reason}，拒绝歧义插话`,

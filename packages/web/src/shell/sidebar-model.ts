@@ -7,15 +7,15 @@
 
 import type {
   ConversationSummary,
-  HelmLocale,
+  HelmxLocale,
   LocalizedText,
   Profile,
   SidebarItemSpec,
   SidebarSectionSpec,
   SkillSummary,
-} from '@helm/protocol/browser'
-import { resolveLocalizedText } from '@helm/protocol/browser'
-import type { HelmStoreValue, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
+} from '@helmx/protocol/browser'
+import { resolveLocalizedText } from '@helmx/protocol/browser'
+import type { HelmxStoreValue, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 import { resolveTargetString } from '../lib/types.js'
 import { ARCHIVED_TAG, isConversationArchived } from '../conversation/archive-model.js'
 import { resolveFocusedPanel } from './shortcuts-model.js'
@@ -73,7 +73,7 @@ export function filterConversationsByTag(
 
 /**
  * 会话是否可被人工归档管理（与删除保护同界）：
- * - 子代理派生会话（有父链）与 bot/helm 托管会话不参与——归档是人类整理行为；
+ * - 子代理派生会话（有父链）与 bot/helmx 托管会话不参与——归档是人类整理行为；
  * - 已被插件 sidebar.section filterTag 接管的会话不参与——归档对其无可见效果
  *   （仍留在插件分组），避免「点了归档却什么都不发生」。
  * 当前已归档的会话本函数仍可能返回 true（可管理性），菜单按归档态选择动作。
@@ -98,7 +98,7 @@ export interface ArchivedConversationListItem {
 
 /**
  * 构建「已归档」分组条目：仅收人类自有根会话，沿用 Agent 站位同一暴露规则
- * （有父链 / bot-helm 托管 / 已停用插件托管 Profile / 插件 section 接管的会话绝不进入，即使带宿主归档 tag），
+ * （有父链 / bot-helmx 托管 / 已停用插件托管 Profile / 插件 section 接管的会话绝不进入，即使带宿主归档 tag），
  * 按 createdAt 倒序（同刻按 id 倒序），排序键与普通列表一致。Profile 可见性与 Agent 站位保持一致。
  */
 export function buildArchivedConversationList(input: {
@@ -164,7 +164,7 @@ export interface AgentStandingsInput {
   sidebarItems?: Array<QualifiedUiSpec<SidebarItemSpec>>
   sidebarSections?: Array<QualifiedUiSpec<SidebarSectionSpec>>
   /** 显示名解析 locale（sidebar.item label 属 LocalizedText 显示元数据）。 */
-  locale: HelmLocale
+  locale: HelmxLocale
 }
 
 /** Agent 名下二级历史会话子列表默认显示条数（超出可展开）。 */
@@ -181,7 +181,7 @@ interface SidebarPinMeta {
  * - 可见 Profile 各占一个一级站位；未加载资产的会话按实际 profileId 展示；
  * - 会话指向型 sidebar.item 的 label/order 覆盖对应站位的默认展示；
  * - 人类自由会话按 profileId 归集到各自 Agent 下（Profile 已删时生成孤儿兜底站位）；
- * - 插件停用后其 managedByPlugin 站位与 ownedBy=helm/bot 遗留会话自动隐藏。
+ * - 插件停用后其 managedByPlugin 站位与 ownedBy=helmx/bot 遗留会话自动隐藏。
  */
 export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[] {
   const { profiles, conversations, plugins, sidebarItems = [], sidebarSections = [], locale } = input
@@ -216,7 +216,7 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
   // 1. 排除子代理派生会话（有父链）；
   // 2. 排除被 sidebar.section 接管的会话（后台 Worker 等分组展示，不重复挂载）；
   // 3. 排除已人工归档会话（集中进「已归档」分组，绝不同时出现在活跃列表）；
-  // 4. 非 human 会话仅保留可见 Profile 的常驻会话（ownedBy=helm 或被启用 sidebar.item 指向）。
+  // 4. 非 human 会话仅保留可见 Profile 的常驻会话（ownedBy=helmx 或被启用 sidebar.item 指向）。
   const attachable = conversations.filter((c) => {
     if (c.parentConversationId !== undefined) return false
     if (isConversationArchived(c)) return false
@@ -224,7 +224,7 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
     if ((c.ownedBy ?? 'human') === 'human') return true
     return (
       visibleProfileIds.has(c.profileId) &&
-      (c.ownedBy === 'helm' ||
+      (c.ownedBy === 'helmx' ||
         partition.pinnedConversationIds.has(c.id) ||
         partition.pinnedProfileIds.has(c.profileId))
     )
@@ -249,7 +249,7 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
   // 站位内排序：常驻会话置顶，其余按创建时间倒序（同刻按 id 倒序）——
   // 刻意不用 updatedAt：AI 正在输出会持续推进 updatedAt，若作为排序键历史对话会不停跳位。
   const residentTier = (c: ConversationSummary): number => {
-    if (c.ownedBy === 'helm') return 1
+    if (c.ownedBy === 'helmx') return 1
     if (partition.pinnedConversationIds.has(c.id)) return 2
     return 3
   }
@@ -306,7 +306,7 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
 export function extractSidebarViews(
   sidebarItems: Array<QualifiedUiSpec<SidebarItemSpec>>,
   conversations: ConversationSummary[],
-  locale: HelmLocale,
+  locale: HelmxLocale,
 ): SidebarViewItem[] {
   const views: SidebarViewItem[] = []
   for (const item of sidebarItems) {
@@ -447,7 +447,7 @@ export function conversationStatusTooltip(
 
 /**
  * 判断会话是否允许被人类删除：
- * - 插件托管或非人类拥有的会话（ownedBy !== 'human'，如 'helm' | 'bot'）不可删除；
+ * - 插件托管或非人类拥有的会话（ownedBy !== 'human'，如 'helmx' | 'bot'）不可删除；
  * - 普通人类会话（ownedBy 为 undefined 或 'human'）允许删除（无 id 级豁免；
  *   插件管理权保护在服务端 conversation_managed_by_plugin 统一判定）。
  */
@@ -529,7 +529,7 @@ export function presenceNavClassSuffix(presence: SidebarTargetPresence): string 
 
 /** 解析侧栏目标在主屏/分屏的在场、焦点与面板微标状态。 */
 export function resolveSidebarTargetPresence(
-  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget' | 'focusedPanel'>,
+  store: Pick<HelmxStoreValue, 'primaryTarget' | 'splitTarget' | 'focusedPanel'>,
   matches: (target: ResolvedTarget) => boolean,
 ): SidebarTargetPresence {
   const inPrimary = matches(store.primaryTarget)
@@ -561,7 +561,7 @@ export function resolveSidebarTargetPresence(
 
 /** 推导指定会话行在主屏/分屏中的在场与焦点状态。 */
 export function getConversationPresence(
-  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget' | 'focusedPanel'>,
+  store: Pick<HelmxStoreValue, 'primaryTarget' | 'splitTarget' | 'focusedPanel'>,
   convId: number,
 ): SidebarTargetPresence {
   return resolveSidebarTargetPresence(
@@ -572,7 +572,7 @@ export function getConversationPresence(
 
 /** 推导指定 Agent 待命入口在主屏/分屏中的在场与焦点状态。 */
 export function getAgentStandbyPresence(
-  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget' | 'focusedPanel'>,
+  store: Pick<HelmxStoreValue, 'primaryTarget' | 'splitTarget' | 'focusedPanel'>,
   profileId: string,
 ): SidebarTargetPresence {
   return resolveSidebarTargetPresence(
@@ -583,7 +583,7 @@ export function getAgentStandbyPresence(
 
 /** 会话行是否属于当前激活目标（单屏为主屏，分屏为当前聚焦面板）。 */
 export function isConversationActive(
-  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget' | 'focusedPanel'>,
+  store: Pick<HelmxStoreValue, 'primaryTarget' | 'splitTarget' | 'focusedPanel'>,
   convId: number,
 ): boolean {
   return getConversationPresence(store, convId).active
@@ -591,7 +591,7 @@ export function isConversationActive(
 
 /** 该 Agent 的待命页是否正被主屏或分屏查看。 */
 export function isAgentStandbyActive(
-  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget'>,
+  store: Pick<HelmxStoreValue, 'primaryTarget' | 'splitTarget'>,
   profileId: string,
 ): boolean {
   return (
@@ -615,7 +615,7 @@ function profileIdForTarget(
 
 /** 收集主屏与分屏正在查看目标各自对应的 profileId（按主屏优先顺序插入 Set）。 */
 export function activeProfileIdsOf(
-  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget' | 'conversations'>,
+  store: Pick<HelmxStoreValue, 'primaryTarget' | 'splitTarget' | 'conversations'>,
 ): Set<string> {
   const ids = new Set<string>()
   const primaryPid = profileIdForTarget(store.primaryTarget, store.conversations)
@@ -627,14 +627,14 @@ export function activeProfileIdsOf(
 
 /** 话题列表展开推导：当前主屏/分屏会话或待命页所属的首个 profileId（无则 null）。 */
 export function activeProfileIdOf(
-  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget' | 'conversations'>,
+  store: Pick<HelmxStoreValue, 'primaryTarget' | 'splitTarget' | 'conversations'>,
 ): string | null {
   return activeProfileIdsOf(store).values().next().value ?? null
 }
 
 /** 收集主屏与分屏中正在查看的会话 ID 集合。 */
 export function activeConversationIdsOf(
-  store: Pick<HelmStoreValue, 'primaryTarget' | 'splitTarget'>,
+  store: Pick<HelmxStoreValue, 'primaryTarget' | 'splitTarget'>,
 ): Set<number> {
   const ids = new Set<number>()
   if (store.primaryTarget.kind === 'conversation') ids.add(store.primaryTarget.conversationId)
@@ -643,7 +643,7 @@ export function activeConversationIdsOf(
 }
 
 export type SidebarStoreView = Pick<
-  HelmStoreValue,
+  HelmxStoreValue,
   | 'primaryTarget'
   | 'splitTarget'
   | 'focusedPanel'
@@ -659,7 +659,7 @@ export type SidebarStoreView = Pick<
 
 /** 在指定 Agent 下进入待命页（所有用户新建入口的统一路径；首次发送才创建会话）。 */
 export function openAgentStandby(
-  store: Pick<HelmStoreValue, 'openTarget'>,
+  store: Pick<HelmxStoreValue, 'openTarget'>,
   profileId: string,
   onNavigate?: () => void,
 ): void {

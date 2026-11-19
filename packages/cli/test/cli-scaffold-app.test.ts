@@ -4,20 +4,20 @@
  * Covers:
  * - template name validation: accepts `app`, rejects invalid names while listing valid templates;
  * - generated artifacts: `plugin.json` (clientRoot/app naming), backend (public doc + dual-schema actions +
- *   ctx.ui.screen + sidebar shortcut), frontend (@helm/plugin-client host primitives), zero Emoji;
+ *   ctx.ui.screen + sidebar shortcut), frontend (@helmx/plugin-client host primitives), zero Emoji;
  * - end-to-end (honesty rule: real code, zero mock doctor): runs real `doctorPluginDir` 4-stage check,
  *   then validates through real `PluginHost` + `createAppsPlugin` validate action (ok:true),
  *   and verifies `full` template reports `missing_app_screen`.
  *
  * Cross-package imports: matches web tests importing kernel source (tsx source-level resolution in tests only),
- * adding no runtime dependency from `@helm/cli` to `@helm/kernel`.
+ * adding no runtime dependency from `@helmx/cli` to `@helmx/kernel`.
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
 import { doctorPluginDir } from '../../kernel/src/plugins/plugin-doctor.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { PluginHost, type PluginDocStore } from '../../kernel/src/plugins/plugin-host.js'
 import { createAppsPlugin, APPS_PLUGIN_ID } from '../../plugins/src/apps.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
@@ -68,7 +68,7 @@ interface ValidateResult {
  * plugins.doctor connected directly to real doctorPluginDir (same implementation as Hub production path, without starting HTTP Hub).
  */
 async function validateViaRealAppsPlugin(dir: string): Promise<ValidateResult> {
-  const dataDir = await makeTempDir('helm-cli-scaffold-validate-')
+  const dataDir = await makeTempDir('helmx-cli-scaffold-validate-')
   const backend = {
     ...createPluginHostBackendFixture(),
     skills: {
@@ -94,7 +94,7 @@ async function validateViaRealAppsPlugin(dir: string): Promise<ValidateResult> {
 }
 
 test('plugins init --template app: template validation and output file list', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-app-')
+  const dataDir = useTempDir(t, 'helmx-cli-app-')
   const env = makeCliEnv('http://127.0.0.1:1', dataDir)
   const r = await runCliCaptured(['plugins', 'init', 'desk-app', '--template', 'app', '--json'], env)
   assert.equal(r.code, 0, r.err)
@@ -105,8 +105,8 @@ test('plugins init --template app: template validation and output file list', { 
     assert.ok(body.files.includes(f), `output should include ${f}: ${JSON.stringify(body.files)}`)
   }
   // app template next steps point directly to apps workflow (verifiable locally without publishing)
-  assert.ok(body.nextSteps.some((s) => s.startsWith('helm apps validate ')), JSON.stringify(body.nextSteps))
-  assert.ok(body.nextSteps.some((s) => s.startsWith('helm apps publish ')))
+  assert.ok(body.nextSteps.some((s) => s.startsWith('helmx apps validate ')), JSON.stringify(body.nextSteps))
+  assert.ok(body.nextSteps.some((s) => s.startsWith('helmx apps publish ')))
 
   // Invalid template rejected while listing all valid templates
   const bad = await runCliCaptured(['plugins', 'init', 'bad-tpl-app', '--template', 'webapp', '--json'], env)
@@ -115,7 +115,7 @@ test('plugins init --template app: template validation and output file list', { 
 })
 
 test('plugins init --template app: backend and frontend content contracts', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-app-')
+  const dataDir = useTempDir(t, 'helmx-cli-app-')
   const r = await runCliCaptured(['plugins', 'init', 'desk-app', '--template', 'app', '--json'], makeCliEnv('http://127.0.0.1:1', dataDir))
   assert.equal(r.code, 0, r.err)
   const { dir } = JSON.parse(r.out) as { dir: string }
@@ -165,7 +165,7 @@ test('plugins init --template app: backend and frontend content contracts', { ti
 })
 
 test('plugins init --template app end-to-end: real 4-stage doctor + real apps validate pass', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-app-')
+  const dataDir = useTempDir(t, 'helmx-cli-app-')
   const r = await runCliCaptured(['plugins', 'init', 'eval-app', '--template', 'app', '--json'], makeCliEnv('http://127.0.0.1:1', dataDir))
   assert.equal(r.code, 0, r.err)
   const { dir } = JSON.parse(r.out) as { dir: string }
@@ -187,7 +187,7 @@ test('plugins init --template app end-to-end: real 4-stage doctor + real apps va
 })
 
 test('comparison: full template passes doctor but apps validate reports missing_app_screen', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-cli-app-')
+  const dataDir = useTempDir(t, 'helmx-cli-app-')
   const r = await runCliCaptured(['plugins', 'init', 'panel-only', '--template', 'full', '--json'], makeCliEnv('http://127.0.0.1:1', dataDir))
   assert.equal(r.code, 0, r.err)
   const { dir } = JSON.parse(r.out) as { dir: string }

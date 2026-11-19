@@ -1,5 +1,5 @@
 /**
- * `@helm/test-kit` unit tests: cover the full public contract of the isomorphic DTO factories,
+ * `@helmx/test-kit` unit tests: cover the full public contract of the isomorphic DTO factories,
  * async control utilities, Node directory and env isolation, HTTP Mock Hub, and Git template
  * fixtures.
  */
@@ -25,7 +25,7 @@ import {
   withTimeout,
 } from '../src/index.js'
 import {
-  HOST_MANAGED_HELM_ENV_NAMES,
+  HOST_MANAGED_HELMX_ENV_NAMES,
   assertRejectsCode as assertRejectsCodeNode,
   cleanupDir,
   makeTempDir,
@@ -51,10 +51,10 @@ test('src/index.ts stays purely isomorphic: zero node:* runtime or type imports'
     ts.forEachChild(node, visit)
   }
   visit(sf)
-  assert.ok(specifiers.length > 0, 'should contain at least the @helm/protocol/browser type import')
+  assert.ok(specifiers.length > 0, 'should contain at least the @helmx/protocol/browser type import')
   for (const spec of specifiers) {
     assert.ok(!spec.startsWith('node:'), `src/index.ts must not import node:* modules: ${spec}`)
-    assert.equal(spec, '@helm/protocol/browser', `src/index.ts must only import contracts from @helm/protocol/browser: ${spec}`)
+    assert.equal(spec, '@helmx/protocol/browser', `src/index.ts must only import contracts from @helmx/protocol/browser: ${spec}`)
   }
 })
 
@@ -69,13 +69,13 @@ test('DTO factories: makeConversationSummary / makeProfile / makePluginSummary d
   const convCustom = makeConversationSummary({
     id: 42,
     status: 'working',
-    ownedBy: 'helm',
+    ownedBy: 'helmx',
     tags: ['worker'],
   })
   assert.equal(convCustom.id, 42)
   assert.equal(convCustom.title, 'conv-42')
   assert.equal(convCustom.status, 'working')
-  assert.equal(convCustom.ownedBy, 'helm')
+  assert.equal(convCustom.ownedBy, 'helmx')
   assert.deepEqual(convCustom.tags, ['worker'])
 
   const convTitled = makeConversationSummary({ id: 7, title: 'main-screen conversation' })
@@ -215,14 +215,14 @@ test('useTempDir / makeTempDir / cleanupDir lifecycle auto-cleanup and explicit 
       callbacks.push(fn)
     },
   }
-  const autoDir = useTempDir(fakeContext, 'helm-test-kit-auto-')
+  const autoDir = useTempDir(fakeContext, 'helmx-test-kit-auto-')
   assert.ok(existsSync(autoDir))
   writeFileSync(join(autoDir, 'marker.txt'), 'ok', 'utf8')
   assert.equal(callbacks.length, 1)
   await callbacks[0]!()
   assert.equal(existsSync(autoDir), false)
 
-  const manualDir = await makeTempDir('helm-test-kit-manual-')
+  const manualDir = await makeTempDir('helmx-test-kit-manual-')
   assert.ok(existsSync(manualDir))
   writeFileSync(join(manualDir, 'a.txt'), '1', 'utf8')
   await cleanupDir(manualDir)
@@ -232,46 +232,46 @@ test('useTempDir / makeTempDir / cleanupDir lifecycle auto-cleanup and explicit 
 })
 
 test('sanitizedHostEnv strips host-managed vars case-insensitively and supports safe overrides', { timeout: 60_000 }, () => {
-  const managedUpper = new Set(HOST_MANAGED_HELM_ENV_NAMES.map((name) => name.toUpperCase()))
+  const managedUpper = new Set(HOST_MANAGED_HELMX_ENV_NAMES.map((name) => name.toUpperCase()))
   const savedEntries = Object.entries(process.env).filter(
-    ([key]) => managedUpper.has(key.toUpperCase()) || key.toUpperCase() === 'HELM_TEST_KIT_KEEP',
+    ([key]) => managedUpper.has(key.toUpperCase()) || key.toUpperCase() === 'HELMX_TEST_KIT_KEEP',
   )
   try {
-    for (const name of HOST_MANAGED_HELM_ENV_NAMES) {
-      if (process.platform === 'win32' && (name === 'HELM_TOKEN' || name === 'HELM_CWD')) {
+    for (const name of HOST_MANAGED_HELMX_ENV_NAMES) {
+      if (process.platform === 'win32' && (name === 'HELMX_TOKEN' || name === 'HELMX_CWD')) {
         // On Windows, process.env keys are case-insensitive; clear uppercase first so lowercase/mixed-case keys are actually created.
         delete process.env[name]
       } else {
         process.env[name] = `host-${name}`
       }
     }
-    process.env['helm_token'] = 'lower-host-token'
-    process.env['Helm_Cwd'] = '/host/mixed-case'
-    process.env['HELM_TEST_KIT_KEEP'] = 'preserve-me'
+    process.env['helmx_token'] = 'lower-host-token'
+    process.env['Helmx_Cwd'] = '/host/mixed-case'
+    process.env['HELMX_TEST_KIT_KEEP'] = 'preserve-me'
 
     const clean = sanitizedHostEnv()
-    for (const name of HOST_MANAGED_HELM_ENV_NAMES) {
+    for (const name of HOST_MANAGED_HELMX_ENV_NAMES) {
       assert.equal(clean[name], undefined, `should strip ${name}`)
     }
-    assert.equal(clean['helm_token'], undefined)
-    assert.equal(clean['Helm_Cwd'], undefined)
-    assert.equal(clean['HELM_TEST_KIT_KEEP'], 'preserve-me')
-    assert.equal(process.env['HELM_DATA_DIR'], 'host-HELM_DATA_DIR', 'must not mutate global process.env')
-    assert.equal(process.env['helm_token'], 'lower-host-token', 'must not mutate global process.env')
+    assert.equal(clean['helmx_token'], undefined)
+    assert.equal(clean['Helmx_Cwd'], undefined)
+    assert.equal(clean['HELMX_TEST_KIT_KEEP'], 'preserve-me')
+    assert.equal(process.env['HELMX_DATA_DIR'], 'host-HELMX_DATA_DIR', 'must not mutate global process.env')
+    assert.equal(process.env['helmx_token'], 'lower-host-token', 'must not mutate global process.env')
     if (process.platform !== 'win32') {
-      assert.equal(process.env['HELM_TOKEN'], 'host-HELM_TOKEN', 'must not mutate global process.env')
+      assert.equal(process.env['HELMX_TOKEN'], 'host-HELMX_TOKEN', 'must not mutate global process.env')
     }
 
     const overridden = sanitizedHostEnv({
-      HELM_HUB_URL: 'http://127.0.0.1:4444',
-      HELM_TEST_KIT_KEEP: undefined,
+      HELMX_HUB_URL: 'http://127.0.0.1:4444',
+      HELMX_TEST_KIT_KEEP: undefined,
     })
-    assert.equal(overridden['HELM_HUB_URL'], 'http://127.0.0.1:4444')
-    assert.equal(overridden['HELM_TOKEN'], undefined)
-    assert.equal('HELM_TEST_KIT_KEEP' in overridden, false)
+    assert.equal(overridden['HELMX_HUB_URL'], 'http://127.0.0.1:4444')
+    assert.equal(overridden['HELMX_TOKEN'], undefined)
+    assert.equal('HELMX_TEST_KIT_KEEP' in overridden, false)
   } finally {
     for (const key of Object.keys(process.env)) {
-      if (managedUpper.has(key.toUpperCase()) || key.toUpperCase() === 'HELM_TEST_KIT_KEEP') {
+      if (managedUpper.has(key.toUpperCase()) || key.toUpperCase() === 'HELMX_TEST_KIT_KEEP') {
         delete process.env[key]
       }
     }
@@ -390,7 +390,7 @@ test('startMockHub: default actions, multiple response shapes, hit recording, an
 })
 
 test('initGitRepo and createGitTemplate: repository bootstrap and isolated cpSync clones', { timeout: 60_000 }, (t) => {
-  const scratch = useTempDir(t, 'helm-test-kit-git-')
+  const scratch = useTempDir(t, 'helmx-test-kit-git-')
   const standalone = join(scratch, 'standalone')
   initGitRepo(standalone, { 'nested/hello.txt': 'hello\n' })
   const standaloneBranch = execFileSync('git', ['branch', '--show-current'], {
@@ -408,7 +408,7 @@ test('initGitRepo and createGitTemplate: repository bootstrap and isolated cpSyn
   }).trim()
   assert.equal(emptyLog, 'init')
 
-  const template = createGitTemplate('helm-test-kit-tpl-', (dir) => {
+  const template = createGitTemplate('helmx-test-kit-tpl-', (dir) => {
     writeFileSync(join(dir, 'base.txt'), 'base-v1\n', 'utf8')
     execFileSync('git', ['add', '.'], { cwd: dir })
     execFileSync('git', ['-c', 'commit.gpgsign=false', 'commit', '-qm', 'add base'], { cwd: dir })
@@ -434,7 +434,7 @@ test('initGitRepo and createGitTemplate: repository bootstrap and isolated cpSyn
   assert.equal(existsSync(template.templateDir), false)
 
   // When setup throws, the temp template dir should be cleaned up automatically
-  const uniquePrefix = `helm-test-kit-fail-${Date.now()}-${Math.random().toString(36).slice(2)}-`
+  const uniquePrefix = `helmx-test-kit-fail-${Date.now()}-${Math.random().toString(36).slice(2)}-`
   assert.throws(
     () =>
       createGitTemplate(uniquePrefix, (dir) => {

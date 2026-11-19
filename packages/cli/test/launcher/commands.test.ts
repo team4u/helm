@@ -2,8 +2,8 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { useTempDir, sanitizedHostEnv } from '@helm/test-kit/node';
-import { readCurrentRelease } from '@helm/env-io';
+import { useTempDir, sanitizedHostEnv } from '@helmx/test-kit/node';
+import { readCurrentRelease } from '@helmx/env-io';
 import { cmdCheck, cmdStatus, cmdStop, cmdUpdate } from '../../src/launcher/commands.js';
 import { defaultUpdateCore } from '../../src/launcher/update-core.js';
 import { readPidRecord } from '../../src/launcher/records.js';
@@ -22,11 +22,11 @@ import {
 const PKG = '@fake/hub-payload';
 
 function ioWith(root: string) {
-  return captureIo(sanitizedHostEnv({ HELM_HUB_INSTALL_ROOT: root, HELM_PAYLOAD_PACKAGE: PKG }));
+  return captureIo(sanitizedHostEnv({ HELMX_HUB_INSTALL_ROOT: root, HELMX_PAYLOAD_PACKAGE: PKG }));
 }
 
 test('the production update core is really bound to the shared engine', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-realcore-');
+  const root = useTempDir(t, 'helmx-launcher-realcore-');
   const core = defaultUpdateCore();
   // Real engine staging semantics behind the port: immutable `<uuid>` candidate, engine-format
   // `.complete` marker, entries resolved inside the release.
@@ -45,7 +45,7 @@ test('the production update core is really bound to the shared engine', { timeou
 });
 
 test('check with a fake core reports current/latest as JSON and text', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-clicheck-');
+  const root = useTempDir(t, 'helmx-launcher-clicheck-');
   const payloads = new Map<string, string>();
   const core = createFakeCore({ pkgName: PKG, latest: '2.0.0', payloads });
   const json = ioWith(root);
@@ -62,7 +62,7 @@ test('check with a fake core reports current/latest as JSON and text', { timeout
 });
 
 test('local control: install and start, report status, upgrade, and stop', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-clie2e-');
+  const root = useTempDir(t, 'helmx-launcher-clie2e-');
   const payloads = new Map<string, string>();
   const core = createFakeCore({ pkgName: PKG, latest: '1.1.0', payloads });
   const port = await freePort();
@@ -72,7 +72,7 @@ test('local control: install and start, report status, upgrade, and stop', { tim
   await writeFakePayload({ dir: path.join(root, 'payload-1.1.0'), pkgName: PKG, version: '1.1.0' });
   payloads.set('1.1.0', path.join(root, 'payload-1.1.0'));
 
-  const dataDir = useTempDir(t, 'helm-launcher-local-data-');
+  const dataDir = useTempDir(t, 'helmx-launcher-local-data-');
   const install = ioWith(root);
   assert.equal(await cmdUpdate({ root, io: install.io, core }, { tarball: tarballPath, version: '1.0.0', port, dataDir }), 0);
   assert.match(install.outText(), /updated: \(none\) -> 1\.0\.0/);
@@ -124,7 +124,7 @@ test('local control: install and start, report status, upgrade, and stop', { tim
 });
 
 test('CLI check routes the registry through the fetchFn seam against the real engine core', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-clireal-');
+  const root = useTempDir(t, 'helmx-launcher-clireal-');
   const registry = await createFakeRegistry(PKG, '9.9.9');
   const captured = ioWith(root);
   assert.equal(await cmdCheck({ root, io: captured.io, fetchFn: registry.fetchImpl }, { json: true, registry: registry.registryUrl }), 0);

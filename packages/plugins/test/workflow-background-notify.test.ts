@@ -24,7 +24,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
-import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
+import { HelmxError, type AgentExecutionInfo } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import {
   WorkflowService,
@@ -400,8 +400,8 @@ it('prepareRecovery 容忍边界：ownership_conflict（human 接管）与 not_f
   host.abortConversationGuarded = async (id: number) => {
     host.guardedAborts.push(id)
     // 31 号模拟内核 human 红线拒绝（human 绝不 abort）；32 号模拟会话已删除。
-    if (id === 31) throw new HelmError('ownership_conflict', '会话 31 当前归属 human，拒绝自动化变更（human 红线）', 409, { conversationId: 31 })
-    if (id === 32) throw new HelmError('not_found', '会话不存在：32', 404, { conversationId: 32 })
+    if (id === 31) throw new HelmxError('ownership_conflict', '会话 31 当前归属 human，拒绝自动化变更（human 红线）', 409, { conversationId: 31 })
+    if (id === 32) throw new HelmxError('not_found', '会话不存在：32', 404, { conversationId: 32 })
     return realAbort(id)
   }
   const service = new WorkflowService({ dataDir: barrierDir, state, host })
@@ -467,7 +467,7 @@ it('createBackgroundReporter 契约矩阵：kind × 终态（completed/failed/ab
     assert.equal(call.opts.whenBusy, 'steer', `忙时策略必须 steer：${JSON.stringify(call.opts)}`)
     const kind = call.opts.meta['kind'] as string
     const expectedKindLabel = kind === 'subagent_report' ? 'subagent' : 'workflow'
-    assert.equal(call.opts.requestId, `helm:${expectedKindLabel}-report:${String(call.opts.meta['backgroundRunId'])}`)
+    assert.equal(call.opts.requestId, `helmx:${expectedKindLabel}-report:${String(call.opts.meta['backgroundRunId'])}`)
     assert.equal(call.opts.meta['renderer'], 'workflow:background-report')
     assert.ok(call.text.includes(`"${String(call.opts.meta['backgroundRunId'])}"`), '汇报正文应携带 run 结果数据')
   }

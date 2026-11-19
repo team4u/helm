@@ -1,27 +1,27 @@
 /**
- * HelmStore durability tests: real temporary SQLite + real `NodeSqliteDatabase` adapter.
+ * HelmxStore durability tests: real temporary SQLite + real `NodeSqliteDatabase` adapter.
  * Fault injection via wrapping adapter `run`/`exec` only (fixture injects errors without mocking data).
  * Covers: honest flush failures (never faking success, rejecting new writes after errors, close awaiting in-flight),
  * Ask terminal state restart consistency, FTS dedup / title propagation / search pre-flush, atomic delete without
  * resurrection on restart, sequence monotonicity, JSON corruption errors.
  */
 
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { openHelmDatabase, type HelmDatabase } from '../src/runtime/sqlite.js'
-import { HelmStore, convStatusOf, type ConvMeta } from '../src/runtime/store.js'
+import { openHelmxDatabase, type HelmxDatabase } from '../src/runtime/sqlite.js'
+import { HelmxStore, convStatusOf, type ConvMeta } from '../src/runtime/store.js'
 
-async function openStore(): Promise<{ store: HelmStore; database: HelmDatabase; dir: string }> {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-store-test-'))
+async function openStore(): Promise<{ store: HelmxStore; database: HelmxDatabase; dir: string }> {
+  const dir = await mkdtemp(join(tmpdir(), 'helmx-store-test-'))
   return { dir, ...await openStoreAt(dir) }
 }
 
 /** Single-shot fault injection hook attached to an already-open `database.db` (error injection only, no synthetic data). */
-function attachFaults(database: HelmDatabase): { failNext(substr: string, error?: Error): void } {
+function attachFaults(database: HelmxDatabase): { failNext(substr: string, error?: Error): void } {
   const realDb = database.db as unknown as Record<string, unknown> & { __faultHook?: FaultHook }
   if (!realDb.__faultHook) {
     realDb.__faultHook = { substr: '', armed: false, error: new Error('injected SQL failure') }
@@ -102,10 +102,10 @@ function conv(id: number, overrides: Partial<ConvMeta> = {}): ConvMeta {
 /** Fixed parent tool call ID used for link table tests. */
 const parentToolId = 'call-tool-3001'
 
-describe('HelmStore durability layer (real SQLite)', { timeout: 60_000 }, () => {
+describe('HelmxStore durability layer (real SQLite)', { timeout: 60_000 }, () => {
   let dir: string
   before(async () => {
-    dir = await mkdtemp(join(tmpdir(), 'helm-store-suite-'))
+    dir = await mkdtemp(join(tmpdir(), 'helmx-store-suite-'))
   })
   after(async () => {
     await rm(dir, { recursive: true, force: true })
@@ -189,24 +189,24 @@ describe('HelmStore durability layer (real SQLite)', { timeout: 60_000 }, () => 
     const base = await mkdtemp(join(dir, 'fail-'))
     const { store, database } = await openStoreAt(base)
     const fixture = attachFaults(database)
-    fixture.failNext('INSERT INTO helm_conversations')
+    fixture.failNext('INSERT INTO helmx_conversations')
     store.upsertConv(conv(8))
     await assert.rejects(() => store.flushPublic(), (e: unknown) => {
-      assert.ok(e instanceof HelmError)
+      assert.ok(e instanceof HelmxError)
       assert.equal(e.code, 'store_flush_failed')
       return true
     })
     // New writes after failure must be rejected (failed state cannot keep faking success).
     assert.throws(() => store.upsertConv(conv(9)), (e: unknown) => {
-      assert.ok(e instanceof HelmError)
+      assert.ok(e instanceof HelmxError)
       assert.equal(e.code, 'store_flush_failed')
       return true
     })
     assert.throws(() => store.putPluginDoc('p', 'k', '{}'), (e: unknown) => {
-      assert.ok(e instanceof HelmError)
+      assert.ok(e instanceof HelmxError)
       return true
     })
-    // close() also surfaces the error (used by runtime to throw HelmError).
+    // close() also surfaces the error (used by runtime to throw HelmxError).
     const closeError = await store.close()
     assert.ok(closeError !== undefined)
     await database.close()
@@ -285,7 +285,7 @@ describe('HelmStore durability layer (real SQLite)', { timeout: 60_000 }, () => 
     store.upsertConv(conv(5, { title: 'new-title', updatedAt: 2000 }))
     await store.flushPublic()
     const titleRows = await database.db.all<{ title: string; entry_id: string }>(
-      'SELECT title, entry_id FROM helm_conversation_fts WHERE conversation_id = 5',
+      'SELECT title, entry_id FROM helmx_conversation_fts WHERE conversation_id = 5',
     )
     assert.equal(titleRows.length, 2)
     for (const r of titleRows) assert.equal(r.title, 'new-title')
@@ -303,7 +303,7 @@ describe('HelmStore durability layer (real SQLite)', { timeout: 60_000 }, () => 
     store.indexFts(6, 'entry:1', 't', 'original content')
     await store.flushPublic()
     const fixture = attachFaults(database)
-    fixture.failNext('DELETE FROM helm_conversation_fts')
+    fixture.failNext('DELETE FROM helmx_conversation_fts')
     await assert.rejects(
       () =>
         store.rebuildFts(async () => {
@@ -369,11 +369,11 @@ describe('HelmStore durability layer (real SQLite)', { timeout: 60_000 }, () => 
       store.setEventSeq(10)
       store.setEventSeq(9) // Regression: in-memory watermark stays at 10
       assert.equal(store.eventSeqNow, 10)
-      assert.throws(() => store.setEventSeq(-1), HelmError)
-      assert.throws(() => store.setEventSeq(1.5), HelmError)
+      assert.throws(() => store.setEventSeq(-1), HelmxError)
+      assert.throws(() => store.setEventSeq(1.5), HelmxError)
       await store.flushPublic()
       const row = await database.db.get<{ value: number }>(
-        "SELECT value FROM helm_seq WHERE key = 'events'",
+        "SELECT value FROM helmx_seq WHERE key = 'events'",
       )
       assert.equal(row?.value, 10)
       await store.close()
@@ -398,7 +398,7 @@ describe('HelmStore durability layer (real SQLite)', { timeout: 60_000 }, () => 
     mutated.tags.push('after-mutation')
     await store.flushPublic()
     const row = await database.db.get<{ tags: string }>(
-      'SELECT tags FROM helm_conversations WHERE id = 13',
+      'SELECT tags FROM helmx_conversations WHERE id = 13',
     )
     assert.deepEqual(JSON.parse(row!.tags), ['before'])
     await store.close()
@@ -409,18 +409,18 @@ describe('HelmStore durability layer (real SQLite)', { timeout: 60_000 }, () => 
   it('putPluginDoc rejects invalid JSON explicitly; load fails explicitly on corrupted JSON', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'json-'))
     const { store, database } = await openStoreAt(base)
-    assert.throws(() => store.putPluginDoc('p', 'bad', '{not-json'), HelmError)
+    assert.throws(() => store.putPluginDoc('p', 'bad', '{not-json'), HelmxError)
     await store.flushPublic()
     await store.close()
     await database.close()
     // Inject corrupt data directly and reload: must fail explicitly without silent null/empty fallback.
-    const db2 = await openHelmDatabase(base)
-    await db2.db.run("INSERT INTO helm_plugin_docs (plugin_id, name, value, updated_at) VALUES ('x', 'y', '{broken', 0)")
+    const db2 = await openHelmxDatabase(base)
+    await db2.db.run("INSERT INTO helmx_plugin_docs (plugin_id, name, value, updated_at) VALUES ('x', 'y', '{broken', 0)")
     await db2.close()
-    const db3 = await openHelmDatabase(base)
-    const store3 = new HelmStore(db3)
+    const db3 = await openHelmxDatabase(base)
+    const store3 = new HelmxStore(db3)
     await assert.rejects(() => store3.load(), (e: unknown) => {
-      assert.ok(e instanceof HelmError)
+      assert.ok(e instanceof HelmxError)
       assert.equal(e.code, 'store_data_corrupted')
       return true
     })
@@ -449,25 +449,25 @@ describe('HelmStore durability layer (real SQLite)', { timeout: 60_000 }, () => 
     timeout: 60_000,
   }, async () => {
     const base = await mkdtemp(join(dir, 'link-'))
-    // Simulate a legacy database holding only `helm_conversations` (no `parent_tool_call_id`) by dropping the link table.
-    const seed = await openHelmDatabase(base)
-    await seed.db.exec('DROP TABLE helm_conversation_tool_links')
+    // Simulate a legacy database holding only `helmx_conversations` (no `parent_tool_call_id`) by dropping the link table.
+    const seed = await openHelmxDatabase(base)
+    await seed.db.exec('DROP TABLE helmx_conversation_tool_links')
     await seed.close()
 
-    // `openHelmDatabase` creates the new link table automatically without altering existing rows.
+    // `openHelmxDatabase` creates the new link table automatically without altering existing rows.
     const { store, database } = await openStoreAt(base)
     // When set: persisted to both mirror and DB
     store.upsertConv(conv(20, { parentToolCallId: parentToolId }))
     await store.flushPublic()
     const linkRow = await database.db.get<{ parent_tool_call_id: string }>(
-      'SELECT parent_tool_call_id FROM helm_conversation_tool_links WHERE conversation_id = 20',
+      'SELECT parent_tool_call_id FROM helmx_conversation_tool_links WHERE conversation_id = 20',
     )
     assert.equal(linkRow?.parent_tool_call_id, parentToolId)
     // Cleared value removes the link row without leaving stale correlations
     store.upsertConv(conv(20, { parentToolCallId: undefined }))
     await store.flushPublic()
     const gone = await database.db.get(
-      'SELECT 1 AS x FROM helm_conversation_tool_links WHERE conversation_id = 20',
+      'SELECT 1 AS x FROM helmx_conversation_tool_links WHERE conversation_id = 20',
     )
     assert.equal(gone, undefined, 'cleared value must remove the link row')
     // Re-writing and reopening merges link cleanly
@@ -484,7 +484,7 @@ describe('HelmStore durability layer (real SQLite)', { timeout: 60_000 }, () => 
     reopened.store.deleteConv(20)
     await reopened.store.flushPublic()
     const orphan = await reopened.database.db.get(
-      'SELECT 1 AS x FROM helm_conversation_tool_links WHERE conversation_id = 20',
+      'SELECT 1 AS x FROM helmx_conversation_tool_links WHERE conversation_id = 20',
     )
     assert.equal(orphan, undefined, 'deleting conversation must delete its link row')
     await reopened.store.close()
@@ -492,7 +492,7 @@ describe('HelmStore durability layer (real SQLite)', { timeout: 60_000 }, () => 
     await rm(base, { recursive: true, force: true })
   })
 
-  it('helm_artifacts persists and restores kinds; invalid kinds fail at write and load boundaries', { timeout: 60_000 }, async () => {
+  it('helmx_artifacts persists and restores kinds; invalid kinds fail at write and load boundaries', { timeout: 60_000 }, async () => {
     const base = await mkdtemp(join(dir, 'art-kind-'))
     const { store, database } = await openStoreAt(base)
     store.putArtifact({
@@ -536,7 +536,7 @@ describe('HelmStore durability layer (real SQLite)', { timeout: 60_000 }, () => 
         size: 1,
         createdAt: 40,
       }),
-      HelmError,
+      HelmxError,
     )
     await store.flushPublic()
     await store.close()
@@ -555,15 +555,15 @@ describe('HelmStore durability layer (real SQLite)', { timeout: 60_000 }, () => 
     await reopened.database.close()
 
     // Corrupt kind in store: load() must fail explicitly with store_data_corrupted
-    const dbCorrupt = await openHelmDatabase(base)
+    const dbCorrupt = await openHelmxDatabase(base)
     await dbCorrupt.db.run(
-      "INSERT INTO helm_artifacts (id, conversation_id, kind, name, path, mime_type, size, created_at) VALUES ('art-corrupt', 1, 'bad_kind', 'x', 'artifacts/1/x', 'text/plain', 1, 50)",
+      "INSERT INTO helmx_artifacts (id, conversation_id, kind, name, path, mime_type, size, created_at) VALUES ('art-corrupt', 1, 'bad_kind', 'x', 'artifacts/1/x', 'text/plain', 1, 50)",
     )
     await dbCorrupt.close()
-    const dbReopen = await openHelmDatabase(base)
-    const storeCorrupt = new HelmStore(dbReopen)
+    const dbReopen = await openHelmxDatabase(base)
+    const storeCorrupt = new HelmxStore(dbReopen)
     await assert.rejects(() => storeCorrupt.load(), (e: unknown) => {
-      assert.ok(e instanceof HelmError)
+      assert.ok(e instanceof HelmxError)
       assert.equal(e.code, 'store_data_corrupted')
       return true
     })
@@ -574,9 +574,9 @@ describe('HelmStore durability layer (real SQLite)', { timeout: 60_000 }, () => 
 
 // ---- test fixture helpers ----
 
-async function openStoreAt(dir: string): Promise<{ store: HelmStore; database: HelmDatabase }> {
-  const database = await openHelmDatabase(dir)
-  const store = new HelmStore(database)
+async function openStoreAt(dir: string): Promise<{ store: HelmxStore; database: HelmxDatabase }> {
+  const database = await openHelmxDatabase(dir)
+  const store = new HelmxStore(database)
   await store.load()
   return { store, database }
 }

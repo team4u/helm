@@ -4,7 +4,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { ConversationTimeline, type OutlineScrollRequest } from '../src/conversation/ConversationTimeline.js'
@@ -84,7 +84,7 @@ function makeConv(id: number, overrides: Partial<ConversationSummary> = {}): Con
 }
 
 function humanEntry(id: string, text: string): ConversationEntry {
-  return { id, kind: 'helm.input', data: { id: `in-${id}`, text, origin: 'human' }, createdAt: 1000 }
+  return { id, kind: 'helmx.input', data: { id: `in-${id}`, text, origin: 'human' }, createdAt: 1000 }
 }
 
 function assistantEntry(id: string, text: string): ConversationEntry {

@@ -11,10 +11,10 @@
  *   short-lived direct env creation only when EnvFabric isn't injected, whereas remote explicitly fails
  *   `env_fabric_missing` via `guards.ts` — never reading/writing Hub's local disk).
  * - Target-platform-aware cwd/path normalization (sole implementation `runtime/target-platform.ts`, reusing
- *   `@helm/protocol` `normalizeTargetPath`/`targetPlatformOf` without duplicating rules in entry points):
+ *   `@helmx/protocol` `normalizeTargetPath`/`targetPlatformOf` without duplicating rules in entry points):
  *   SDK `NodeExecutionEnv`/remote exec receive pre-normalized paths (converges `bash` / `runGate` /
  *   `POST /api/env/exec` and `WorktreeAllocator.execGit` via `runShell`).
- * - Fallback redaction for inherited host `HELM_TOKEN`: `runShell` can be invoked without the caller
+ * - Fallback redaction for inherited host `HELMX_TOKEN`: `runShell` can be invoked without the caller
  *   registering it in `deps.redact`, so any host token is captured and explicitly redacted across returned text.
  * - Fails explicitly with `output_limit_exceeded` when output exceeds `maxOutputBytes` (never silently truncates).
  */
@@ -26,7 +26,7 @@ import { createLocalExecutionEnv } from '../../env/local-host-env.js'
 import { int, obj, opt, str } from '@earendil-works/pi-schema'
 import { redactJsonValue } from '../../redact.js'
 import { invalidPathText, normalizePathForTarget, targetPlatformForNode } from '../target-platform.js'
-import { throwIfToolAborted, type HelmToolDeps } from '../tool-deps.js'
+import { throwIfToolAborted, type HelmxToolDeps } from '../tool-deps.js'
 import { remoteShellGuardText, shellEnvFabricMissingText } from './guards.js'
 import { buildToolEnv } from './managed-env.js'
 
@@ -71,7 +71,7 @@ function contextWithSignal(signal: AbortSignal | undefined): Context {
  * aggregation. Never fabricates success; exceeds limits -> `output_limit_exceeded`.
  */
 export async function runShell(
-  deps: HelmToolDeps,
+  deps: HelmxToolDeps,
   command: string,
   options: {
     cwd?: string
@@ -88,7 +88,7 @@ export async function runShell(
     onOutputChunk?: (chunk: { stream: 'stdout' | 'stderr'; text: string }) => void
     /**
      * Caller-injected environment (e.g. Herdr plugin `Profile.runtime.env` + managed env): overrides matching
-     * keys from `process.env`, while managed variables (`HELM_*` and managed tokens) remain pinned.
+     * keys from `process.env`, while managed variables (`HELMX_*` and managed tokens) remain pinned.
      */
     env?: Record<string, string>
   } = {},
@@ -100,14 +100,14 @@ export async function runShell(
   // Node resolution: explicit `nodeId` > conversation binding (`nodeIdOf`) > `'local'`.
   const explicitNodeId = options.nodeId ?? (options.conversationId !== undefined ? deps.nodeIdOf?.(options.conversationId) : undefined)
   const nodeId = explicitNodeId ?? 'local'
-  // Fallback redaction for inherited host `HELM_TOKEN`: `runShell` is a public API whose callers (e.g. tests)
-  // might not register `HELM_TOKEN` in `deps.redact`, so capture and redact it explicitly here as well.
-  const hostToken = process.env['HELM_TOKEN']
+  // Fallback redaction for inherited host `HELMX_TOKEN`: `runShell` is a public API whose callers (e.g. tests)
+  // might not register `HELMX_TOKEN` in `deps.redact`, so capture and redact it explicitly here as well.
+  const hostToken = process.env['HELMX_TOKEN']
   const redactAll = (text: string): string => {
     const base = deps.redact(text)
     return hostToken !== undefined && hostToken !== '' ? base.split(hostToken).join('[REDACTED]') : base
   }
-  // Target-platform-aware cwd normalization (sole entry `normalizePathForTarget` reusing `@helm/protocol`):
+  // Target-platform-aware cwd normalization (sole entry `normalizePathForTarget` reusing `@helmx/protocol`):
   // `local` uses Hub platform, remote uses only registered platform in `EnvFabric` (passes through verbatim
   // when unknown without guessing or falling back locally); converts WSL/Git Bash POSIX views to canonical Windows
   // paths on `win32` targets, rejecting unmappable bare POSIX roots explicitly with `invalid_path`.
@@ -147,13 +147,13 @@ export async function runShell(
     })
     // Per-call env injection (e.g. `Profile.runtime.env`): managed keys remain pinned by `ScopedExecutionEnv`'s
     // composer (see `scoped-env.ts`). Uses default `inheritEnv` semantics: locally `Scoped` constructs the full
-    // env (host PATH/HOME minus `HELM_*`, plus managed overrides) with explicit `inheritEnv: false` so SDK doesn't
-    // re-inject stripped host `HELM_*`; remotely default `inheritEnv` lets the node daemon merge its native
-    // PATH/HOME while stripping node host `HELM_TOKEN` and applying managed overrides last (never clobbering remote toolchains).
+    // env (host PATH/HOME minus `HELMX_*`, plus managed overrides) with explicit `inheritEnv: false` so SDK doesn't
+    // re-inject stripped host `HELMX_*`; remotely default `inheritEnv` lets the node daemon merge its native
+    // PATH/HOME while stripping node host `HELMX_TOKEN` and applying managed overrides last (never clobbering remote toolchains).
   } else if (nodeId === 'local') {
     shell = createLocalExecutionEnv({ cwd })
     // Fabric-less local fallback (tests): applies the same managed policy (`process.env` + pinned overrides +
-    // `cliBinDir` on PATH) with explicit `inheritEnv: false` so SDK won't re-inherit stripped host `HELM_TOKEN`.
+    // `cliBinDir` on PATH) with explicit `inheritEnv: false` so SDK won't re-inherit stripped host `HELMX_TOKEN`.
     shellEnv = buildToolEnv(deps, cwd, options.conversationId, options.env, nodeId)
     shellInheritEnv = false
   } else {
@@ -263,7 +263,7 @@ export async function runShell(
  * Failures never report success; outputs are redacted.
  */
 export async function runGate(
-  deps: HelmToolDeps,
+  deps: HelmxToolDeps,
   command: string,
   options: {
     cwd?: string
@@ -294,7 +294,7 @@ const bashParameters = obj({
 })
 
 /** `bash` tool (SDK `defineTool`; oversized outputs spill to artifacts via services). */
-export function createBashTool(deps: HelmToolDeps): ToolRegistration<typeof bashParameters> {
+export function createBashTool(deps: HelmxToolDeps): ToolRegistration<typeof bashParameters> {
   return defineTool({
     name: 'bash',
     description:

@@ -1,28 +1,28 @@
 /**
  * Node daemon artifact assembly: produces `packages/payload/dist-node/` — the npm package a remote
- * machine installs with one `npm install -g @team4u/helm-node` (bin `helm-node`, single-sourced from
+ * machine installs with one `npm install -g @helmx/node` (bin `helmx-node`, single-sourced from
  * packages/node/package.json).
  *
  * Why a single-file bundle with four external dependencies (unlike the CLI artifact's zero-dependency
- * bundle): the node daemon's runtime closure spans @helm/node + @helm/env-io (update engine included)
- * + @helm/protocol — all private workspace packages, inlined by esbuild — plus four packages that
+ * bundle): the node daemon's runtime closure spans @helmx/node + @helmx/env-io (update engine included)
+ * + @helmx/protocol — all private workspace packages, inlined by esbuild — plus four packages that
  * cannot be inlined honestly: @earendil-works/chord, @earendil-works/pi-durable (process-wide SDKs
  * whose instances must be shared with any host embedding them) and birpc / ws (plain runtime
  * libraries kept external by the same closure contract the Hub payload pins). Those four land in
  * `dependencies` as the exact versions pnpm actually installed in this repository — never ^/~
- * floating ranges — because the daemon's dual-package self-upgrade binds @team4u/helm-node +
- * @team4u/helm-cli in lockstep against exact versions.
+ * floating ranges — because the daemon's dual-package self-upgrade binds @helmx/node +
+ * @helmx/cli in lockstep against exact versions.
  *
  * Bundle input: packages/node/dist/cli.js (the full daemon CLI: connect / start / stop / restart /
  * status / upgrade / doctor / service). esbuild's metafile is the authority for two hard gates:
- * no external @helm/* import may survive (the workspace packages are private and unpublished — a
+ * no external @helmx/* import may survive (the workspace packages are private and unpublished — a
  * leaked import would crash at global-install time), and every non-builtin external reference must
  * normalize to exactly the four-package whitelist (a fifth dependency means the closure drifted).
  *
  * Output layout (dist-node/ is the publish package root; release runs npm pack/publish inside):
  *   dist/cli.js            bundled daemon entry (shebang + single-file ESM; the bin target)
- *   package.json           publish manifest (name defaults to @team4u/helm-node, overridable via
- *                          HELM_NODE_PACKAGE; bin helm-node → ./dist/cli.js; dependencies = the four
+ *   package.json           publish manifest (name defaults to @helmx/node, overridable via
+ *                          HELMX_NODE_PACKAGE; bin helmx-node → ./dist/cli.js; dependencies = the four
  *                          external exact-version pins)
  *   LICENSE, THIRD_PARTY_NOTICES.md
  */
@@ -36,8 +36,8 @@ const SHEBANG = '#!/usr/bin/env node';
 /** Exactly the packages that stay external in the node daemon bundle (everything else is inlined). */
 const EXTERNAL_DEPS = ['@earendil-works/chord', '@earendil-works/pi-durable', 'birpc', 'ws'];
 
-/** Publish node package name (overridable via HELM_NODE_PACKAGE, mirroring HELM_CLI_PACKAGE). */
-export const nodePackageName = process.env.HELM_NODE_PACKAGE ?? '@team4u/helm-node';
+/** Publish node package name (overridable via HELMX_NODE_PACKAGE, mirroring HELMX_CLI_PACKAGE). */
+export const nodePackageName = process.env.HELMX_NODE_PACKAGE ?? '@helmx/node';
 
 /** Normalizes an import specifier to its package name ('@scope/pkg/sub' → '@scope/pkg', 'ws/x' → 'ws'). */
 function packageNameOf(specifier) {
@@ -67,11 +67,11 @@ export async function assembleNodeArtifact({ repoRoot, version, enginesNode }) {
   }
 
   // The bin name and target stay single-sourced from the node workspace package (exactly one bin
-  // entry: helm-node → ./dist/cli.js — the release gate re-checks this on the assembled manifest).
+  // entry: helmx-node → ./dist/cli.js — the release gate re-checks this on the assembled manifest).
   const nodePkg = JSON.parse(readFileSync(path.join(nodePkgDir, 'package.json'), 'utf-8'));
   const binEntries = Object.entries(nodePkg.bin ?? {});
-  if (binEntries.length !== 1 || binEntries[0][0] !== 'helm-node' || binEntries[0][1] !== './dist/cli.js') {
-    console.error(`[payload] expected exactly one bin entry { "helm-node": "./dist/cli.js" } in @helm/node package.json, found: ${JSON.stringify(nodePkg.bin)}`);
+  if (binEntries.length !== 1 || binEntries[0][0] !== 'helmx-node' || binEntries[0][1] !== './dist/cli.js') {
+    console.error(`[payload] expected exactly one bin entry { "helmx-node": "./dist/cli.js" } in @helmx/node package.json, found: ${JSON.stringify(nodePkg.bin)}`);
     process.exit(1);
   }
 
@@ -123,26 +123,26 @@ export async function assembleNodeArtifact({ repoRoot, version, enginesNode }) {
   if (!bundle.startsWith(SHEBANG)) bundle = `${SHEBANG}\n${bundle}`;
 
   // Metafile hard gates (the authority — same rationale as the CLI artifact: regex-scanning bundle
-  // text would false-positive on string-literal sample code): ① no external @helm/* import survives
+  // text would false-positive on string-literal sample code): ① no external @helmx/* import survives
   // (workspace packages are private; a leaked one breaks every global install); ② every non-builtin
   // external import normalizes into the four-package whitelist — a fifth external means the closure
   // drifted and the manifest would under-declare runtime dependencies; ③ none of the four whitelist
   // packages may appear as a bundled input (an external misconfiguration would silently inline them
   // and the exact-version dependency pins would stop describing reality).
-  const unresolvedHelm = new Set();
+  const unresolvedHelmx = new Set();
   const externalSeen = new Set();
   for (const output of Object.values(bundleResult.metafile.outputs)) {
     for (const imported of output.imports ?? []) {
       if (imported.external !== true) continue;
       const pkgName = packageNameOf(imported.path);
-      if (pkgName.startsWith('@helm/')) unresolvedHelm.add(imported.path);
+      if (pkgName.startsWith('@helmx/')) unresolvedHelmx.add(imported.path);
       else if (!imported.path.startsWith('node:')) externalSeen.add(pkgName);
     }
   }
   const outsideWhitelist = [...externalSeen].filter((name) => !EXTERNAL_DEPS.includes(name));
-  if (unresolvedHelm.size > 0 || outsideWhitelist.length > 0) {
+  if (unresolvedHelmx.size > 0 || outsideWhitelist.length > 0) {
     const lines = [];
-    if (unresolvedHelm.size > 0) lines.push(`- external @helm/* imports still referenced: ${[...unresolvedHelm].sort().join(', ')}`);
+    if (unresolvedHelmx.size > 0) lines.push(`- external @helmx/* imports still referenced: ${[...unresolvedHelmx].sort().join(', ')}`);
     if (outsideWhitelist.length > 0) lines.push(`- external imports outside the four-package whitelist: ${outsideWhitelist.sort().join(', ')}`);
     console.error(`[payload] node bundle violates the external-dependency contract:\n${lines.join('\n')}`);
     process.exit(1);
@@ -167,12 +167,12 @@ export async function assembleNodeArtifact({ repoRoot, version, enginesNode }) {
     name: nodePackageName,
     version,
     type: 'module',
-    description: 'helm node daemon: remote node runtime for the Helm Hub (bash/read/write/edit/gate/env exec over the reverse control gateway)',
+    description: 'helmx node daemon: remote node runtime for the Helmx Hub (bash/read/write/edit/gate/env exec over the reverse control gateway)',
     license: 'MIT',
     repository: { type: 'git', url: 'git+https://github.com/team4u/helm.git', directory: 'packages/payload' },
     publishConfig: { access: 'public' },
     engines: { node: enginesNode },
-    bin: { 'helm-node': './dist/cli.js' },
+    bin: { 'helmx-node': './dist/cli.js' },
     files: ['dist/cli.js', 'LICENSE', 'THIRD_PARTY_NOTICES.md'],
     dependencies,
     ...(peerOverrides.size > 0
@@ -190,7 +190,7 @@ export async function assembleNodeArtifact({ repoRoot, version, enginesNode }) {
     const rel = path.relative(repoRoot, path.resolve(process.cwd(), input)).replace(/\\/g, '/');
     if (rel.startsWith('../')) continue;
     if (/^packages\/[^/]+\//.test(rel)) {
-      bundledPkgs.add(`@helm/${/^packages\/([^/]+)\//.exec(rel)[1]}`);
+      bundledPkgs.add(`@helmx/${/^packages\/([^/]+)\//.exec(rel)[1]}`);
       continue;
     }
     const idx = rel.lastIndexOf('node_modules/');
@@ -202,7 +202,7 @@ export async function assembleNodeArtifact({ repoRoot, version, enginesNode }) {
   }
   const bundleBytes = Object.values(bundleResult.metafile.outputs).reduce((sum, out) => sum + out.bytes, 0);
   console.log(`[payload] node artifact assembled: ${stagingDir}`);
-  console.log(`[payload] node publish package: ${nodePackageName}@${version} (bin: helm-node; overridable via HELM_NODE_PACKAGE)`);
+  console.log(`[payload] node publish package: ${nodePackageName}@${version} (bin: helmx-node; overridable via HELMX_NODE_PACKAGE)`);
   console.log(`[payload] node bundle: 1 file, ${(bundleBytes / 1024).toFixed(1)} KiB; bundled inputs: ${[...bundledPkgs].sort().join(', ')}`);
   console.log(`[payload] node contract: external dependencies = ${EXTERNAL_DEPS.join(', ')} at exact installed versions; publish from dist-node via npm pack / npm publish (after cli)`);
   if (peerOverrides.size > 0) {

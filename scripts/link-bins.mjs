@@ -8,11 +8,11 @@
  * exits with an explicit error on Windows.
  *
  * Usage:
- *   pnpm link:bins             # install helm / helm-node / helm-hub wrapper scripts
+ *   pnpm link:bins             # install helmx / helmx-node / helmx-hub wrapper scripts
  *   pnpm unlink:bins           # remove them
  *
  * Environment:
- *   HELM_BIN_DIR  override the install directory (default /usr/local/bin)
+ *   HELMX_BIN_DIR  override the install directory (default /usr/local/bin)
  */
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -20,13 +20,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const MARKER = 'generated-by:helm/scripts/link-bins.mjs'
+const MARKER = 'generated-by:helmx/scripts/link-bins.mjs'
 
-/** bin name -> source entry (repo-relative); helm-hub goes through scripts/run-hub.mjs for dev path resolution */
+/** bin name -> source entry (repo-relative); helmx-hub goes through scripts/run-hub.mjs for dev path resolution */
 const BINS = {
-  helm: 'packages/cli/src/index.ts',
-  'helm-node': 'packages/node/src/cli.ts',
-  'helm-hub': 'scripts/run-hub.mjs',
+  helmx: 'packages/cli/src/index.ts',
+  'helmx-node': 'packages/node/src/cli.ts',
+  'helmx-hub': 'scripts/run-hub.mjs',
 }
 
 const removeMode = process.argv.includes('--remove')
@@ -35,7 +35,7 @@ if (process.platform === 'win32') {
   process.exit(1)
 }
 
-const binDir = process.env.HELM_BIN_DIR || '/usr/local/bin'
+const binDir = process.env.HELMX_BIN_DIR || '/usr/local/bin'
 const tsx = path.join(ROOT, 'node_modules', '.bin', 'tsx')
 
 if (!removeMode && !fs.existsSync(tsx)) {
@@ -43,7 +43,7 @@ if (!removeMode && !fs.existsSync(tsx)) {
   process.exit(1)
 }
 if (!fs.existsSync(binDir)) {
-  console.error(`Target directory does not exist: ${binDir} (override with HELM_BIN_DIR).`)
+  console.error(`Target directory does not exist: ${binDir} (override with HELMX_BIN_DIR).`)
   process.exit(1)
 }
 
@@ -73,14 +73,14 @@ function unlinkSyncSafe(p) {
 }
 
 function cleanNpmLinkLibRemnants() {
-  // npm link also leaves package symlinks at <prefix>/lib/node_modules/@helm/<pkg>; clean those too (best effort)
+  // npm link also leaves package symlinks at <prefix>/lib/node_modules/@helmx/<pkg>; clean those too (best effort)
   const nm = path.resolve(binDir, '..', 'lib', 'node_modules')
   for (const pkg of ['cli', 'node', 'kernel']) {
-    const p = path.join(nm, '@helm', pkg)
+    const p = path.join(nm, '@helmx', pkg)
     if (npmLinkRemnant(p)) {
       unlinkSyncSafe(p)
       console.log(`  cleaning npm link leftover symlink ${p}`)
-      const scopeDir = path.join(nm, '@helm')
+      const scopeDir = path.join(nm, '@helmx')
       try {
         if (fs.readdirSync(scopeDir).length === 0) fs.rmdirSync(scopeDir)
       } catch {}
@@ -132,9 +132,9 @@ for (const [name, entry] of Object.entries(BINS)) {
 }
 cleanNpmLinkLibRemnants()
 
-// Self-check: tsx exists and the command starts (--help quick smoke; same for helm-node;
-// helm-hub would really start the kernel, so only its syntax gets checked)
-for (const name of ['helm', 'helm-node']) {
+// Self-check: tsx exists and the command starts (--help quick smoke; same for helmx-node;
+// helmx-hub would really start the kernel, so only its syntax gets checked)
+for (const name of ['helmx', 'helmx-node']) {
   try {
     execFileSync(path.join(binDir, name), ['--help'], { stdio: 'pipe', timeout: 60_000 })
     console.log(`  self-check passed: ${name} --help`)

@@ -6,10 +6,10 @@
  * - Shell execution engine (`runShell` / `runGate` / `bash` tool): `tools/shell-exec.ts` —
  *   real process groups, timeout/abort handling, cross-chunk UTF-8 fidelity, explicit errors on output limit overflow;
  * - Managed env assembly (`buildToolEnv` / `buildManagedEnv` / `executionScopeHash`): `tools/managed-env.ts` —
- *   pinned `HELM_*` variable overrides, assembled coherently under `env/scoped-env.ts` `ScopedExecutionEnv`;
+ *   pinned `HELMX_*` variable overrides, assembled coherently under `env/scoped-env.ts` `ScopedExecutionEnv`;
  * - Lexical path resolution (`resolveTargetPath`): `tools/target-path.ts` — picks pure posix/win32 rules based on
  *   target path shape rather than Hub host's `node:path` default; `isAbsoluteTargetPath`/`targetPathShape`
- *   re-exported from `@helm/protocol`;
+ *   re-exported from `@helmx/protocol`;
  * - Remote guards (`env_fabric_missing` / `node_offline`): `tools/guards.ts` — fails explicitly when
  *   `EnvFabric` is missing or nodes are offline, never falling back silently to local;
  * - File tools (`read` / `write` / `edit`): `tools/file-ops.ts` + `tools/file-env.ts` —
@@ -48,6 +48,6 @@ export {
   type ArtifactFileBytes,
   type ArtifactReadHandle,
 } from './tools/artifact-tools.js'
-// Shape detection and pure lexical helpers live in `@helm/protocol` (browser-safe, shared by kernel and
-// `@helm/plugins`); re-exported here to preserve existing relative-path imports.
-export { isAbsoluteTargetPath, targetPathShape } from '@helm/protocol'
+// Shape detection and pure lexical helpers live in `@helmx/protocol` (browser-safe, shared by kernel and
+// `@helmx/plugins`); re-exported here to preserve existing relative-path imports.
+export { isAbsoluteTargetPath, targetPathShape } from '@helmx/protocol'

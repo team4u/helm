@@ -5,7 +5,7 @@
  * - 14 个 `ctx.action`（HTTP / CLI / Workflow / UI 补全）均声明严格 `outputSchema`，
  *   UI 专用补全源设 `exposeToPrompt: false` 避免挤占模型 `<available_actions>` 提示词预算。
  */
-import type { HelmPluginContext, PluginToolContext } from '@helm/protocol'
+import type { HelmxPluginContext, PluginToolContext } from '@helmx/protocol'
 import {
   COORDINATOR_SCOPE,
   HISTORY_PARTICIPANT_SCOPE,
@@ -130,7 +130,7 @@ function formatInspectWorkerSummary(res: InspectWorkerResult): string {
 }
 
 export function registerSwarmActions(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   coordinator: SwarmCoordinator,
 ): void {
   const { createGroup, updateGroup, manageChannel, closeGroup } = createGroupHandlers(ctx, coordinator)

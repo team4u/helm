@@ -15,7 +15,7 @@
  *   （按 run.id 去重，不受 100 条分片滑窗截断影响）；
  * - 值缓存幂等写入（值相等跳过，不发多余 SSE 事件）；stopping 门拦截关停期残留回调。
  */
-import type { PluginDocHandle, PluginSessionDocHandle } from '@helm/protocol'
+import type { PluginDocHandle, PluginSessionDocHandle } from '@helmx/protocol'
 import {
   type WorkflowRunBadgesDocState,
   type WorkflowRunSessionDocState,

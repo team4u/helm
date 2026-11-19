@@ -23,7 +23,7 @@
  * formatTokens lives in lib/format.ts (the repo's single implementation,
  * shared with the conversation usage display).
  */
-import type { ConversationContextUsage } from '@helm/protocol/browser'
+import type { ConversationContextUsage } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { formatTokens } from '../lib/format.js'
 

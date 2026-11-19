@@ -42,7 +42,7 @@ export const PopoverContent = React.forwardRef<
       ref={ref}
       align={align}
       sideOffset={sideOffset}
-      className={`helm-popover-content ${className}`.trim()}
+      className={`helmx-popover-content ${className}`.trim()}
       style={layeredStyle}
       {...props}
     >
@@ -68,7 +68,7 @@ export const PopoverArrow = React.forwardRef<
     ref={ref}
     width={width}
     height={height}
-    className={`helm-popover-arrow ${className}`.trim()}
+    className={`helmx-popover-arrow ${className}`.trim()}
     {...props}
   />
 ))

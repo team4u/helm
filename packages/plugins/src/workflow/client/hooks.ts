@@ -13,7 +13,7 @@ import {
   usePluginLocale,
   usePluginSessionDoc,
   useSharedNowMs,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 import { isScrolledToBottom } from './model-format.ts'
 import { parseSavedWorkflowList } from './model-library.ts'
 import type { SavedWorkflowView } from './model-library.ts'

@@ -19,7 +19,7 @@ import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import type { HelmEventFrame } from '@helm/protocol'
+import type { HelmxEventFrame } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
@@ -28,7 +28,7 @@ type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
 let root = ''
 
 before(async () => {
-  root = await makeTempDir('helm-activity-snap-')
+  root = await makeTempDir('helmx-activity-snap-')
 })
 
 after(async () => {
@@ -101,7 +101,7 @@ describe('activity snapshot', { timeout: 60_000 }, () => {
   it('settling counts while turn_settled dispatch is in flight (observed inside the event frame)', { timeout: 60_000 }, async () => {
     const kernel = await openRuntime('settling')
     let settlingObserved: number | undefined
-    const unsubscribeEvents = kernel.events.subscribe((frame: HelmEventFrame) => {
+    const unsubscribeEvents = kernel.events.subscribe((frame: HelmxEventFrame) => {
       if (frame.event.type !== 'turn.settled') return
       // The frame is dispatched inside the settle window: the snapshot must still see it.
       settlingObserved = kernel.activitySnapshot().settlingConversations

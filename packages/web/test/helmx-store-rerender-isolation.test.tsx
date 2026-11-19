@@ -9,10 +9,10 @@ import {
   useConversation,
   usePluginContext,
   type LocalizedText,
-} from '@helm/plugin-client'
-import type { ConversationLive, ConversationSummary, HelmSnapshot } from '@helm/protocol/browser'
-import { HelmStoreProvider } from '../src/lib/HelmStoreProvider.js'
-import { HelmExternalStore } from '../src/lib/helm-store.js'
+} from '@helmx/plugin-client'
+import type { ConversationLive, ConversationSummary, HelmxSnapshot } from '@helmx/protocol/browser'
+import { HelmxStoreProvider } from '../src/lib/HelmxStoreProvider.js'
+import { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { StoreRequestManager } from '../src/lib/request-manager.js'
 import {
   useCatalogAssets,
@@ -25,7 +25,7 @@ import {
 } from '../src/lib/store-context.js'
 import { useWebLocale } from '../src/i18n/use-web-locale.js'
 import { applySnapshot, applyTransientLiveFrame, emptyLiveState } from '../src/lib/live-state.js'
-import type { HelmStoreValue } from '../src/lib/types.js'
+import type { HelmxStoreValue } from '../src/lib/types.js'
 import { resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { ConversationPane } from '../src/conversation/ConversationPane.js'
 import { ConversationTimeline } from '../src/conversation/ConversationTimeline.js'
@@ -98,7 +98,7 @@ const makeConv = (id: number, title: string, status: ConversationSummary['status
   updatedAt: 100 + id,
 })
 
-const makeSnapshot = (): HelmSnapshot => ({
+const makeSnapshot = (): HelmxSnapshot => ({
   bootId: 'boot-rerender-test',
   seq: 1,
   conversations: [
@@ -351,7 +351,7 @@ test('conversation.live 流式增量只重渲染订阅对应会话的子树，�
     sseStream?.end()
     host.remove()
     globalThis.fetch = originalFetch
-    localStorage.removeItem('helm:token')
+    localStorage.removeItem('helmx:token')
     window.history.replaceState(null, '', '#/')
     resetPluginClientCache()
   })
@@ -359,7 +359,7 @@ test('conversation.live 流式增量只重渲染订阅对应会话的子树，�
   await act(async () => {
     root = createRoot(host)
     root.render(
-      <HelmStoreProvider>
+      <HelmxStoreProvider>
         <React.Profiler id="sidebar" onRender={() => bump('sidebar')}>
           <Sidebar />
         </React.Profiler>
@@ -391,7 +391,7 @@ test('conversation.live 流式增量只重渲染订阅对应会话的子树，�
         <PluginClientContext.Provider value={pluginStubCtx}>
           <SdkProbe1 />
         </PluginClientContext.Provider>
-      </HelmStoreProvider>,
+      </HelmxStoreProvider>,
     )
   })
 
@@ -426,10 +426,10 @@ test('conversation.live 流式增量只重渲染订阅对应会话的子树，�
     'conversation #1 live probes observe frame #10',
   )
 
-  // 1) 正向断言：目标活跃会话 DOM、Host live hook 与 @helm/plugin-client useConversation(1) / usePluginContext 全部实时更新
+  // 1) 正向断言：目标活跃会话 DOM、Host live hook 与 @helmx/plugin-client useConversation(1) / usePluginContext 全部实时更新
   assert.ok(host.textContent?.includes('streaming token #10'), 'ConversationPane(1) DOM 应实时显示最新流式文本')
-  assert.equal(latestSdk1Text, 'streaming token #10', '@helm/plugin-client useConversation(1) 应实时更新')
-  assert.equal(latestSdkLocale, 'en', '@helm/plugin-client usePluginContext() 应可用且 locale 正确')
+  assert.equal(latestSdk1Text, 'streaming token #10', '@helmx/plugin-client useConversation(1) 应实时更新')
+  assert.equal(latestSdkLocale, 'en', '@helmx/plugin-client usePluginContext() 应可用且 locale 正确')
   assert.ok((commitCounts.pane1 ?? 0) >= 1, '活跃会话 ConversationPane(1) 应响应 live 更新')
   assert.ok((commitCounts.hookProbe1 ?? 0) >= 1, 'useConversationLive(1) 订阅者应重渲染')
   assert.ok((commitCounts.sdkProbe1 ?? 0) >= 1, 'SDK useConversation(1) 订阅者应实时更新')
@@ -538,8 +538,8 @@ test('StoreRequestManager 并发去重、epoch 取消、不可见会话中止与
   assert.equal(timerFired, false, 'dispose() 应清理所有挂起 delay 定时器')
 })
 
-test('HelmExternalStore 领域隔离、reportLoad 幂等空操作与缺 Provider 显式抛错契约', { timeout: 60_000 }, async () => {
-  const store = new HelmExternalStore({
+test('HelmxExternalStore 领域隔离、reportLoad 幂等空操作与缺 Provider 显式抛错契约', { timeout: 60_000 }, async () => {
+  const store = new HelmxExternalStore({
     primaryTarget: { kind: 'conversation', conversationId: 1 },
     splitTarget: null,
     workbenchOpen: false,
@@ -582,7 +582,7 @@ test('HelmExternalStore 领域隔离、reportLoad 幂等空操作与缺 Provider
   unsubErr()
   store.dispose()
 
-  // 单轨供给契约：不在 HelmExternalStoreContext.Provider 内时切片 hooks 显式抛错（绝不静默回退）
+  // 单轨供给契约：不在 HelmxExternalStoreContext.Provider 内时切片 hooks 显式抛错（绝不静默回退）
   const host = document.createElement('div')
   document.body.appendChild(host)
   let root: Root | undefined

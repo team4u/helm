@@ -12,8 +12,8 @@
  * errors are never silently swallowed). Degraded reasons are display copy and
  * resolve against the active host locale.
  */
-import type { HelmLocale } from '@helm/plugin-client'
-import { DEFAULT_HELM_LOCALE } from '@helm/plugin-client'
+import type { HelmxLocale } from '@helmx/plugin-client'
+import { DEFAULT_HELMX_LOCALE } from '@helmx/plugin-client'
 import {
   jsonRenderElementCycle,
   jsonRenderElementReused,
@@ -101,7 +101,7 @@ export function isFlatSpec(spec: unknown): boolean {
 }
 
 /** Main entry: normalize any plugin JSON spec into a NormalizedSpec (degraded reasons follow the host locale). */
-export function normalizeSpec(spec: unknown, locale: HelmLocale = DEFAULT_HELM_LOCALE): NormalizedSpec {
+export function normalizeSpec(spec: unknown, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): NormalizedSpec {
   const record = asRecord(spec)
   if (record === null) {
     return degradedNode(jsonRenderSpecNotObject(locale))

@@ -50,7 +50,7 @@ export async function herdrServerFixture(
     | { result: unknown }
     | { error: { code: string; message: string } },
 ): Promise<HerdrServerFixture> {
-  const root = await mkdtemp(join(tmpdir(), 'helm-herdr-server-'))
+  const root = await mkdtemp(join(tmpdir(), 'helmx-herdr-server-'))
   const socketPath = join(root, 'herdr.sock')
   const requests: ServedRequest[] = []
   let connections = 0

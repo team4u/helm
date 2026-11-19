@@ -70,14 +70,14 @@ test('isWindowsShapedPath：盘符/UNC 判 true，POSIX 判 false', { timeout: 6
 // ---------------------------------------------------------------------------
 
 test('callLocal：Windows 形状路径 marker 缺失显式 herdr_unreachable（绝不 connect marker 文件）', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-winpipe-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-winpipe-'))
   try {
     const transport = createHerdrTransport()
     // 不存在 marker 文件：Linux 进程下 connect(Windows路径) 会产生奇怪错误；
     // 修复后应在 stat 阶段显式 herdr_unreachable，错误信息含 marker 路径。
     await assert.rejects(
       transport.call(
-        { socketPath: `C:\\Users\\helm-test\\nonexistent\\herdr\\herdr.sock` },
+        { socketPath: `C:\\Users\\helmx-test\\nonexistent\\herdr\\herdr.sock` },
         'session.snapshot',
         {},
         { timeoutMs: 2_000 },
@@ -95,7 +95,7 @@ test('callLocal：Windows 形状路径 marker 缺失显式 herdr_unreachable（�
 })
 
 test('callLocal：Windows 形状路径 marker 存在时走 pipe 连接（Linux 上连接失败但仍不 connect 文件）', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-winpipe-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-winpipe-'))
   try {
     // marker 文件存在（内容不限）：修复后应尝试连接 \\.\pipe\...（Linux 上
     // 必然 ENOENT 失败），错误是 socket/连接层错误而非把 marker 当 socket
@@ -144,7 +144,7 @@ test('subscribeLocal：Windows 形状路径 marker 缺失显式 herdr_unreachabl
 test('POSIX 路径行为不变：UDS 不存在仍是连接层错误（非 herdr_unreachable）', { timeout: 60_000 }, async () => {
   const transport = createHerdrTransport()
   await assert.rejects(
-    transport.call({ socketPath: '/tmp/helm-nonexistent-test/herdr.sock' }, 'session.snapshot', {}, { timeoutMs: 2_000 }),
+    transport.call({ socketPath: '/tmp/helmx-nonexistent-test/herdr.sock' }, 'session.snapshot', {}, { timeoutMs: 2_000 }),
     (err: unknown) => {
       assert.ok(err instanceof HerdrTransportError)
       assert.notEqual(err.code, 'herdr_unreachable')

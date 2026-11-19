@@ -6,7 +6,7 @@
  * contracts; parsing is lenient: when a doc has not arrived or fields are
  * missing we return safe defaults instead of fabricating data.
  */
-import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
 import { TRIGGER_TARGET_DEFAULT, triggerTargetConversation, triggerTargetProfile, triggerTargetThreadKey } from './copy.ts'
 
 /** Row shape of the CronDoc (public doc 'crons'), display field subset. */
@@ -53,7 +53,7 @@ export function formatTriggerTargetSummary(
     targetProfileId?: string
     threadKey?: string
   },
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   const parts: string[] = []
   if (row.targetConversationId !== undefined) {

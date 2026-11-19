@@ -181,9 +181,9 @@ export async function resolveAgentReplayCall(ctx: AgentCallContext, callId: numb
   const logicalId = scopePath === 'root' ? String(scopeCallIndex) : `${scopePath}:${scopeCallIndex}`
   const agentId = resumed?.agentId ?? `wf-agent-${logicalId}`
   const label = payload.label ?? resumed?.label ?? derivedLabel(payload.prompt)
-  // agentType defaults to 'assistant': helm's agentType is a Profile ID, and the host's
+  // agentType defaults to 'assistant': helmx's agentType is a Profile ID, and the host's
   // ProfileService.ensureDefault guarantees assistant exists (same source as root). Never inherit
-  // the upstream 'general-purpose' -- helm has no such profile, and NativeSpawn's strict validation would hard-fail.
+  // the upstream 'general-purpose' -- helmx has no such profile, and NativeSpawn's strict validation would hard-fail.
   const agentType = resumed?.agentType ?? payload.agentType ?? 'assistant'
   const model = resumed !== undefined ? resumed.model : payload.model
   const isolation = resumed !== undefined ? resumed.isolation : payload.isolation

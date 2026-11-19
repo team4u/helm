@@ -4,7 +4,7 @@
  * React/SDK）。默认只替换数据 hooks 以构造状态；上下文始终读取真实 Provider。
  */
 import { fileURLToPath } from 'node:url'
-import * as HelmPluginClient from '@helm/plugin-client'
+import * as HelmxPluginClient from '@helmx/plugin-client'
 import { importCompiledPluginClient, mountPluginNamespaceGlobals } from './plugin-namespace.js'
 
 export interface BuiltinClientStubOptions {
@@ -20,10 +20,10 @@ export function setBuiltinClientStub(options: BuiltinClientStubOptions = {}): vo
 }
 
 const sharedPluginClientNamespace = {
-  ...HelmPluginClient,
-  usePluginDoc: (name: string) => (realHooks ? HelmPluginClient.usePluginDoc(name) : stub.docs?.[name]),
+  ...HelmxPluginClient,
+  usePluginDoc: (name: string) => (realHooks ? HelmxPluginClient.usePluginDoc(name) : stub.docs?.[name]),
   usePluginSessionDoc: (name: string, options?: { conversationId?: number }) =>
-    realHooks ? HelmPluginClient.usePluginSessionDoc(name, options) : undefined,
+    realHooks ? HelmxPluginClient.usePluginSessionDoc(name, options) : undefined,
 }
 
 export function mountSharedPluginNamespaces(options: { realHooks?: boolean } = {}): void {

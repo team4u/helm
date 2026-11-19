@@ -9,7 +9,7 @@
  * - Delegates concurrency gates, dependency graphs, service barriers, transactions, and external DX helpers.
  */
 import {
-  HelmError,
+  HelmxError,
   type ActionManifest,
   type ConversationSummary,
   type HookName,
@@ -34,7 +34,7 @@ import {
   type PluginUpdateResult,
   type PublicPluginDoc,
   type PublicPluginSessionDoc,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import { HOOK_ALLOWED_ACTIONS, HookPipeline } from './hooks.js';
 import { PluginTaskTracker } from './tracking.js';
 import type { PluginPackageManager, PackageManagerHost } from './package-manager.js';
@@ -307,7 +307,7 @@ export class PluginHost {
 
   private requirePackageManager(): PluginPackageManager {
     if (this.packageManager === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'not_supported',
         'Current kernel has not wired the plugin package manager (managed install/update/remove unavailable)',
         501,
@@ -505,7 +505,7 @@ export class PluginHost {
     const state = requirePlugin(this.plugins, pluginId);
     const schema = state.configSchema ?? {};
     if (!this.configStore) {
-      throw new HelmError(
+      throw new HelmxError(
         'config_store_unavailable',
         'PluginHost not provide persist PluginConfigStore, modify plugin config do not by support',
         501,
@@ -680,7 +680,7 @@ export class PluginHost {
 
   private assertNotDisposed(): void {
     if (this.disposed) {
-      throw new HelmError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
+      throw new HelmxError('plugin_host_disposed', 'PluginHost has already been disposed', 409);
     }
   }
 }

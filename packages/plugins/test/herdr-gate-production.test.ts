@@ -15,11 +15,11 @@ import { MutableNodeChannel, nodeFixture, pollUntil } from './herdr-node-fixture
 
 /** 哨兵：Gate 子进程启动一个独立进程组的 sleep；写 pid 文件供断言存活性。 */
 function sentinelScript(root: string): string {
-  return `mkdir -p '${root}/.helm'; (sleep 300) & echo \$! > '${root}/.helm/sentinel.pid'; wait`
+  return `mkdir -p '${root}/.helmx'; (sleep 300) & echo \$! > '${root}/.helmx/sentinel.pid'; wait`
 }
 
 test('远端节点 Gate abort 后哨兵进程组被清理（真实节点通道）', { timeout: 60_000 }, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'helm-gate-abort-'))
+  const root = await mkdtemp(join(tmpdir(), 'helmx-gate-abort-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const fixture = await nodeFixture(t)
   const channel = new MutableNodeChannel()
@@ -29,7 +29,7 @@ test('远端节点 Gate abort 后哨兵进程组被清理（真实节点通道�
   const pending = transport.runGate({ nodeId: 'gate-node' }, sentinelScript(root), root, controller.signal, {
     GATE_ROOT: root,
   })
-  const sentinelPidFile = join(root, '.helm', 'sentinel.pid')
+  const sentinelPidFile = join(root, '.helmx', 'sentinel.pid')
   await pollUntil(
     async () => {
       try {
@@ -62,7 +62,7 @@ test('远端节点 Gate abort 后哨兵进程组被清理（真实节点通道�
 })
 
 test('远端节点 Gate 无限输出在限额处流式失败，不先聚合', { timeout: 60_000 }, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'helm-gate-overflow-'))
+  const root = await mkdtemp(join(tmpdir(), 'helmx-gate-overflow-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   const fixture = await nodeFixture(t)
   const channel = new MutableNodeChannel()
@@ -76,7 +76,7 @@ test('远端节点 Gate 无限输出在限额处流式失败，不先聚合', { 
 })
 
 test('远端节点 Gate 关闭输出后仍须等待命令正常退出', { timeout: 60_000 }, async (t) => {
-  const root = await mkdtemp(join(tmpdir(), 'helm-gate-quiet-'))
+  const root = await mkdtemp(join(tmpdir(), 'helmx-gate-quiet-'))
   await mkdir(root, { recursive: true })
   t.after(() => rm(root, { recursive: true, force: true }))
   const fixture = await nodeFixture(t)

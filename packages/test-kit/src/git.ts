@@ -1,5 +1,5 @@
 /**
- * Git repository fixture acceleration helper (`@helm/test-kit/git`).
+ * Git repository fixture acceleration helper (`@helmx/test-kit/git`).
  * Initialize a template repository once, then use `cpSync` to quickly replicate independent Git
  * repositories, avoiding the process overhead of spawning `git init / add / commit` per test case.
  */
@@ -39,8 +39,8 @@ export function initGitRepo(
 ): string {
   mkdirSync(dir, { recursive: true })
   runGit(dir, ['init', '-q', '-b', 'main'])
-  runGit(dir, ['config', 'user.email', 'test@helm.local'])
-  runGit(dir, ['config', 'user.name', 'helm-test'])
+  runGit(dir, ['config', 'user.email', 'test@helmx.local'])
+  runGit(dir, ['config', 'user.name', 'helmx-test'])
   const entries = Object.entries(files)
   for (const [relPath, content] of entries) {
     const absPath = join(dir, relPath)
@@ -71,7 +71,7 @@ export interface GitTemplate {
  * per-case repositories in milliseconds with `cloneTo`.
  */
 export function createGitTemplate(
-  prefix = 'helm-git-template-',
+  prefix = 'helmx-git-template-',
   setup?: (dir: string) => void,
 ): GitTemplate {
   const templateDir = mkdtempSync(join(tmpdir(), prefix))

@@ -8,7 +8,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationEntry, ConversationLive } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import {
   importWorkflowModels,
@@ -349,10 +349,10 @@ test('resolveWorkflowRunForTool：按 parentToolCallId 精确命中，完成后�
 
 test('resolveSubagentExecutionMeta：parentToolCallId 与 structuredOutput 精确提取；run 节点 worktree 优先；零 footer 刮取', { timeout: 60_000 }, () => {
   const run = workflowRun('wf_link', 1, 'running', 3, 'call-bg')
-  run.nodes = [{ id: 'n1', kind: 'agent', status: 'running', worktree: { path: '/wt/link', branch: 'helm/bg-link' } }]
+  run.nodes = [{ id: 'n1', kind: 'agent', status: 'running', worktree: { path: '/wt/link', branch: 'helmx/bg-link' } }]
   const meta = m.resolveSubagentExecutionMeta({ callId: 'call-bg' }, 1, [run])
   assert.equal(meta.run?.id, 'wf_link')
-  assert.deepEqual(meta.worktree, { path: '/wt/link', branch: 'helm/bg-link' })
+  assert.deepEqual(meta.worktree, { path: '/wt/link', branch: 'helmx/bg-link' })
   assert.deepEqual(m.resolveSubagentExecutionMeta({ callId: 'call-bg' }, 2, [run]), {})
 
   // structuredOutput 携带完整 execution + runId（含空格路径）
@@ -367,7 +367,7 @@ test('resolveSubagentExecutionMeta：parentToolCallId 与 structuredOutput 精�
           nodeId: 'node-a',
           executionId: 'pane-9',
           effectiveCwd: '/wt dir/sub',
-          worktree: { path: '/wt dir/sub', branch: 'helm/bg-main' },
+          worktree: { path: '/wt dir/sub', branch: 'helmx/bg-main' },
         },
       },
     },
@@ -375,30 +375,30 @@ test('resolveSubagentExecutionMeta：parentToolCallId 与 structuredOutput 精�
     runs,
   )
   assert.equal(structuredMeta.run?.id, 'wf_abc123')
-  assert.deepEqual(structuredMeta.worktree, { path: '/wt dir/sub', branch: 'helm/bg-main' })
+  assert.deepEqual(structuredMeta.worktree, { path: '/wt dir/sub', branch: 'helmx/bg-main' })
   assert.equal(structuredMeta.executionId, 'pane-9')
   assert.equal(structuredMeta.nodeId, 'node-a')
   assert.equal(structuredMeta.effectiveCwd, '/wt dir/sub')
 
   // run 节点 worktree 优先于 structuredOutput
   const prefRun = workflowRun('wf_pref', 1, 'running', 3, 'call-p')
-  prefRun.nodes = [{ id: 'n1', kind: 'agent', status: 'running', worktree: { path: '/wt/from-run', branch: 'helm/from-run' } }]
+  prefRun.nodes = [{ id: 'n1', kind: 'agent', status: 'running', worktree: { path: '/wt/from-run', branch: 'helmx/from-run' } }]
   const prefMeta = m.resolveSubagentExecutionMeta(
     {
       callId: 'call-p',
-      structuredOutput: { ok: true, runId: 'wf_pref', execution: { worktree: { path: '/wt/from-json', branch: 'helm/from-json' } } },
+      structuredOutput: { ok: true, runId: 'wf_pref', execution: { worktree: { path: '/wt/from-json', branch: 'helmx/from-json' } } },
     },
     1,
     [prefRun],
   )
-  assert.deepEqual(prefMeta.worktree, { path: '/wt/from-run', branch: 'helm/from-run' })
+  assert.deepEqual(prefMeta.worktree, { path: '/wt/from-run', branch: 'helmx/from-run' })
 
   // 旧式 [subagent ...] 尾行或普通正文文本：绝不刮取
   assert.deepEqual(
     m.resolveSubagentExecutionMeta(
       {
         callId: 'call-none',
-        result: '已转入后台\n[subagent background runId=wf_abc123 worktree=/srv/wt/helm-42@helm/wf-run-1]',
+        result: '已转入后台\n[subagent background runId=wf_abc123 worktree=/srv/wt/helmx-42@helmx/wf-run-1]',
       },
       1,
       runs,
@@ -409,7 +409,7 @@ test('resolveSubagentExecutionMeta：parentToolCallId 与 structuredOutput 精�
 
 test('buildSubagentStreamLines：剥离 structured_output_contract 样板并合并 ConversationLive', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [
-    entry('1', 'helm.input', {
+    entry('1', 'helmx.input', {
       data: {
         text: '帮我修复构建\n\n<structured_output_contract>\n调用 register_structured_output 工具\nSchema: {}\n</structured_output_contract>',
         origin: 'agent',
@@ -439,6 +439,6 @@ test('buildSubagentStreamLines：剥离 structured_output_contract 样板并合�
     tools: [{ callId: 'lc1', toolName: 'read', input: { file_path: '/a.ts' }, status: 'running' }],
     updatedAt: 1234,
   }
-  const liveLines = m.buildSubagentStreamLines([entry('1', 'helm.input', { data: { text: '继续任务', origin: 'agent' } })], live, true)
+  const liveLines = m.buildSubagentStreamLines([entry('1', 'helmx.input', { data: { text: '继续任务', origin: 'agent' } })], live, true)
   assert.deepEqual(liveLines.map((l) => l.kind), ['prompt', 'thinking', 'tool', 'text'])
 })

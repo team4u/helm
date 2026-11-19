@@ -99,13 +99,13 @@ const DEFAULT_MAX_TOKENS = 16_384
 
 /**
  * The pi models this plugin builds carry magpieOwnedBy (for per-provider quota attribution) and
- * helmContextWindowKnown (whether the upstream window is really known; see HelmModelSourceMeta in
+ * helmxContextWindowKnown (whether the upstream window is really known; see HelmxModelSourceMeta in
  * runtime/models.ts). Model<MagpieApi>'s compat field distributes conditionally by api;
  * openai-completions models have no compat field, so the extra fields are expressed precisely via a cross type.
  */
 export type PiMagpieModel = Model<MagpieApi> & {
   magpieOwnedBy?: string
-  helmContextWindowKnown?: boolean
+  helmxContextWindowKnown?: boolean
 }
 
 /** One catalog entry -> a pi model. */
@@ -133,7 +133,7 @@ export function toPiModel(entry: MagpieModelEntry, root: string): PiMagpieModel 
     // Only a positive upstream window counts as known; the fallback value must never pose as a real
     // window (contextUsage does not show a percentage based on it).
     contextWindow: upstreamWindow ?? DEFAULT_CONTEXT_WINDOW,
-    helmContextWindowKnown: upstreamWindow !== undefined,
+    helmxContextWindowKnown: upstreamWindow !== undefined,
     maxTokens: positive(entry.max_output_tokens) ?? DEFAULT_MAX_TOKENS,
   }
   if (entry.owned_by) model.magpieOwnedBy = entry.owned_by

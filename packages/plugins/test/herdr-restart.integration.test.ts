@@ -8,7 +8,7 @@
  *   running 窗格与仍归 workflow 管辖的 keepalive 窗格；
  * - 启动对账 reconcile()：不误杀携带持久化 outputFileName 的 running 窗格
  *   （无论当前 idle/done/working/blocked/已退出待判定）；
- * - 场景 ①：重启窗口内 .helm/<outputFileName> 已写完，reattach 优先直接校验、
+ * - 场景 ①：重启窗口内 .helmx/<outputFileName> 已写完，reattach 优先直接校验、
  *   跑 gate（回传 onGateResult）、标记 keepalive 并返回产物（不重开 tab/prompt）；
  * - 场景 ②：重启后窗格仍在 working/blocked（含 CAS AskDoc 冲突 :r1 恢复与
  *   reattach 后 steer 重定向文件）及 idle 缺文件单次自愈闭环；
@@ -24,13 +24,13 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import { setTimeout as delay } from 'node:timers/promises'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
-  HelmError,
+  HelmxError,
   type AgentExecutionInfo,
   type AgentGateResult,
   type PluginDefinition,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
@@ -72,7 +72,7 @@ class RestartFakeTransport extends BaseFakeHerdrTransport {
       case 'tab.close': {
         const tabId = params['tab_id'] as string
         const tab = this.tabs.get(tabId)
-        if (!tab) throw new HelmError('tab_not_found', `no tab ${tabId}`, 404)
+        if (!tab) throw new HelmxError('tab_not_found', `no tab ${tabId}`, 404)
         tab.closed = true
         return { type: 'ok' }
       }
@@ -92,20 +92,20 @@ class RestartFakeTransport extends BaseFakeHerdrTransport {
         const until = ((params['until'] as string[]) ?? []).map((s) => s as HerdrPaneStatus)
         for (let i = 0; i < 2_000; i += 1) {
           if (this.closed || !this.panes.has(pane.paneId)) {
-            throw new HelmError('agent_not_found', `pane ${pane.paneId} closed`, 404)
+            throw new HelmxError('agent_not_found', `pane ${pane.paneId} closed`, 404)
           }
           if (until.length === 0 || until.includes(pane.agentStatus)) {
             return { type: 'agent_info', agent: agentInfoOf(pane) }
           }
           await delay(10)
         }
-        throw new HelmError('timeout', 'timed out waiting for agent status', 408)
+        throw new HelmxError('timeout', 'timed out waiting for agent status', 408)
       }
       case 'agent.prompt': {
         const ref = params['target']
         const byId = typeof ref === 'string' ? this.panes.get(ref) : undefined
         const pane = byId ?? [...this.panes.values()].find((p) => p.name === ref)
-        if (!pane) throw new HelmError('agent_not_found', `no pane ${String(ref)}`, 404)
+        if (!pane) throw new HelmxError('agent_not_found', `no pane ${String(ref)}`, 404)
         const text = params['text'] as string
         const script = this.promptStatus
         pane.agentStatus = Array.isArray(script) ? (script.shift() ?? 'idle') : script
@@ -121,7 +121,7 @@ class RestartFakeTransport extends BaseFakeHerdrTransport {
           if (this.allowReadAfterLost) {
             return { type: 'pane_read', read: { pane_id: id, text: this.lastLostReadText } }
           }
-          throw new HelmError('agent_not_found', `no pane ${id}`, 404)
+          throw new HelmxError('agent_not_found', `no pane ${id}`, 404)
         }
         const text = this.snapshotText ?? `tail of ${pane.paneId}: SECRET-TOKEN-VALUE`
         return { type: 'pane_read', read: { pane_id: pane.paneId, text } }
@@ -140,13 +140,13 @@ class RestartFakeTransport extends BaseFakeHerdrTransport {
       case 'session.snapshot':
         return this.buildSessionSnapshot()
       default:
-        throw new HelmError('method_not_found', `fake transport 不支持 ${method}`, 400)
+        throw new HelmxError('method_not_found', `fake transport 不支持 ${method}`, 400)
     }
   }
 }
 
 function fileNameOf(promptText: string): string {
-  const m = /\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(json|md))/.exec(promptText)
+  const m = /\.helmx\/(wf-out-[A-Za-z0-9_.-]+\.(json|md))/.exec(promptText)
   if (!m) throw new Error(`prompt 中未找到交接文件名: ${promptText}`)
   return m[1]!
 }
@@ -217,7 +217,7 @@ test('PaneRegistry：持久化 outputFileName，恢复严格校验非法文件�
     paneId: 'w1:p1',
     tabId: 'w1:t1',
     effectiveCwd: '/tmp/work',
-    agentName: 'helm-wf-1',
+    agentName: 'helmx-wf-1',
     routing: { kind: 'pi' },
     parentConversationId: 1,
     outcome: 'running',
@@ -243,7 +243,7 @@ test('PaneRegistry：持久化 outputFileName，恢复严格校验非法文件�
               paneId: 'w1:p1',
               tabId: 'w1:t1',
               effectiveCwd: '/tmp/work',
-              agentName: 'helm-wf-1',
+              agentName: 'helmx-wf-1',
               routing: { kind: 'pi' },
               parentConversationId: 1,
               outcome: 'running',
@@ -252,7 +252,7 @@ test('PaneRegistry：持久化 outputFileName，恢复严格校验非法文件�
             },
           ],
         }),
-      (err: unknown) => err instanceof HelmError && err.code === 'herdr_managed_invalid',
+      (err: unknown) => err instanceof HelmxError && err.code === 'herdr_managed_invalid',
       `非法交接文件名 ${JSON.stringify(bad)} 必须显式抛 herdr_managed_invalid`,
     )
   }
@@ -264,9 +264,9 @@ test('PaneRegistry：持久化 outputFileName，恢复严格校验非法文件�
 
 test('T4 场景 ①：runtime.close() 保活 running 窗格；重启窗口文件写完后 reattach 直接过 gate 并置 keepalive', { timeout: 60_000 }, async (t) => {
   const defer = useCleanupStack(t)
-  const dataDir = useTempDir(t, 'helm-herdr-t4-s1-data-')
-  const workDir = useTempDir(t, 'helm-herdr-t4-s1-work-')
-  const sockDir = useTempDir(t, 'helm-herdr-t4-s1-sock-')
+  const dataDir = useTempDir(t, 'helmx-herdr-t4-s1-data-')
+  const workDir = useTempDir(t, 'helmx-herdr-t4-s1-work-')
+  const sockDir = useTempDir(t, 'helmx-herdr-t4-s1-sock-')
   const socketPath = join(sockDir, 'herdr.sock')
   const transport = new RestartFakeTransport()
   const server = await serveTransport(transport, socketPath)
@@ -317,8 +317,8 @@ test('T4 场景 ①：runtime.close() 保活 running 窗格；重启窗口文件
   )
 
   // 重启窗口期内：外部 CLI 完成写交接文件并退出为 done。
-  const outputPath = join(workDir, '.helm', capturedPromptFile)
-  mkdirSync(join(workDir, '.helm'), { recursive: true })
+  const outputPath = join(workDir, '.helmx', capturedPromptFile)
+  mkdirSync(join(workDir, '.helmx'), { recursive: true })
   writeFileSync(outputPath, JSON.stringify({ ok: true, value: 42 }), 'utf8')
   transport.advancePane(capturedPaneId, 'done')
 
@@ -383,9 +383,9 @@ test('T4 场景 ①：runtime.close() 保活 running 窗格；重启窗口文件
 
 test('T4 场景 ②a：重启后窗格仍 working（含 steer 重定向交接文件），重挂监听与后续 steer 正常完成', { timeout: 60_000 }, async (t) => {
   const defer = useCleanupStack(t)
-  const dataDir = useTempDir(t, 'helm-herdr-t4-s2a-data-')
-  const workDir = useTempDir(t, 'helm-herdr-t4-s2a-work-')
-  const sockDir = useTempDir(t, 'helm-herdr-t4-s2a-sock-')
+  const dataDir = useTempDir(t, 'helmx-herdr-t4-s2a-data-')
+  const workDir = useTempDir(t, 'helmx-herdr-t4-s2a-work-')
+  const sockDir = useTempDir(t, 'helmx-herdr-t4-s2a-sock-')
   const socketPath = join(sockDir, 'herdr.sock')
   const transport = new RestartFakeTransport()
   const server = await serveTransport(transport, socketPath)
@@ -457,9 +457,9 @@ test('T4 场景 ②a：重启后窗格仍 working（含 steer 重定向交接文
   assert.ok(steeredFile !== '' && steeredFile !== originalFile)
 
   // 把旧文件与新文件都写入不同内容，验证只采信最新重定向文件。
-  mkdirSync(join(workDir, '.helm'), { recursive: true })
-  writeFileSync(join(workDir, '.helm', originalFile), 'stale-content', 'utf8')
-  writeFileSync(join(workDir, '.helm', steeredFile), 'reattached-steered-ok', 'utf8')
+  mkdirSync(join(workDir, '.helmx'), { recursive: true })
+  writeFileSync(join(workDir, '.helmx', originalFile), 'stale-content', 'utf8')
+  writeFileSync(join(workDir, '.helmx', steeredFile), 'reattached-steered-ok', 'utf8')
   transport.advancePane(paneId, 'done')
 
   const result = await reattachPromise
@@ -472,9 +472,9 @@ test('T4 场景 ②a：重启后窗格仍 working（含 steer 重定向交接文
 
 test('T4 场景 ②a-续：launch_pending 状态重挂等待就绪后完成，且支持省略 agentType 按 executionId 接管', { timeout: 60_000 }, async (t) => {
   const defer = useCleanupStack(t)
-  const dataDir = useTempDir(t, 'helm-herdr-t4-lp-data-')
-  const workDir = useTempDir(t, 'helm-herdr-t4-lp-work-')
-  const sockDir = useTempDir(t, 'helm-herdr-t4-lp-sock-')
+  const dataDir = useTempDir(t, 'helmx-herdr-t4-lp-data-')
+  const workDir = useTempDir(t, 'helmx-herdr-t4-lp-work-')
+  const sockDir = useTempDir(t, 'helmx-herdr-t4-lp-sock-')
   const socketPath = join(sockDir, 'herdr.sock')
   const transport = new RestartFakeTransport()
   const server = await serveTransport(transport, socketPath)
@@ -530,8 +530,8 @@ test('T4 场景 ②a-续：launch_pending 状态重挂等待就绪后完成，�
   await waitFor(() => resolved !== undefined)
   // 推进 launchPending -> working -> 写交接文件 -> done
   transport.advancePane(paneId, 'working')
-  mkdirSync(join(workDir, '.helm'), { recursive: true })
-  writeFileSync(join(workDir, '.helm', handoffFile), 'launch-pending-ok', 'utf8')
+  mkdirSync(join(workDir, '.helmx'), { recursive: true })
+  writeFileSync(join(workDir, '.helmx', handoffFile), 'launch-pending-ok', 'utf8')
   transport.advancePane(paneId, 'done')
 
   assert.equal(await reattachPromise, 'launch-pending-ok')
@@ -544,9 +544,9 @@ test('T4 场景 ②a-续：launch_pending 状态重挂等待就绪后完成，�
 
 test('T4 场景 ②b：重启前 blocked 的窗格重挂后重建 AskDoc（解决 ask_id_conflict）并走 CAS 审批完成', { timeout: 60_000 }, async (t) => {
   const defer = useCleanupStack(t)
-  const dataDir = useTempDir(t, 'helm-herdr-t4-s2b-data-')
-  const workDir = useTempDir(t, 'helm-herdr-t4-s2b-work-')
-  const sockDir = useTempDir(t, 'helm-herdr-t4-s2b-sock-')
+  const dataDir = useTempDir(t, 'helmx-herdr-t4-s2b-data-')
+  const workDir = useTempDir(t, 'helmx-herdr-t4-s2b-work-')
+  const sockDir = useTempDir(t, 'helmx-herdr-t4-s2b-sock-')
   const socketPath = join(sockDir, 'herdr.sock')
   const transport = new RestartFakeTransport()
   transport.promptStatus = 'blocked'
@@ -618,8 +618,8 @@ test('T4 场景 ②b：重启前 blocked 的窗格重挂后重建 AskDoc（解�
   await waitFor(() => transport.sendKeysLog.length === 1)
   assert.deepEqual(transport.sendKeysLog[0]!.keys, ['y'])
 
-  mkdirSync(join(workDir, '.helm'), { recursive: true })
-  writeFileSync(join(workDir, '.helm', handoffFile), 'blocked-recovered-ok', 'utf8')
+  mkdirSync(join(workDir, '.helmx'), { recursive: true })
+  writeFileSync(join(workDir, '.helmx', handoffFile), 'blocked-recovered-ok', 'utf8')
   transport.advancePane(paneId, 'done')
 
   assert.equal(await reattachPromise, 'blocked-recovered-ok')
@@ -627,9 +627,9 @@ test('T4 场景 ②b：重启前 blocked 的窗格重挂后重建 AskDoc（解�
 
 test('T4 场景 ②c：重启后窗格已 idle 但缺交接文件 -> 走单次原地追问自愈；仍无文件则诚实违约', { timeout: 60_000 }, async (t) => {
   const defer = useCleanupStack(t)
-  const dataDir = useTempDir(t, 'helm-herdr-t4-s2c-data-')
-  const workDir = useTempDir(t, 'helm-herdr-t4-s2c-work-')
-  const sockDir = useTempDir(t, 'helm-herdr-t4-s2c-sock-')
+  const dataDir = useTempDir(t, 'helmx-herdr-t4-s2c-data-')
+  const workDir = useTempDir(t, 'helmx-herdr-t4-s2c-work-')
+  const sockDir = useTempDir(t, 'helmx-herdr-t4-s2c-sock-')
   const socketPath = join(sockDir, 'herdr.sock')
   const transport = new RestartFakeTransport()
   const server = await serveTransport(transport, socketPath)
@@ -662,8 +662,8 @@ test('T4 场景 ②c：重启后窗格已 idle 但缺交接文件 -> 走单次�
   transport.promptStatus = 'done'
   transport.onPrompt = (pane, text) => {
     healCount += 1
-    mkdirSync(join(pane.cwd, '.helm'), { recursive: true })
-    writeFileSync(join(pane.cwd, '.helm', fileNameOf(text)), 'healed-after-restart', 'utf8')
+    mkdirSync(join(pane.cwd, '.helmx'), { recursive: true })
+    writeFileSync(join(pane.cwd, '.helmx', fileNameOf(text)), 'healed-after-restart', 'utf8')
   }
 
   const output = await kernel.spawnAgent({
@@ -675,11 +675,11 @@ test('T4 场景 ②c：重启后窗格已 idle 但缺交接文件 -> 走单次�
   })
   assert.equal(healCount, 1, '仅发起一次原地追问自愈')
   assert.equal(output, 'healed-after-restart')
-  assert.equal(existsSync(join(workDir, '.helm', handoffFile)), false)
+  assert.equal(existsSync(join(workDir, '.helmx', handoffFile)), false)
 
   // 若自愈追问后仍无交接文件：显式报 herdr_output_contract_violation 并附 40 行脱敏快照、标 failed。
-  const dataDir2 = useTempDir(t, 'helm-herdr-t4-s2c-fail-data-')
-  const workDir2 = useTempDir(t, 'helm-herdr-t4-s2c-fail-work-')
+  const dataDir2 = useTempDir(t, 'helmx-herdr-t4-s2c-fail-data-')
+  const workDir2 = useTempDir(t, 'helmx-herdr-t4-s2c-fail-work-')
   let paneId2 = ''
   transport.onPrompt = (pane) => {
     paneId2 = pane.paneId
@@ -708,7 +708,7 @@ test('T4 场景 ②c：重启后窗格已 idle 但缺交接文件 -> 走单次�
       reattach: { executionId: paneId2 },
     }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError)
+      assert.ok(err instanceof HelmxError)
       assert.equal(err.code, 'herdr_output_contract_violation')
       assert.ok(/\[REDACTED(?::stash:[0-9a-f-]{36})?\]/.test(err.message))
       assert.ok(!err.message.includes('SECRET-TOKEN-VALUE'))
@@ -727,9 +727,9 @@ test('T4 场景 ②c：重启后窗格已 idle 但缺交接文件 -> 走单次�
 
 test('T4 场景 ③：重启后窗格已消失且无文件诚实抛 herdr_pane_lost 附脱敏快照并标 failed；有坏文件抛违约', { timeout: 60_000 }, async (t) => {
   const defer = useCleanupStack(t)
-  const dataDir = useTempDir(t, 'helm-herdr-t4-s3-data-')
-  const workDir = useTempDir(t, 'helm-herdr-t4-s3-work-')
-  const sockDir = useTempDir(t, 'helm-herdr-t4-s3-sock-')
+  const dataDir = useTempDir(t, 'helmx-herdr-t4-s3-data-')
+  const workDir = useTempDir(t, 'helmx-herdr-t4-s3-work-')
+  const sockDir = useTempDir(t, 'helmx-herdr-t4-s3-sock-')
   const socketPath = join(sockDir, 'herdr.sock')
   const transport = new RestartFakeTransport()
   transport.allowReadAfterLost = true
@@ -779,7 +779,7 @@ test('T4 场景 ③：重启后窗格已消失且无文件诚实抛 herdr_pane_l
       reattach: { executionId: paneId },
     }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError)
+      assert.ok(err instanceof HelmxError)
       assert.equal(err.code, 'herdr_pane_lost')
       assert.ok(/\[REDACTED(?::stash:[0-9a-f-]{36})?\]/.test(err.message), '诊断快照必须脱敏')
       assert.ok(!err.message.includes('SECRET-TOKEN-VALUE'), '不得泄露机密明文')
@@ -793,8 +793,8 @@ test('T4 场景 ③：重启后窗格已消失且无文件诚实抛 herdr_pane_l
   assert.equal(list.panes.find((p) => p.paneId === paneId)?.outcome, 'failed', '丢失窗格标 failed')
 
   // 补充：若重启窗口存在损坏 JSON 文件且窗格已消失，显式报 herdr_output_contract_violation。
-  const dataDir2 = useTempDir(t, 'helm-herdr-t4-s3b-data-')
-  const workDir2 = useTempDir(t, 'helm-herdr-t4-s3b-work-')
+  const dataDir2 = useTempDir(t, 'helmx-herdr-t4-s3b-data-')
+  const workDir2 = useTempDir(t, 'helmx-herdr-t4-s3b-work-')
   let paneId2 = ''
   let handoffFile2 = ''
   transport.onPrompt = (pane, text) => {
@@ -815,8 +815,8 @@ test('T4 场景 ③：重启后窗格已消失且无文件诚实抛 herdr_pane_l
   await kernel2.close()
   await firstSpawn2
 
-  mkdirSync(join(workDir2, '.helm'), { recursive: true })
-  writeFileSync(join(workDir2, '.helm', handoffFile2), '{broken json', 'utf8')
+  mkdirSync(join(workDir2, '.helmx'), { recursive: true })
+  writeFileSync(join(workDir2, '.helmx', handoffFile2), '{broken json', 'utf8')
   transport.panes.delete(paneId2)
   assert.ok(handoffFile !== '' && handoffFile2 !== '')
 
@@ -830,7 +830,7 @@ test('T4 场景 ③：重启后窗格已消失且无文件诚实抛 herdr_pane_l
       schema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'] },
       reattach: { executionId: paneId2 },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'herdr_output_contract_violation',
+    (err: unknown) => err instanceof HelmxError && err.code === 'herdr_output_contract_violation',
   )
 })
 
@@ -840,9 +840,9 @@ test('T4 场景 ③：重启后窗格已消失且无文件诚实抛 herdr_pane_l
 
 test('前置插件 service.start() 早于 herdr.start() 发起 reattach 也能成功接管（prepare 屏障就位）', { timeout: 60_000 }, async (t) => {
   const defer = useCleanupStack(t)
-  const dataDir = useTempDir(t, 'helm-herdr-t4-order-data-')
-  const workDir = useTempDir(t, 'helm-herdr-t4-order-work-')
-  const sockDir = useTempDir(t, 'helm-herdr-t4-order-sock-')
+  const dataDir = useTempDir(t, 'helmx-herdr-t4-order-data-')
+  const workDir = useTempDir(t, 'helmx-herdr-t4-order-work-')
+  const sockDir = useTempDir(t, 'helmx-herdr-t4-order-sock-')
   const socketPath = join(sockDir, 'herdr.sock')
   const transport = new RestartFakeTransport()
   const server = await serveTransport(transport, socketPath)
@@ -866,8 +866,8 @@ test('前置插件 service.start() 早于 herdr.start() 发起 reattach 也能�
   await kernel.close()
   await firstSpawn
 
-  mkdirSync(join(workDir, '.helm'), { recursive: true })
-  writeFileSync(join(workDir, '.helm', handoffFile), 'early-start-reattach-ok', 'utf8')
+  mkdirSync(join(workDir, '.helmx'), { recursive: true })
+  writeFileSync(join(workDir, '.helmx', handoffFile), 'early-start-reattach-ok', 'utf8')
   transport.advancePane(paneId, 'done')
 
   let earlyReattachResult: unknown
@@ -897,9 +897,9 @@ test('前置插件 service.start() 早于 herdr.start() 发起 reattach 也能�
 
 test('reattach 冲突/缺失边界与 isClosing === false 停用仍正常关闭非 failed 窗格', { timeout: 60_000 }, async (t) => {
   const defer = useCleanupStack(t)
-  const dataDir = useTempDir(t, 'helm-herdr-t4-edge-data-')
-  const workDir = useTempDir(t, 'helm-herdr-t4-edge-work-')
-  const sockDir = useTempDir(t, 'helm-herdr-t4-edge-sock-')
+  const dataDir = useTempDir(t, 'helmx-herdr-t4-edge-data-')
+  const workDir = useTempDir(t, 'helmx-herdr-t4-edge-work-')
+  const sockDir = useTempDir(t, 'helmx-herdr-t4-edge-sock-')
   const socketPath = join(sockDir, 'herdr.sock')
   const transport = new RestartFakeTransport()
   const server = await serveTransport(transport, socketPath)
@@ -928,7 +928,7 @@ test('reattach 冲突/缺失边界与 isClosing === false 停用仍正常关闭�
       runGate: async () => ({ ok: true, output: 'ok' }),
       redact: (s) => s,
       completeText: async () => '',
-      buildSpawnEnv: (_c, cwd) => ({ HELM_CWD: cwd }),
+      buildSpawnEnv: (_c, cwd) => ({ HELMX_CWD: cwd }),
     } satisfies PluginHostBackend,
   })
   let hostDisposed = false
@@ -955,7 +955,7 @@ test('reattach 冲突/缺失边界与 isClosing === false 停用仍正常关闭�
   assert.equal(transport.tabs.get(paneTabId)?.closed, true, 'isClosing=false 时停止服务仍必须关闭 running 窗格')
 
   // B) reattach 边界与冲突拒绝校验。
-  const dataDir2 = useTempDir(t, 'helm-herdr-t4-val-data-')
+  const dataDir2 = useTempDir(t, 'helmx-herdr-t4-val-data-')
   const kernel = await openKernelWithHerdr(defer, dataDir2, workDir, socketPath, { configureFirst: true })
 
   await assert.rejects(
@@ -966,7 +966,7 @@ test('reattach 冲突/缺失边界与 isClosing === false 停用仍正常关闭�
       resume: 'p1',
       reattach: { executionId: 'p1' },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
     'reattach 与 resume 互斥显式报错',
   )
 
@@ -978,7 +978,7 @@ test('reattach 冲突/缺失边界与 isClosing === false 停用仍正常关闭�
       fork: true,
       reattach: { executionId: 'p1' },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
     'reattach 与 fork 互斥显式报错',
   )
 
@@ -989,7 +989,7 @@ test('reattach 冲突/缺失边界与 isClosing === false 停用仍正常关闭�
       prompt: 'x',
       reattach: { executionId: 'nonexistent-pane' },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'herdr_reattach_missing',
+    (err: unknown) => err instanceof HelmxError && err.code === 'herdr_reattach_missing',
     '缺失受管窗格记录显式抛 herdr_reattach_missing',
   )
 
@@ -998,8 +998,8 @@ test('reattach 冲突/缺失边界与 isClosing === false 停用仍正常关闭�
   let finishedPaneId = ''
   transport.onPrompt = (pane, text) => {
     finishedPaneId = pane.paneId
-    mkdirSync(join(pane.cwd, '.helm'), { recursive: true })
-    writeFileSync(join(pane.cwd, '.helm', fileNameOf(text)), 'done-output', 'utf8')
+    mkdirSync(join(pane.cwd, '.helmx'), { recursive: true })
+    writeFileSync(join(pane.cwd, '.helmx', fileNameOf(text)), 'done-output', 'utf8')
   }
   await kernel.spawnAgent({
     parentConversationId: 1,
@@ -1015,7 +1015,7 @@ test('reattach 冲突/缺失边界与 isClosing === false 停用仍正常关闭�
       cwd: workDir,
       reattach: { executionId: finishedPaneId },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'herdr_reattach_missing',
+    (err: unknown) => err instanceof HelmxError && err.code === 'herdr_reattach_missing',
     'keepalive（已清 outputFileName）窗格重挂显式抛 herdr_reattach_missing',
   )
 })
@@ -1028,7 +1028,7 @@ test('PaneRegistry.prune：结算记录有界回收，running/keepalive 绝不�
     paneId,
     tabId: `t-${paneId}`,
     effectiveCwd: '/tmp',
-    agentName: 'helm-wf-x',
+    agentName: 'helmx-wf-x',
     routing: { kind: 'pi' },
     parentConversationId: 1,
     outcome,

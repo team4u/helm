@@ -2,7 +2,7 @@
  * Kernel-side consumption semantics for node upgrade draining (`node_draining`):
  * - fabric.ipcCall: RpcResult preserves the raw `node_draining` error code (connection remains active
  *   for the caller to handle, never swallowed as aborted/unknown);
- * - fabric.ipcSubscribe: rejecting new subscriptions during draining throws HelmError `node_draining`
+ * - fabric.ipcSubscribe: rejecting new subscriptions during draining throws HelmxError `node_draining`
  *   (503), distinct from `ipc_subscribe_failed` (502), and invokes `onClosed` exactly once;
  * - remote-env exec: when the node returns `node_draining` from envExec, the error code passes
  *   through untouched (never collapsed into aborted/unknown), fails immediately without waiting for
@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import { setTimeout as delay } from 'node:timers/promises'
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
-import { HelmError, type NodeEnvRpcFunctions } from '@helm/protocol'
+import { HelmxError, type NodeEnvRpcFunctions } from '@helmx/protocol'
 import type { WebSocket as WsSocket } from 'ws'
 import { createEnvFabric } from '../src/env/fabric.js'
 import { NodeRegistry } from '../src/env/registry.js'
@@ -58,7 +58,7 @@ test('fabric.ipcCall: draining rejection preserves raw node_draining code in Rpc
   }
 })
 
-test('fabric.ipcSubscribe: draining rejection throws HelmError node_draining (503) and calls onClosed once', { timeout: 60_000 }, async () => {
+test('fabric.ipcSubscribe: draining rejection throws HelmxError node_draining (503) and calls onClosed once', { timeout: 60_000 }, async () => {
   const fabric = createEnvFabric({ authenticate: () => true })
   try {
     const socket = await registerFakeNode(fabric.registry, 'drain-sub-node', {
@@ -72,7 +72,7 @@ test('fabric.ipcSubscribe: draining rejection throws HelmError node_draining (50
     await assert.rejects(
       fabric.ipcSubscribe('drain-sub-node', { line: 'hello' }, () => undefined, () => { closed += 1 }),
       (error: unknown) =>
-        error instanceof HelmError && error.code === 'node_draining' && error.status === 503 && /draining/.test(error.message),
+        error instanceof HelmxError && error.code === 'node_draining' && error.status === 503 && /draining/.test(error.message),
     )
     // Subscription was never established: the reject path already notified onClosed (no leaked wait).
     await delay(20)

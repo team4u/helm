@@ -20,7 +20,7 @@
  *   revival after cancellation); a single settle report goes only to owners outside the boundary;
  *   the background default uses the kernel's authoritative ownership=human judgment (no profileId/
  *   runtime role hardcoding): human interactive sessions default to background; automated sessions
- *   (bot/helm) default to synchronous with an explicit background=true explicitly rejected (preventing
+ *   (bot/helmx) default to synchronous with an explicit background=true explicitly rejected (preventing
  *   early settlement of subagents/resident workers);
  * - cascade cancellation: on turn_settled (outcome=aborted), cancel all in-flight runs of that
  *   conversation subtree belonging to it (completed/failed do not cancel legitimate background tasks);
@@ -45,7 +45,7 @@
  * - ./workflow/depth.ts: managed-subagent registry and nesting-depth guard (shared facts of the three defense lines)
  * - ./workflow/projection.ts: runs conversation-shard projection and the global compact badges (idempotent writes)
  * - ./workflow/background.ts: background default policy and background settle report delivery
- * - ./workflow/engine-host.ts: HelmHostApi ports -> WorkflowServiceHost adaptation
+ * - ./workflow/engine-host.ts: HelmxHostApi ports -> WorkflowServiceHost adaptation
  *   (two safety disciplines: guarded aborts / emitEvent convergence)
  * - ./workflow/hooks.ts: the dual agent_spawn hooks (depth guard 300 / worktree isolation 200),
  *   before_turn tool stripping, turn_settled cascade cancellation and host event subscriptions
@@ -53,7 +53,7 @@
  * - ./workflow/actions.ts: the 13 actions (reused across five ends)
  * - ./workflow/ui.ts: frontend UI extension point declarations
  */
-import type { PluginDefinition } from '@helm/protocol'
+import type { PluginDefinition } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import {
   WORKFLOW_PLUGIN_ID,

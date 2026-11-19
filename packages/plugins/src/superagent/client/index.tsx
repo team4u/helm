@@ -14,11 +14,11 @@
  * - SuperAgentSettingsPanel: settings panel (read-only managed state,
  *   pointing to the plugin config area).
  *
- * Data flows through the @helm/plugin-client shared hooks (usePluginDoc)
+ * Data flows through the @helmx/plugin-client shared hooks (usePluginDoc)
  * subscribing reactively to this plugin's public docs; actions go through
  * ctx.callAction (POST /api/actions), navigation through ctx.openScreen /
  * ctx.openSplitScreen. Generic structure reuses the host design-system
- * primitives (.screen-container / .helm-table / .kv-list / .callout /
+ * primitives (.screen-container / .helmx-table / .kv-list / .callout /
  * .loading-state); only the sa-widget / sa-pill / sa-report inspection
  * specifics keep their own business styles.
  *
@@ -35,7 +35,7 @@ import type {
   ScreenProps,
   TimelineRendererProps,
   ToolViewProps,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import {
   StatusLight,
   formatTime,
@@ -45,7 +45,7 @@ import {
   usePluginDoc,
   usePluginLocale,
   usePluginTranslator,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 import {
   buildConversationMap,
   dispatchedWorkerId,
@@ -237,8 +237,8 @@ export function SuperAgentComposerWidget(_props: ComposerScopeProps): ReactNode 
         <>
           <div className="sa-widget-muted">{saWidgetSummary(workers.length, subs.length, locale)}</div>
           {error !== undefined ? <ActionError message={error} /> : null}
-          <div className="helm-table-wrap">
-            <table className="helm-table">
+          <div className="helmx-table-wrap">
+            <table className="helmx-table">
               <thead>
                 <tr>
                   <th>Worker</th>
@@ -457,8 +457,8 @@ export function SuperAgentRecallScreen(props: ScreenProps): ReactNode {
       </div>
 
       <div className="screen-section">
-        <div className="helm-table-wrap">
-          <table className="helm-table">
+        <div className="helmx-table-wrap">
+          <table className="helmx-table">
             <thead>
               <tr>
                 <th>{t(SA_COL_CONVERSATION)}</th>
@@ -511,8 +511,8 @@ export function SuperAgentRecallScreen(props: ScreenProps): ReactNode {
           <Network size={13} strokeWidth={1.75} />
           <span>{t(SA_SUBSCRIPTIONS_TITLE)}</span>
         </div>
-        <div className="helm-table-wrap">
-          <table className="helm-table">
+        <div className="helmx-table-wrap">
+          <table className="helmx-table">
             <thead>
               <tr>
                 <th>ThreadKey</th>

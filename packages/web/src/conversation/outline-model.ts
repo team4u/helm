@@ -10,17 +10,17 @@
  *   3. Markdown heading nodes (`heading`): `# ~ ###` headings extracted from assistant body text (code fences skipped);
  *   4. Business card nodes (`card`): AssistantTurn top-level cards matched by plugin tool.view (generic
  *      toolName + input summary) plus timeline.renderer plugin-card entries (generic
- *      helm.input text summary); ordinary tools and thinking inside step-groups never enter the outline;
+ *      helmx.input text summary); ordinary tools and thinking inside step-groups never enter the outline;
  *   5. Context divider nodes (`divider`): reset (`/reset`) or compaction (`/compact`) boundaries;
  * - Keyword filtering: matches human/assistant full text, headings, and card searchable text; a hit on a child
  *   automatically keeps its parent human turn so the hierarchy stays contextual;
  * - Scroll-position activation: derives the currently-read outline item from the viewport-top baseline and anchor offsets.
  */
 
-import type { ConversationEntry, InputOrigin } from '@helm/protocol/browser'
+import type { ConversationEntry, InputOrigin } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import {
-  parseHelmInputData,
+  parseHelmxInputData,
   toolSummaryText,
   type AssistantTurn,
   type DividerItem,
@@ -105,7 +105,7 @@ export interface OutlineCardNode {
   entryId: string
   /** Secondary locate anchor: the tool.view card trace element's `data-outline-card-id` (i.e. tool.key); absent for plugin-cards. */
   cardId?: string
-  /** One-line title (generic honest summary: toolName + input summary / helm.input first line / stable contract identifier fallback). */
+  /** One-line title (generic honest summary: toolName + input summary / helmx.input first line / stable contract identifier fallback). */
   label: string
   /** Searchable text (title + underlying text summary). */
   searchText: string
@@ -307,13 +307,13 @@ function buildToolCardNode(
 }
 
 /**
- * Generic honest plugin-card summary: prefer the entry's helm.input data text (normalized from the same
+ * Generic honest plugin-card summary: prefer the entry's helmx.input data text (normalized from the same
  * source as human questions), fall back to the stable contract identifier (entry kind); never read plugin-private React content.
  */
 export function summarizePluginCardEntry(entry: ConversationEntry, t?: WebMessageTranslator): { label: string; searchText: string } {
   const tt = t ?? englishWebTranslator
-  if (entry.kind === 'helm.input') {
-    const data = parseHelmInputData(entry.data)
+  if (entry.kind === 'helmx.input') {
+    const data = parseHelmxInputData(entry.data)
     if (data !== undefined && data.text.trim() !== '') {
       return {
         label: summarizeOutlineText(data.text, data.attachments?.length ?? 0, tt),

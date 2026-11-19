@@ -14,7 +14,7 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { HelmLocale } from '@helm/protocol/browser'
+import type { HelmxLocale } from '@helmx/protocol/browser'
 import { formatMessage, translateMessage, type MessageTable } from '../src/i18n/messages.js'
 import {
   createWebTranslator,
@@ -32,7 +32,7 @@ import { profilesMessages } from '../src/i18n/resources/profiles.js'
 import { shellMessages } from '../src/i18n/resources/shell.js'
 import { skillsMessages } from '../src/i18n/resources/skills.js'
 import { uiMessages } from '../src/i18n/resources/ui.js'
-import { makeTestStore, HelmExternalStoreContext } from './helpers/store.js'
+import { makeTestStore, HelmxExternalStoreContext } from './helpers/store.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -99,7 +99,7 @@ test('useWebLocale consumers switch en -> zh-CN -> en immediately via setLocale'
   const store = makeTestStore({ locale: 'en' })
   function Harness(): React.JSX.Element {
     return React.createElement(
-      HelmExternalStoreContext.Provider,
+      HelmxExternalStoreContext.Provider,
       { value: store },
       React.createElement(SplitToggleButton, { isSplitActive: false, onToggleSplit: () => {} }),
     )

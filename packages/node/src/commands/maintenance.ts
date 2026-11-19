@@ -25,7 +25,7 @@ export async function upgradeCommand(ctx: CommandContext): Promise<number> {
   const record = await readPidRecord(dataDir);
   if (record === null) {
     throw new UsageError(
-      'executing an upgrade requires a running managed daemon: run helm-node start -d first (cannot upgrade offline)',
+      'executing an upgrade requires a running managed daemon: run helmx-node start -d first (cannot upgrade offline)',
       'not_running',
     );
   }
@@ -42,7 +42,7 @@ export async function upgradeCommand(ctx: CommandContext): Promise<number> {
   );
   if (response === null) {
     throw new Error(
-      `upgrade request failed: control channel unreachable or invalid response (endpoint ${record.endpoint}; daemon may have yielded during upgrade; check helm-node status before retrying)`,
+      `upgrade request failed: control channel unreachable or invalid response (endpoint ${record.endpoint}; daemon may have yielded during upgrade; check helmx-node status before retrying)`,
     );
   }
   if (response.ok !== true) {
@@ -72,7 +72,7 @@ export async function doctorCommand(ctx: CommandContext): Promise<number> {
     emit(report);
   } else {
     const label: Record<string, string> = { ok: 'OK  ', warn: 'WARN', error: 'FAIL', info: 'INFO' };
-    io.out(`helm-node doctor (dataDir=${report.dataDir}${report.nodeId !== undefined ? `, nodeId=${report.nodeId}` : ''}${report.hubUrl !== undefined ? `, hub=${report.hubUrl}` : ''})\n`);
+    io.out(`helmx-node doctor (dataDir=${report.dataDir}${report.nodeId !== undefined ? `, nodeId=${report.nodeId}` : ''}${report.hubUrl !== undefined ? `, hub=${report.hubUrl}` : ''})\n`);
     for (const check of report.checks) {
       io.out(`  [${label[check.status] ?? check.status}] ${check.id}: ${check.message}\n`);
     }

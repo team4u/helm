@@ -1,5 +1,5 @@
 import React from 'react'
-import { StatusLight } from '@helm/plugin-client'
+import { StatusLight } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { summarizeCardModels, type ProviderItem } from './model-center-model.js'
 

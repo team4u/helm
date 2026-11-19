@@ -27,7 +27,7 @@
  */
 import { useEffect, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ComposerScopeProps } from '@helm/protocol'
+import type { ComposerScopeProps } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import {
   StatusLight,
@@ -37,7 +37,7 @@ import {
   useConversations,
   usePluginContext,
   usePluginLocale,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 import { useElapsedNowMs, usePluginSessionDoc } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { buildActiveTraySummary, type ActiveTrayItem } from './model-active-tray.ts'

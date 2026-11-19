@@ -1,7 +1,7 @@
 /**
  * Real diff computation for the `edit` tool (sole implementation; shared by local and remote execution paths).
  *
- * Contract (aligned with `@helm/protocol` `EDIT_TOOL_RESULT_SCHEMA`):
+ * Contract (aligned with `@helmx/protocol` `EDIT_TOOL_RESULT_SCHEMA`):
  * - Inputs are the full texts before/after an exact unique replacement and the replaced span: `original`,
  *   `updated` (must match real updated content), and `matchOffset` / `replacedLength` (the unique matched range
  *   of `oldText` in `original`). Throws immediately on broken preconditions (`edit_failed` before writing so the file
@@ -31,7 +31,7 @@ import {
   TOOL_DIFF_MAX_TEXT_CHARS,
   type ToolDiffRow,
   type ToolEditDiff,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 
 /** Context lines retained before and after edited spans. */
 const EDIT_CONTEXT_LINES = 3

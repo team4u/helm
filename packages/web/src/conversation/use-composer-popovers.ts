@@ -12,7 +12,7 @@
  * honoring the .ts Fast Refresh rule.
  */
 import { useCallback, useEffect, useState } from 'react'
-import type { ComposerCompleterSpec, ConversationSummary } from '@helm/protocol/browser'
+import type { ComposerCompleterSpec, ConversationSummary } from '@helmx/protocol/browser'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { replaceSlashToken } from '../lib/commands-model.js'

@@ -26,7 +26,7 @@ import { dirname, join, resolve } from 'node:path'
 import { after, before, describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import { CLIENT_SHARED_GLOBALS, compilePluginClientModule } from '@helm/plugin-build'
+import { CLIENT_SHARED_GLOBALS, compilePluginClientModule } from '@helmx/plugin-build'
 import {
   PLUGIN_CLIENT_CSS_EXPORT,
   type AskSpec,
@@ -34,7 +34,7 @@ import {
   type ConversationEntry,
   type ConversationLive,
   type ConversationSummary,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 
 GlobalRegistrator.register()
@@ -57,7 +57,7 @@ g[CLIENT_SHARED_GLOBALS['react-dom']!] = ReactDOM
 g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
 g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
 g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
-g[CLIENT_SHARED_GLOBALS['@helm/plugin-client']!] = SDK
+g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = SDK
 
 const e = React.createElement
 const { act } = React
@@ -83,7 +83,7 @@ let tempDir: string
 let mod: WorkflowClientModule
 
 before(async () => {
-  tempDir = await mkdtemp(join(tmpdir(), 'helm-wf-three-zone-'))
+  tempDir = await mkdtemp(join(tmpdir(), 'helmx-wf-three-zone-'))
   const bundle = await compilePluginClientModule('builtin:workflow', WORKFLOW_CLIENT_DIR, 'index.tsx', tempDir)
   const url = `data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}`
   mod = (await import(url)) as WorkflowClientModule
@@ -133,7 +133,7 @@ function createHostHarness(init: {
   pendingAsks?: AskSpec[]
   runsByConversation?: Record<number, WorkflowRunSummary[]>
   pluginDocs?: Record<string, unknown>
-  locale?: import('../../plugin-client/src/index.js').HelmLocale
+  locale?: import('../../plugin-client/src/index.js').HelmxLocale
   onAction?: (pluginId: string, actionId: string, input: unknown) => Promise<unknown> | unknown
 }) {
   const activeToolCallIds = new Set<string>()
@@ -415,7 +415,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
     const deployLive: ConversationLive = {
       conversationId: 11,
       text: '',
-      tools: [{ callId: 'c1', toolName: 'bash', input: { command: 'pnpm --filter @helm/plugins test' }, status: 'running' }],
+      tools: [{ callId: 'c1', toolName: 'bash', input: { command: 'pnpm --filter @helmx/plugins test' }, status: 'running' }],
       updatedAt: 1_700_000_020_000,
     }
     const deepWf: WorkflowRunSummary = {
@@ -444,7 +444,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
     try {
       // 收起顶栏：单一容器任务的活动目标是其最深活动子孙会话，实时命令直达顶栏。
       assert.ok(
-        mounted.container.textContent?.includes('pnpm --filter @helm/plugins test'),
+        mounted.container.textContent?.includes('pnpm --filter @helmx/plugins test'),
         '顶栏应展示容器子树会话的实时 bash 命令',
       )
       // live 订阅不得拉取会话详情（includeDetail:false）。
@@ -462,7 +462,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       assert.equal(main.querySelectorAll('button').length, 0, '行主体按钮内无嵌套交互')
       const live = main.querySelector('.workflow-active-tray-row-live') as HTMLElement | null
       assert.ok(live !== null, '容器行第二行实际执行内容存在')
-      assert.ok(live!.textContent?.includes('pnpm --filter @helm/plugins test'), '第二行展示子树 live 命令')
+      assert.ok(live!.textContent?.includes('pnpm --filter @helmx/plugins test'), '第二行展示子树 live 命令')
       assert.equal((row!.textContent?.match(/深水流水线/g) ?? []).length, 1, '容器标题整行只出现一次')
       // 活动目标改变导航对象：整行点击仍打开容器 run 的工作台，而不是子孙会话抽屉。
       act(() => {
@@ -739,7 +739,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
     const entriesWithTask: ConversationEntry[] = [
       {
         id: 'e-1',
-        kind: 'helm.input',
+        kind: 'helmx.input',
         createdAt: 1_700_000_000_000,
         data: { text: '从 entries 提取的任务首行标题', origin: 'agent' },
       },
@@ -901,7 +901,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
       createdAt: number,
     ): ConversationEntry => ({
       id: `report-${seq}`,
-      kind: 'helm.input',
+      kind: 'helmx.input',
       createdAt,
       data: {
         origin: 'trigger',
@@ -993,7 +993,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
 
     const invalidEntry: ConversationEntry = {
       id: 'report-invalid',
-      kind: 'helm.input',
+      kind: 'helmx.input',
       data: {
         origin: 'trigger',
         meta: { kind: 'subagent_report', backgroundRunId: 'wf_bad' },
@@ -1040,11 +1040,11 @@ describe('Workflow 三区零重复与无损呈现', () => {
       libMount.unmount()
     }
 
-    // 1b. WorkflowIcon 必须完全委托 @helm/plugin-client HelmIcon，禁止私有导入 lucide-react
+    // 1b. WorkflowIcon 必须完全委托 @helmx/plugin-client HelmxIcon，禁止私有导入 lucide-react
     const iconSrc = await readFile(join(WORKFLOW_CLIENT_DIR, 'WorkflowIcon.tsx'), 'utf8')
-    assert.match(iconSrc, /from '@helm\/plugin-client'/, 'WorkflowIcon 必须复用 @helm/plugin-client')
+    assert.match(iconSrc, /from '@helmx\/plugin-client'/, 'WorkflowIcon 必须复用 @helmx/plugin-client')
     assert.doesNotMatch(iconSrc, /from 'lucide-react'/, 'WorkflowIcon 不得私建 lucide-react 映射表')
-    assert.match(iconSrc, /<HelmIcon\b/, 'WorkflowIcon 应直接委托 <HelmIcon />')
+    assert.match(iconSrc, /<HelmxIcon\b/, 'WorkflowIcon 应直接委托 <HelmxIcon />')
 
     // 2. 全量扫描 workflow/client/*.tsx 与 herdr/client/*.tsx：零 Emoji、零 callout--warn、仅导出组件与 TS 类型
     const emojiRe = /\p{Extended_Pictographic}/u
@@ -1329,7 +1329,7 @@ describe('Workflow 三区零重复与无损呈现', () => {
   test('locale 联动：port 传 zh-CN 渲染中文文案，缺省 en 保持英文', { timeout: 60_000 }, async () => {
     const makeReportEntry = (meta: Record<string, unknown>, text: string): ConversationEntry => ({
       id: 'report-locale',
-      kind: 'helm.input',
+      kind: 'helmx.input',
       createdAt: 1_700_000_050_000,
       data: { origin: 'trigger', meta, text },
     })

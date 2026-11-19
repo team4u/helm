@@ -1,6 +1,6 @@
 /**
- * builtin:workflow 插件真实编译 CSS 与样式不变量测试（零 @helm/web 依赖）：
- * - 验证 compilePluginClientModule 导出的 __helmClientCss 注入后，阶段胶囊状态色
+ * builtin:workflow 插件真实编译 CSS 与样式不变量测试（零 @helmx/web 依赖）：
+ * - 验证 compilePluginClientModule 导出的 __helmxClientCss 注入后，阶段胶囊状态色
  *   不被通用基样式覆盖；
  * - 验证 styles.css 中整卡 hover、子级强调底色、唯一右推 .subagent-live-elapsed
  *   与窄屏可见性规则完整存在。
@@ -11,8 +11,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { compilePluginClientModule } from '@helm/plugin-build'
-import { PLUGIN_CLIENT_CSS_EXPORT } from '@helm/protocol'
+import { compilePluginClientModule } from '@helmx/plugin-build'
+import { PLUGIN_CLIENT_CSS_EXPORT } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import {
   React,
@@ -40,13 +40,13 @@ const run: WorkflowRunSummary = {
   ],
 }
 
-test('工作流真实编译样式：__helmClientCss 注入后阶段状态颜色表达正确', { timeout: 60_000 }, async () => {
-  const cacheDir = await mkdtemp(join(tmpdir(), 'helm-workflow-css-'))
+test('工作流真实编译样式：__helmxClientCss 注入后阶段状态颜色表达正确', { timeout: 60_000 }, async () => {
+  const cacheDir = await mkdtemp(join(tmpdir(), 'helmx-workflow-css-'))
   const theme = document.createElement('style')
   theme.textContent = ':root { --fg-muted: #666666; --border: #333333; --bg-subtle: #eeeeee; --ok: #008800; --ok-border: #007700; --ok-bg: #ddffdd; --err: #ee0000; --err-border: #cc0000; --err-bg: #ffdddd; --accent: #0000ee; --accent-border: #0000cc; --accent-bg: #ddddff; }'
   document.head.appendChild(theme)
   const pluginStyle = document.createElement('style')
-  pluginStyle.setAttribute('data-helm-plugin-css', 'builtin:workflow:index.tsx')
+  pluginStyle.setAttribute('data-helmx-plugin-css', 'builtin:workflow:index.tsx')
   document.head.appendChild(pluginStyle)
   const host = document.createElement('div')
   document.body.appendChild(host)

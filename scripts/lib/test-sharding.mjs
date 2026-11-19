@@ -40,7 +40,7 @@ const FORBIDDEN_MODULE_PREFIXES = [
   'worker_threads',
   'node:cluster',
   'cluster',
-  '@helm/plugin-build',
+  '@helmx/plugin-build',
 ];
 
 const FORBIDDEN_FS_IMPORTS = new Set([
@@ -87,7 +87,7 @@ const FORBIDDEN_CALLS = new Set([
   'createServer',
   'listen',
   'KernelRuntime',
-  'createHelm',
+  'createHelmx',
   'DatabaseSync',
   'runWorkflow',
   'compilePluginClientModule',

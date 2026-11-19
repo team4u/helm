@@ -59,7 +59,7 @@ const NODE_LIST = [
 // ---------------------------------------------------------------------------
 
 test('nodes list: GET /api/nodes; --json raw array, human-readable tabular output', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub({ 'GET /api/nodes': () => ({ body: NODE_LIST }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
@@ -79,7 +79,7 @@ test('nodes list: GET /api/nodes; --json raw array, human-readable tabular outpu
 })
 
 test('nodes list --json: passes through node health snapshots (local and online BYOM; no health key when offline)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub({ 'GET /api/nodes': () => ({ body: NODE_LIST }) }, { autoRegisterCleanup: t })
   const r = await runCliCaptured(['nodes', 'list', '--json'], makeCliEnv(hub.url, dir))
   assert.equal(r.code, 0, r.err)
@@ -98,7 +98,7 @@ test('nodes list --json: passes through node health snapshots (local and online 
 })
 
 test('nodes issue: POST /api/nodes/issue {nodeId}; --json prints full object, human mode outputs token', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const issued = { nodeId: 'dev-1', token: 'dev-1:sec-abc', createdAt: 123 }
   const hub = await startMockHub({ 'POST /api/nodes/issue': () => ({ body: issued }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
@@ -111,7 +111,7 @@ test('nodes issue: POST /api/nodes/issue {nodeId}; --json prints full object, hu
   const human = await runCliCaptured(['nodes', 'issue', 'dev-1'], env)
   assert.equal(human.code, 0, human.err)
   assert.match(human.out, /dev-1:sec-abc/)
-  assert.match(human.out, /helm-node connect/)
+  assert.match(human.out, /helmx-node connect/)
 
   // Missing positional argument fails explicitly
   const missing = await runCliCaptured(['nodes', 'issue', '--json'], env)
@@ -120,7 +120,7 @@ test('nodes issue: POST /api/nodes/issue {nodeId}; --json prints full object, hu
 })
 
 test('nodes remove: DELETE /api/nodes/:id; rejects extra positional arguments', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub({ 'DELETE /api/nodes/gpu-box': () => ({ status: 204 }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
@@ -140,7 +140,7 @@ test('nodes remove: DELETE /api/nodes/:id; rejects extra positional arguments', 
 // ---------------------------------------------------------------------------
 
 test('env exec: maps --node/--cwd/--timeout/--current to body; exits 0 on success', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub(
     {
       'POST /api/env/exec': () => ({ body: { ok: true, exitCode: 0, output: '3 passed\n', timedOut: false } }),
@@ -149,7 +149,7 @@ test('env exec: maps --node/--cwd/--timeout/--current to body; exits 0 on succes
   )
   const r = await runCliCaptured(
     ['env', 'exec', '--node', 'gpu-box', '--cwd', '/workspace', '--timeout', '5000', '--current', '--', 'pytest', '-q'],
-    makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '9' }),
+    makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '9' }),
   )
   assert.equal(r.code, 0, r.err)
   assert.equal(r.out, '3 passed\n')
@@ -170,7 +170,7 @@ test('env exec: maps --node/--cwd/--timeout/--current to body; exits 0 on succes
 })
 
 test('env exec: failed command (exitCode !== 0) propagates non-zero exit code; timeout / ok=false also fail', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub(
     {
       'POST /api/env/exec': (body) => {
@@ -203,7 +203,7 @@ test('env exec: failed command (exitCode !== 0) propagates non-zero exit code; t
 })
 
 test('env exec: passes through single command string (with spaces); rejects missing command or invalid timeout', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub(
     {
       'POST /api/env/exec': () => ({ body: { ok: true, exitCode: 0, output: '', timedOut: false } }),
@@ -244,14 +244,14 @@ test('env exec: passes through single command string (with spaces); rejects miss
 })
 
 test('env exec --current: omits nodeId when --node is unset so Hub resolves the conversation binding', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub(
     {
       'POST /api/env/exec': () => ({ body: { ok: true, exitCode: 0, output: 'ok\n', timedOut: false } }),
     },
     { autoRegisterCleanup: t },
   )
-  const envWithConv = makeCliEnv(hub.url, dir, { HELM_CONVERSATION_ID: '12' })
+  const envWithConv = makeCliEnv(hub.url, dir, { HELMX_CONVERSATION_ID: '12' })
 
   // With --current and without --node: body includes only command and conversationId (never forces nodeId:'local')
   const r = await runCliCaptured(['env', 'exec', '--current', '--', 'git', 'status'], envWithConv)
@@ -273,7 +273,7 @@ test('env exec --current: omits nodeId when --node is unset so Hub resolves the 
 })
 
 test('env exec --stream: consumes NDJSON chunk by chunk without buffering the full response; propagates exitCode on failure', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   // Stream multiple chunks over the socket to verify the CLI does not wait for the entire response before printing
   const hub = await startMockHub(
     {
@@ -316,7 +316,7 @@ test('env exec --stream: consumes NDJSON chunk by chunk without buffering the fu
 })
 
 test('env exec --stream --json: emits one JSON line per frame including terminal exit frame', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub(
     {
       'POST /api/env/exec': (_body, _req, res) => {
@@ -342,7 +342,7 @@ test('env exec --stream --json: emits one JSON line per frame including terminal
 // ---------------------------------------------------------------------------
 
 test('conversations create/update: --node maps to body.nodeId while preserving existing flags', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub(
     {
       'POST /api/conversations': (body) => ({ body: { id: 7, ...(body as object) } }),
@@ -386,7 +386,7 @@ test('conversations create/update: --node maps to body.nodeId while preserving e
 // ---------------------------------------------------------------------------
 
 test('profiles create: semantic flags (--name/--model/--node/--cwd) construct Profile directly', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub({ 'POST /api/profiles': (body) => ({ body }) }, { autoRegisterCleanup: t })
   const r = await runCliCaptured(
     ['profiles', 'create', 'worker', '--name', 'Worker', '--model', 'openai/gpt-4o', '--node', 'gpu-box', '--cwd', '/workspace', '--json'],
@@ -403,7 +403,7 @@ test('profiles create: semantic flags (--name/--model/--node/--cwd) construct Pr
 })
 
 test('profiles create: --system-file reads content into body; semantic flags override matching fields in --input', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const systemFile = path.join(dir, 'SYSTEM.md')
   await fsp.writeFile(systemFile, '# system\nYou are a worker.')
   const hub = await startMockHub({ 'POST /api/profiles': (body) => ({ body }) }, { autoRegisterCleanup: t })
@@ -440,7 +440,7 @@ test('profiles create: --system-file reads content into body; semantic flags ove
 })
 
 test('profiles update: semantic flags GET existing profile then merge into PUT (prevents dropping fields on full replace)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   // Existing profile config: includes nodeId/cwd/tags/runtime bindings plus full system text
   const existing = {
     id: 'worker',
@@ -496,7 +496,7 @@ test('profiles update: semantic flags GET existing profile then merge into PUT (
 })
 
 test('profiles update: explicit --system enters body; --input and semantic flags merge deterministically', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const existing = {
     id: 'worker',
     name: 'base name',
@@ -547,7 +547,7 @@ test('profiles update: explicit --system enters body; --input and semantic flags
 })
 
 test('profiles update --input standalone: full-replace semantics (skips GET); rethrows GET 404 verbatim', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub(
     {
       'PUT /api/profiles/worker': (body) => ({ body }),
@@ -582,7 +582,7 @@ test('profiles update --input standalone: full-replace semantics (skips GET); re
 // ---------------------------------------------------------------------------
 
 test('plugins config --set: allows repeated key=value pairs with scalar parsing and overrides matching keys in --input', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub(
     {
       'GET /api/plugins/builtin%3Aherdr/config': () => ({ body: { values: { retries: 3 }, schema: {} } }),
@@ -627,7 +627,7 @@ test('plugins config --set: allows repeated key=value pairs with scalar parsing 
 // ---------------------------------------------------------------------------
 
 test('api GET: case-insensitive method, auto-prepends leading / on path, builds POST body from --field', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub(
     {
       'GET /api/nodes': () => ({ body: NODE_LIST }),
@@ -661,7 +661,7 @@ test('api GET: case-insensitive method, auto-prepends leading / on path, builds 
 })
 
 test('api PUT: parses --field scalars (number/boolean/string) and passes through whole --input body', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub(
     {
       'PUT /api/profiles/p1': (body) => ({ body }),
@@ -688,7 +688,7 @@ test('api PUT: parses --field scalars (number/boolean/string) and passes through
 // ---------------------------------------------------------------------------
 
 test('dynamic-action fault isolation: core commands (nodes/env/plugins) work normally when GET /api/actions returns 500', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub(
     {
       // Manifest endpoint fails (simulating a broken plugin dragging down all actions)
@@ -734,7 +734,7 @@ test('dynamic-action fault isolation: core commands (nodes/env/plugins) work nor
 })
 
 test('env exec --stream: abort propagates immediately — arrived frames consumed, non-zero exit, server detects disconnect immediately', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const seenDisconnect = { value: false }
   // NDJSON endpoint stalls after sending one frame; triggers close on abort (verifying CLI closes stream immediately without reading further)
   const hub = await startMockHub(
@@ -769,7 +769,7 @@ test('env exec --stream: abort propagates immediately — arrived frames consume
 })
 
 test('help text describes nodes/env/api commands; nodes subcommands do not collide with dynamic commands', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const hub = await startMockHub({ 'GET /api/nodes': () => ({ body: [] }) }, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
@@ -810,7 +810,7 @@ test('static command table: coreCommands paths are unique and prefix-free', { ti
 // ---------------------------------------------------------------------------
 
 test('cli-token lock: freshly created empty lock file waits during grace window instead of falsely reporting corruption; stale empty lock throws credentials_lock_broken', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const lockFile = path.join(dir, 'cli-token.lock')
   // Scenario 1: simulates legacy fallback where a slow holder creates an empty file first and writes content later:
   // holds empty lock (fresh mtime), writes full owner line at 150ms (spanning at least one 100ms backoff cycle), and releases at 350ms.
@@ -841,7 +841,7 @@ test('cli-token lock: freshly created empty lock file waits during grace window 
 })
 
 test('cli-token lock: truncated lock content is also protected by grace window and succeeds after holder completes', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-nodes-')
+  const dir = useTempDir(t, 'helmx-cli-nodes-')
   const lockFile = path.join(dir, 'cli-token.lock')
   // Truncated content (first token is non-PID) + slow holder completing full owner line within grace window before releasing
   await fsp.writeFile(lockFile, 'garbage ', { mode: 0o600 })

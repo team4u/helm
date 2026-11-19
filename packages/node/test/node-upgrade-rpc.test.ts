@@ -19,8 +19,8 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import http from 'node:http';
 import process from 'node:process';
-import { sleep as delay } from '@helm/test-kit';
-import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helm/test-kit/node';
+import { sleep as delay } from '@helmx/test-kit';
+import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helmx/test-kit/node';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createBirpc, type BirpcReturn } from 'birpc';
 import type {
@@ -29,7 +29,7 @@ import type {
   NodeHeartbeatInput,
   NodeRegisterInput,
   NodeRegisterResult,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import { createNodeEnvRpcServer } from '../src/daemon/env-rpc-server.js';
 import { createNodeDaemon } from '../src/daemon/index.js';
 import {
@@ -50,7 +50,7 @@ const waitFor = (condition: () => boolean | Promise<boolean>, timeoutMs: number,
 // ---------------------------------------------------------------------------
 
 test('setDraining(true) rejects new envExec synchronously, false restores it, and in-flight execs finish normally', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-drain-');
+  const dir = await tempDir('helmx-node-drain-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
   try {
     const slow = server.envExec({ execId: 'e-slow', command: 'sleep 1', timeout: 30 });
@@ -76,7 +76,7 @@ test('setDraining(true) rejects new envExec synchronously, false restores it, an
 });
 
 test('guard entry registers synchronously before spawn and subsequent setDraining does not cancel accepted calls', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-count-');
+  const dir = await tempDir('helmx-node-count-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir });
   try {
     const jobs = [1, 2, 3].map((i) => server.envExec({ execId: `e-${i}`, command: 'sleep 0.3', timeout: 30 }));
@@ -262,14 +262,14 @@ async function startManagedDaemon(options: {
 async function seedStagedRelease(dataDir: string, version: string): Promise<void> {
   const versionRoot = path.join(dataDir, 'releases', version);
   const candidate = path.join(versionRoot, 'seeded');
-  const nodePkgDir = path.join(candidate, 'node_modules', '@team4u', 'helm-node');
+  const nodePkgDir = path.join(candidate, 'node_modules', '@helmx', 'node');
   await fs.mkdir(path.join(nodePkgDir, 'dist'), { recursive: true });
   await fs.mkdir(path.join(candidate, 'node_modules', '.bin'), { recursive: true });
   const entryPath = path.join(nodePkgDir, 'dist', 'cli.js');
   await fs.writeFile(entryPath, '#!/usr/bin/env node\n');
   await fs.writeFile(
     path.join(nodePkgDir, 'package.json'),
-    JSON.stringify({ name: '@team4u/helm-node', version }),
+    JSON.stringify({ name: '@helmx/node', version }),
   );
   await fs.writeFile(
     path.join(versionRoot, '.complete'),
@@ -304,13 +304,13 @@ async function waitUntilDraining(rpc: BirpcReturn<NodeEnvRpcFunctions, object>, 
 // ---------------------------------------------------------------------------
 
 test('without replacement host: checkUpgrade still queries real registry while upgrade returns not_supported', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-noprep-');
+  const dir = await tempDir('helmx-node-noprep-');
   const hub = await startHubFixture({ expectedToken: 'up-a:secret-a' });
   const stub = await startManagedDaemon({ hubUrl: hub.url, dataDir: dir, withPrepare: false });
   try {
     assert.equal(await stub.daemon.waitUntilRegistered(10_000), true);
-    // Update check does not need replacement host (uses real public npm package via HELM_NPM_PACKAGE)
-    process.env.HELM_NPM_PACKAGE = 'eslint';
+    // Update check does not need replacement host (uses real public npm package via HELMX_NPM_PACKAGE)
+    process.env.HELMX_NPM_PACKAGE = 'eslint';
     const check = await stub.daemon.checkUpgrade();
     assert.ok(check.currentVersion.length > 0);
     assert.ok(check.latestVersion.length > 0);
@@ -330,7 +330,7 @@ test('without replacement host: checkUpgrade still queries real registry while u
     const rpcCheck = await rpc!.nodeCheckUpgrade!({});
     assert.equal(rpcCheck.ok, true, `RPC checkUpgrade should succeed: ${!rpcCheck.ok && rpcCheck.error.message}`);
   } finally {
-    delete process.env.HELM_NPM_PACKAGE;
+    delete process.env.HELMX_NPM_PACKAGE;
     await stub.daemon.close().catch(() => undefined);
     await hub.close();
     await fs.rm(dir, { recursive: true, force: true });
@@ -342,7 +342,7 @@ test('without replacement host: checkUpgrade still queries real registry while u
 // ---------------------------------------------------------------------------
 
 test('register reports getNodeVersion() and options.upgradeAttemptId', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-regver-');
+  const dir = await tempDir('helmx-node-regver-');
   const hub = await startHubFixture({ expectedToken: 'up-a:secret-a' });
   const stub = await startManagedDaemon({
     hubUrl: hub.url,
@@ -368,7 +368,7 @@ test('register reports getNodeVersion() and options.upgradeAttemptId', { timeout
 // ---------------------------------------------------------------------------
 
 test('RPC input validation rejects non-objects, unknown fields, and bad types as invalid; remote only allows trusted registries', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-rpcbound-');
+  const dir = await tempDir('helmx-node-rpcbound-');
   const hub = await startHubFixture({ expectedToken: 'up-a:secret-a' });
   const stub = await startManagedDaemon({ hubUrl: hub.url, dataDir: dir, withPrepare: true });
   try {
@@ -411,7 +411,7 @@ test('RPC input validation rejects non-objects, unknown fields, and bad types as
 // ---------------------------------------------------------------------------
 
 test('upgrade success path: draining gate activates, commits once, invokes host callback, and pauses reconnect', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-node-upok-');
+  const dir = await tempDir('helmx-node-upok-');
   const hub = await startHubFixture({ expectedToken: 'up-a:secret-a' });
   const stub = await startManagedDaemon({ hubUrl: hub.url, dataDir: dir, withPrepare: true });
   t.after(async () => {
@@ -456,7 +456,7 @@ test('upgrade success path: draining gate activates, commits once, invokes host 
 // ---------------------------------------------------------------------------
 
 test('upgrade same-version no-op (upgraded:false) restores flags/gate and stays reconnectable', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-node-upnoop-');
+  const dir = await tempDir('helmx-node-upnoop-');
   const hub = await startHubFixture({ expectedToken: 'up-a:secret-a' });
   const stub = await startManagedDaemon({ hubUrl: hub.url, dataDir: dir, withPrepare: true });
   t.after(async () => {
@@ -492,7 +492,7 @@ test('upgrade same-version no-op (upgraded:false) restores flags/gate and stays 
 // ---------------------------------------------------------------------------
 
 test('upgrade failure rolls back, clears gate, restores reconnect, and accepts commands afterward', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-node-upfail-');
+  const dir = await tempDir('helmx-node-upfail-');
   let hub = await startHubFixture({ expectedToken: 'up-a:secret-a' });
   const stub = await startManagedDaemon({ hubUrl: hub.url, dataDir: dir, withPrepare: true });
   t.after(async () => {
@@ -532,7 +532,7 @@ test('upgrade failure rolls back, clears gate, restores reconnect, and accepts c
 // ---------------------------------------------------------------------------
 
 test('UpgradeCommitUnconfirmedError (via cause chain): no rollback, stays draining, host yields', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-node-upunconf-');
+  const dir = await tempDir('helmx-node-upunconf-');
   const hub = await startHubFixture({ expectedToken: 'up-a:secret-a' });
   const stub = await startManagedDaemon({ hubUrl: hub.url, dataDir: dir, withPrepare: true });
   t.after(async () => {
@@ -563,7 +563,7 @@ test('UpgradeCommitUnconfirmedError (via cause chain): no rollback, stays draini
 // ---------------------------------------------------------------------------
 
 test('concurrent upgrade rejects as busy without sharing result; retryable after invalid input; rejects after close', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-node-busy-');
+  const dir = await tempDir('helmx-node-busy-');
   const hub = await startHubFixture({ expectedToken: 'up-a:secret-a' });
   const stub = await startManagedDaemon({ hubUrl: hub.url, dataDir: dir, withPrepare: true });
   t.after(async () => {
@@ -627,7 +627,7 @@ test('concurrent upgrade rejects as busy without sharing result; retryable after
 // ---------------------------------------------------------------------------
 
 test('pendingActivation candidate rejects new commands until confirmUpgrade reconciles identity and reports commit', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-node-pending-');
+  const dir = await tempDir('helmx-node-pending-');
   const hub = await startHubFixture({ expectedToken: 'up-a:secret-a', heartbeatMs: 300 });
   const stub = await startManagedDaemon({
     hubUrl: hub.url,
@@ -683,7 +683,7 @@ test('pendingActivation candidate rejects new commands until confirmUpgrade reco
 // ---------------------------------------------------------------------------
 
 test('commit survives disconnect in memory and retries in heartbeats on new connection', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-node-commitretry-');
+  const dir = await tempDir('helmx-node-commitretry-');
   let hub = await startHubFixture({ expectedToken: 'up-a:secret-a', heartbeatMs: 300 });
   const stub = await startManagedDaemon({ hubUrl: hub.url, dataDir: dir, withPrepare: false });
   t.after(async () => {

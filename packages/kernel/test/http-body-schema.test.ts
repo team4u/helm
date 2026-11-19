@@ -15,7 +15,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { handleApi } from '../src/http/routes.js'
 import {
   parseConversationCompactBody,
@@ -44,7 +44,7 @@ function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
   /** Mutable per-model defaults mirror so GET/PUT echoes reflect the setModelThinkingDefault calls. */
   const modelThinkingLevels: Record<string, string> = {}
   const kernel = {
-    dataDir: '/tmp/helm-schema-parity',
+    dataDir: '/tmp/helmx-schema-parity',
     auth: {
       status: async () => ({ configured: true }),
       verifyToken: async () => true,
@@ -81,9 +81,9 @@ function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
       },
     },
     artifacts: {
-      get: async () => { throw new HelmError('not_found', 'x', 404) },
+      get: async () => { throw new HelmxError('not_found', 'x', 404) },
       list: async () => [],
-      writeUploaded: async () => { throw new HelmError('not_found', 'x', 404) },
+      writeUploaded: async () => { throw new HelmxError('not_found', 'x', 404) },
     },
     plugins: {
       list: async () => [],
@@ -104,18 +104,18 @@ function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
       listRoutes: () => [],
       getPublicDoc: async () => ({ pluginId: 'p', name: 'n', value: {} }),
       getPublicSessionDoc: () => {
-        throw new HelmError('not_found', 'doc not found', 404)
+        throw new HelmxError('not_found', 'doc not found', 404)
       },
       getClientModule: async () => {
-        throw new HelmError('not_implemented', 'not wired', 501)
+        throw new HelmxError('not_implemented', 'not wired', 501)
       },
     },
     async listConversations() { return [] },
-    async getConversationDetail(id: number) { throw new HelmError('not_found', `conversation not found: ${id}`, 404) },
-    async getConversationEntry(id: number, entryId: number) { throw new HelmError('not_found', `entry ${entryId} not found in conversation ${id}`, 404) },
-    async createConversation() { throw new HelmError('not_found', 'x', 404) },
-    async updateConversation() { throw new HelmError('not_found', 'x', 404) },
-    async deleteConversation() { throw new HelmError('not_found', 'x', 404) },
+    async getConversationDetail(id: number) { throw new HelmxError('not_found', `conversation not found: ${id}`, 404) },
+    async getConversationEntry(id: number, entryId: number) { throw new HelmxError('not_found', `entry ${entryId} not found in conversation ${id}`, 404) },
+    async createConversation() { throw new HelmxError('not_found', 'x', 404) },
+    async updateConversation() { throw new HelmxError('not_found', 'x', 404) },
+    async deleteConversation() { throw new HelmxError('not_found', 'x', 404) },
     async submitInput(id: number, text: string, opts?: unknown) {
       calls.submitInput!.push([id, text, opts])
       return { submissionId: 'sub-1' }
@@ -124,13 +124,13 @@ function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
       calls.withdrawQueuedInput!.push([id, opts])
       return { status: 'withdrawn' } as never
     },
-    async waitForInput() { throw new HelmError('not_found', 'x', 404) },
+    async waitForInput() { throw new HelmxError('not_found', 'x', 404) },
     async abortConversation() {},
     async resetConversation(id: number, opts?: unknown) {
       calls.resetConversation!.push([id, opts])
       return { id }
     },
-    async compactConversation() { throw new HelmError('not_found', 'x', 404) },
+    async compactConversation() { throw new HelmxError('not_found', 'x', 404) },
     async forkConversation(id: number, opts: unknown) {
       calls.forkConversation!.push([id, opts])
       return { id: id + 100 }
@@ -184,7 +184,7 @@ function makeKernel(calls: CallLog = newCallLog()): KernelRuntimeLike {
     async listNodes() { return [] },
     async issueNodeToken(nodeId: string) {
       if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(nodeId)) {
-        throw new HelmError('validation_error', 'nodeId must match node ID format', 400, { nodeId })
+        throw new HelmxError('validation_error', 'nodeId must match node ID format', 400, { nodeId })
       }
       calls.issueNodeToken!.push(nodeId)
       return { nodeId, token: 'node-token', createdAt: 0 } as never
@@ -234,8 +234,8 @@ async function call(
     const json = (await response.json().catch(() => undefined)) as any
     return { status: response.status, code: json?.error?.code, json }
   } catch (error) {
-    // ValidationError / HelmError thrown directly (mapped uniformly into structured responses by hub.ts).
-    if (error instanceof HelmError) return { status: error.status, code: error.code, json: undefined }
+    // ValidationError / HelmxError thrown directly (mapped uniformly into structured responses by hub.ts).
+    if (error instanceof HelmxError) return { status: error.status, code: error.code, json: undefined }
     throw error
   }
 }
@@ -728,7 +728,7 @@ test('schema rejection attaches AJV field path diagnostics (details.errors non-e
       makeKernel(),
     ),
     (error: unknown) => {
-      assert.ok(error instanceof ValidationError, 'error type must be ValidationError (HelmError 400 subclass)')
+      assert.ok(error instanceof ValidationError, 'error type must be ValidationError (HelmxError 400 subclass)')
       const details = (error as ValidationError).details as { errors?: Array<{ instancePath?: string }> } | undefined
       assert.ok(Array.isArray(details?.errors) && details!.errors!.length > 0, 'details.errors must list AJV errors')
       const paths = details!.errors!.map((e) => e.instancePath).join(' ')

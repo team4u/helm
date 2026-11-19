@@ -2,7 +2,7 @@
  * Conversation commands: conversations list/get/create/update/delete/reset/compact/fork,
  * send, abort, and events watch. create/update support --node <nodeId> to bind a compute node.
  */
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags, type FlagSpec } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'
@@ -24,7 +24,7 @@ import {
 const WHEN_BUSY = ['steer', 'followUp', 'reject'] as const
 const ORIGINS = ['human', 'agent', 'trigger'] as const
 
-const convFlags: FlagSpec[] = [{ name: 'current', type: 'boolean', help: 'use HELM_CONVERSATION_ID from environment' }]
+const convFlags: FlagSpec[] = [{ name: 'current', type: 'boolean', help: 'use HELMX_CONVERSATION_ID from environment' }]
 
 export function conversationsCommands(): CommandSpec[] {
   const cmds: CommandSpec[] = []
@@ -64,7 +64,7 @@ export function conversationsCommands(): CommandSpec[] {
               payload = JSON.parse(data)
             } catch {
               // Malformed frame: log diagnostic to stderr and skip without breaking the stream (keepalive noise is expected)
-              ctx.io.err(`helm: ignoring non-JSON SSE frame (${data.slice(0, 120)})\n`)
+              ctx.io.err(`helmx: ignoring non-JSON SSE frame (${data.slice(0, 120)})\n`)
               return
             }
             render(event, payload)

@@ -1,9 +1,9 @@
 /**
  * Hub HTTP client: the CLI's sole network boundary.
  * Success: entity/array directly; failure: {error:{code,message,details?}} (ApiErrorBody).
- * Credential priority: HELM_TOKEN / HELM_HUB_URL env > cli-token file > default 3202.
+ * Credential priority: HELMX_TOKEN / HELMX_HUB_URL env > cli-token file > default 3202.
  */
-import type { ApiErrorBody, ArtifactMetadata } from '@helm/protocol'
+import type { ApiErrorBody, ArtifactMetadata } from '@helmx/protocol'
 import { CliError } from './errors.js'
 import type { Io } from './options.js'
 
@@ -19,14 +19,14 @@ export interface HubEndpoint {
 
 /**
  * Resolve Hub URL and auth token.
- * Token trust boundary: explicit HELM_TOKEN takes precedence (caller guarantees it belongs to target Hub);
+ * Token trust boundary: explicit HELMX_TOKEN takes precedence (caller guarantees it belongs to target Hub);
  * otherwise attach the stored token only when target baseUrl exactly matches the hubUrl recorded in
- * the credential file — never send an old Hub's token when HELM_HUB_URL points elsewhere.
+ * the credential file — never send an old Hub's token when HELMX_HUB_URL points elsewhere.
  */
 export function resolveEndpoint(env: NodeJS.ProcessEnv, credential: { hubUrl?: string; token?: string }): HubEndpoint {
-  const envUrl = env['HELM_HUB_URL']?.trim()
+  const envUrl = env['HELMX_HUB_URL']?.trim()
   const baseUrl = normalizeUrl(envUrl || credential.hubUrl || DEFAULT_HUB_URL)
-  if (env['HELM_TOKEN']) return { baseUrl, token: env['HELM_TOKEN'] }
+  if (env['HELMX_TOKEN']) return { baseUrl, token: env['HELMX_TOKEN'] }
   // Without env URL, baseUrl comes from credential.hubUrl (or default), so the token shares the same origin
   const sameHub = !envUrl || !credential.hubUrl || normalizeUrl(credential.hubUrl) === baseUrl
   return { baseUrl, token: sameHub ? credential.token : undefined }
@@ -51,7 +51,7 @@ export class HubClient {
     if (!this.endpoint.token) {
       if (optional) return extra
       throw new CliError(
-        `No token configured (${this.endpoint.baseUrl}). Run helm login or set HELM_TOKEN.`,
+        `No token configured (${this.endpoint.baseUrl}). Run helmx login or set HELMX_TOKEN.`,
         'unauthorized',
       )
     }
@@ -79,7 +79,7 @@ export class HubClient {
       /* non-JSON error body: preserve raw text */
     }
     if (response.status === 401) {
-      return new CliError(`${message} (unauthorized: ${this.endpoint.baseUrl}). Run helm login or set HELM_TOKEN.`, code, 1, details)
+      return new CliError(`${message} (unauthorized: ${this.endpoint.baseUrl}). Run helmx login or set HELMX_TOKEN.`, code, 1, details)
     }
     return new CliError(message, code, 1, details)
   }

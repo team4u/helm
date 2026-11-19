@@ -10,7 +10,7 @@
  * 4. stopObserving / post-deletion late refreshes never resurrect caches or emit ghost events;
  * 5. Initial populate carrying compacting=true must publish upsert (so subscribers never remain blind);
  *    without active compaction, initial populate stays silent;
- * 6. Honest window provenance: default fallback windows with helmContextWindowKnown === false are omitted
+ * 6. Honest window provenance: default fallback windows with helmxContextWindowKnown === false are omitted
  *    rather than reported as known;
  * 7. Compaction failure notification: each new compactionFailure emits one redacted error notification,
  *    repeated snapshots for the same taskId do not re-notify, and new taskIds report again;
@@ -28,9 +28,9 @@ import { describe, it } from 'node:test'
 import type { ContextView, ConversationView, Harness, Observation, Observer } from '@earendil-works/pi-durable'
 import { createModels } from '@earendil-works/pi-ai/models'
 import type { Models, Provider, UserMessage } from '@earendil-works/pi-ai'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import { ConversationTracker, type TrackerEvents } from '../src/runtime/conversations.js'
-import type { ConvMeta, HelmStore } from '../src/runtime/store.js'
+import type { ConvMeta, HelmxStore } from '../src/runtime/store.js'
 
 // ---------------------------------------------------------------------------
 // Test builders
@@ -181,7 +181,7 @@ function modelsWithFaux(): Models {
     contextWindow: 200_000,
     maxTokens: 4_096,
   }
-  const unknown = { ...known, id: 'm-unknown', contextWindow: 128_000, helmContextWindowKnown: false }
+  const unknown = { ...known, id: 'm-unknown', contextWindow: 128_000, helmxContextWindowKnown: false }
   const provider = {
     id: 'faux',
     name: 'faux',
@@ -216,7 +216,7 @@ function trackerEnv(options?: {
   const models = options?.models ?? modelsWithFaux
   const tracker = new ConversationTracker({
     harness: harness as unknown as Harness,
-    store: store as unknown as HelmStore,
+    store: store as unknown as HelmxStore,
     events,
     models: () => models(),
     ...(options?.redactError !== undefined ? { redactError: options.redactError } : {}),
@@ -278,7 +278,7 @@ describe('context usage refresh: boundary watermark', { timeout: 60_000 }, () =>
           { id: 6, kind: 'pi.compaction' },
           { id: 7, kind: 'pi.assistant' },
           { id: 8, kind: 'pi.user' },
-          { id: 9, kind: 'helm.rewind' },
+          { id: 9, kind: 'helmx.rewind' },
         ],
       }),
     )
@@ -290,7 +290,7 @@ describe('context usage refresh: boundary watermark', { timeout: 60_000 }, () =>
         entries: [
           { id: 5, kind: 'pi.user' },
           { id: 6, kind: 'pi.compaction' },
-          { id: 9, kind: 'helm.rewind' },
+          { id: 9, kind: 'helmx.rewind' },
         ],
       }),
     )
@@ -436,7 +436,7 @@ describe('context usage refresh: initial populate publishing rules', { timeout: 
 })
 
 // ---------------------------------------------------------------------------
-// 6. Honest window provenance (helmContextWindowKnown)
+// 6. Honest window provenance (helmxContextWindowKnown)
 // ---------------------------------------------------------------------------
 
 describe('context usage refresh: honest window provenance', { timeout: 60_000 }, () => {
@@ -499,7 +499,7 @@ describe('context usage refresh: compaction failure notification', { timeout: 60
 // 8. models.changed full completion (onModelsChanged)
 // ---------------------------------------------------------------------------
 
-/** Single-model faux catalog: known carries real window; unknown marks helmContextWindowKnown=false; served=false simulates removed model. */
+/** Single-model faux catalog: known carries real window; unknown marks helmxContextWindowKnown=false; served=false simulates removed model. */
 function modelsWithWindowState(window: number, known: boolean, served: boolean): Models {
   const models = createModels()
   const base = {
@@ -515,7 +515,7 @@ function modelsWithWindowState(window: number, known: boolean, served: boolean):
   }
   const model = known
     ? { ...base, contextWindow: window }
-    : { ...base, contextWindow: 128_000, helmContextWindowKnown: false }
+    : { ...base, contextWindow: 128_000, helmxContextWindowKnown: false }
   const list = served ? [model] : []
   const provider = {
     id: 'faux',

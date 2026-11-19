@@ -9,7 +9,7 @@
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import {
   ARCHIVED_COORDINATOR_TAG,
   ARCHIVED_WORKER_TAG,
@@ -219,11 +219,11 @@ test('swarm-unit2: default wake derivation and Fail-Closed target resolution', {
   assert.equal(resolvePostChannel(group, 'review'), 'review')
   assert.throws(
     () => resolvePostChannel(group, 'unknown'),
-    (err: unknown) => err instanceof HelmError && err.code === 'swarm_unknown_channel' && err.status === 404,
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_unknown_channel' && err.status === 404,
   )
   assert.throws(
     () => resolvePostChannel(group, 'legacy'),
-    (err: unknown) => err instanceof HelmError && err.code === 'swarm_channel_archived' && err.status === 409,
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_channel_archived' && err.status === 409,
   )
 
   // Coordinator 'all' expands only active members (excludes archived 'retired')
@@ -233,23 +233,23 @@ test('swarm-unit2: default wake derivation and Fail-Closed target resolution', {
   // Worker calling 'all' -> 403 swarm_broadcast_forbidden
   assert.throws(
     () => resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['all']),
-    (err: unknown) => err instanceof HelmError && err.code === 'swarm_broadcast_forbidden' && err.status === 403,
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_broadcast_forbidden' && err.status === 403,
   )
 
   // '#main' -> 400 validation_error
   assert.throws(
     () => resolveBoardTargets(group, { role: 'coordinator', from: 'coordinator' }, ['#main']),
-    (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
   )
 
   // Unknown '#ghost' -> 404; archived '#legacy' -> 409
   assert.throws(
     () => resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['#ghost']),
-    (err: unknown) => err instanceof HelmError && err.code === 'swarm_unknown_channel' && err.status === 404,
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_unknown_channel' && err.status === 404,
   )
   assert.throws(
     () => resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['#legacy']),
-    (err: unknown) => err instanceof HelmError && err.code === 'swarm_channel_archived' && err.status === 409,
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_channel_archived' && err.status === 409,
   )
 
   // Active '#review' from 'author' -> expands ['author', 'verifier'], strips self 'author' -> ['verifier']
@@ -259,11 +259,11 @@ test('swarm-unit2: default wake derivation and Fail-Closed target resolution', {
   // Archived or unknown member -> 404 swarm_unknown_target
   assert.throws(
     () => resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['retired']),
-    (err: unknown) => err instanceof HelmError && err.code === 'swarm_unknown_target' && err.status === 404,
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_unknown_target' && err.status === 404,
   )
   assert.throws(
     () => resolveBoardTargets(group, { role: 'worker', from: 'author' }, ['nobody']),
-    (err: unknown) => err instanceof HelmError && err.code === 'swarm_unknown_target' && err.status === 404,
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_unknown_target' && err.status === 404,
   )
 })
 
@@ -460,7 +460,7 @@ test('swarm-unit5: checkCoordinatorEligibility rejects child, worker, archived-w
   assert.equal(checkCoordinatorEligibility({ ...baseConv, parentConversationId: 9 }, 'human')?.code, 'validation_error')
   assert.equal(checkCoordinatorEligibility({ ...baseConv, tags: [WORKER_TAG] }, 'human')?.code, 'conversation_scope_violation')
   assert.equal(checkCoordinatorEligibility({ ...baseConv, tags: [ARCHIVED_WORKER_TAG] }, 'human')?.code, 'conversation_scope_violation')
-  assert.equal(checkCoordinatorEligibility(baseConv, 'helm')?.code, 'conversation_scope_violation')
+  assert.equal(checkCoordinatorEligibility(baseConv, 'helmx')?.code, 'conversation_scope_violation')
   assert.equal(checkCoordinatorEligibility(baseConv, 'bot')?.code, 'conversation_scope_violation')
 })
 
@@ -504,7 +504,7 @@ test('lastAssistantText skips toolResult and user text blocks, walking back to t
   )
   // User entries with plain-string content are ignored as well.
   assert.equal(
-    lastAssistantText([{ kind: 'helm.input', model: [{ role: 'user', content: 'plain steer' }] }, assistantEntry]),
+    lastAssistantText([{ kind: 'helmx.input', model: [{ role: 'user', content: 'plain steer' }] }, assistantEntry]),
     'found the bug',
   )
 })
@@ -599,7 +599,7 @@ test('swarm-unit6: main channel noise isolation, XML escape, schema from removal
         ...stallGroup,
         members: [{ ...stallMember, lastWakeCompletionSeq: -1 }],
       }),
-    (err: unknown) => err instanceof HelmError && err.code === 'swarm_doc_corrupt',
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_doc_corrupt',
     'disk meta.json must reject invalid negative lastWakeCompletionSeq',
   )
 })
@@ -637,26 +637,26 @@ test('swarm-unit7: inspectBoardWalLines trims single uncommitted tail or truncat
   // >= 2 uncommitted lines must throw swarm_doc_corrupt rather than silently dropping data
   assert.throws(
     () => inspectBoardWalLines(`${p1}\n${p2}\n${p3}\n`, 'grp_test_1', 1),
-    (err: unknown) => err instanceof HelmError && err.code === 'swarm_doc_corrupt',
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_doc_corrupt',
   )
 
   // Uncommitted line with mismatched seq must throw swarm_doc_corrupt
   const wrongSeq = JSON.stringify(makePost(99))
   assert.throws(
     () => inspectBoardWalLines(`${p1}\n${wrongSeq}\n`, 'grp_test_1', 1),
-    (err: unknown) => err instanceof HelmError && err.code === 'swarm_doc_corrupt',
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_doc_corrupt',
   )
 
   // Fewer lines than meta.headSeq must throw swarm_doc_corrupt
   assert.throws(
     () => inspectBoardWalLines(`${p1}\n`, 'grp_test_1', 2),
-    (err: unknown) => err instanceof HelmError && err.code === 'swarm_doc_corrupt',
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_doc_corrupt',
   )
 
   // Corrupt line inside committed prefix must throw swarm_doc_corrupt
   assert.throws(
     () => inspectBoardWalLines(`{broken\n${p2}\n`, 'grp_test_1', 2),
-    (err: unknown) => err instanceof HelmError && err.code === 'swarm_doc_corrupt',
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_doc_corrupt',
   )
 })
 
@@ -712,7 +712,7 @@ test('swarm-unit8: recovery metadata validation and classifyMemberDetailOutcome'
           ],
         }),
       ),
-    (err: unknown) => err instanceof HelmError && err.code === 'swarm_doc_corrupt',
+    (err: unknown) => err instanceof HelmxError && err.code === 'swarm_doc_corrupt',
   )
 
   const member = makeMember({ name: 'author', lastWakeTaskSeq: 2, lastWakeCompletionSeq: 1 })
@@ -726,7 +726,7 @@ test('swarm-unit8: recovery metadata validation and classifyMemberDetailOutcome'
   assert.deepEqual(
     classifyMemberDetailOutcome(
       [
-        { id: '10', kind: 'helm.input', data: { id: 'swarm-wakeup:grp_test_1:author:1-2' } },
+        { id: '10', kind: 'helmx.input', data: { id: 'swarm-wakeup:grp_test_1:author:1-2' } },
         { id: '11', kind: 'pi.assistant', model: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'forgot post' }] }] },
       ],
       { status: 'idle', completionSeq: 1 },
@@ -740,7 +740,7 @@ test('swarm-unit8: recovery metadata validation and classifyMemberDetailOutcome'
   assert.deepEqual(
     classifyMemberDetailOutcome(
       [
-        { id: '10', kind: 'helm.input', data: { id: 'swarm-wakeup:grp_test_1:author:1-2' } },
+        { id: '10', kind: 'helmx.input', data: { id: 'swarm-wakeup:grp_test_1:author:1-2' } },
         { id: '11', kind: 'pi.assistant', model: [{ role: 'assistant', stopReason: 'aborted', content: [] }] },
       ],
       { status: 'idle', completionSeq: 2 },
@@ -754,7 +754,7 @@ test('swarm-unit8: recovery metadata validation and classifyMemberDetailOutcome'
   assert.deepEqual(
     classifyMemberDetailOutcome(
       [
-        { id: '8', kind: 'helm.input', data: { id: 'swarm-wakeup:grp_test_1:author:1-1' } },
+        { id: '8', kind: 'helmx.input', data: { id: 'swarm-wakeup:grp_test_1:author:1-1' } },
         { id: '9', kind: 'pi.assistant', model: [{ role: 'assistant', stopReason: 'stop', content: [{ type: 'text', text: 'old' }] }] },
       ],
       { status: 'idle', completionSeq: 1 },

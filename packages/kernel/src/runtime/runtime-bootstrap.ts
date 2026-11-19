@@ -3,7 +3,7 @@
  *
  * Responsibilities:
  * - Resolve and ensure the data directory (`dataDir`);
- * - Open the SQLite database (`HelmDatabase`) and load global metadata (`HelmStore`);
+ * - Open the SQLite database (`HelmxDatabase`) and load global metadata (`HelmxStore`);
  * - Instantiate `ProviderService` and `CredentialService`, warming the API key cache;
  * - Construct the dynamic model catalog (`Models`) and cache store (`ModelsStore`);
  * - Open the underlying durable execution `Harness` and wire dynamic `models`/`redact` slots.
@@ -12,9 +12,9 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Models, ModelsStore, Provider } from '@earendil-works/pi-ai'
 import { Harness, createRegistry, type Registry, type SessionEnd } from '@earendil-works/pi-durable'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { CredentialService, ProviderService, ensureDataDir, resolveDataDir } from '../services/index.js'
-import type { PluginBuildProvider } from '@helm/protocol'
+import type { PluginBuildProvider } from '@helmx/protocol'
 import {
   createDiagnosticEmitter,
   type KernelDiagnosticEmitter,
@@ -23,8 +23,8 @@ import {
 import { buildModels, wrapModelsForCompaction, type CompactionModelResolution } from './models.js'
 import { createFileModelsStore } from './models-store.js'
 import { assertModelsStoreHealthyAtBoot } from './runtime-helpers.js'
-import { openHelmDatabase, type HelmDatabase } from './sqlite.js'
-import { HelmStore } from './store.js'
+import { openHelmxDatabase, type HelmxDatabase } from './sqlite.js'
+import { HelmxStore } from './store.js'
 import type { ConversationTracker } from './conversations.js'
 
 export interface KernelBootOptions {
@@ -47,7 +47,7 @@ export interface KernelBootOptions {
   externalSkillRoots?: readonly string[]
   /**
    * Plugin build port (`client.tsx` bundling + external plugin TS transpilation): injected with default
-   * implementation (`@helm/plugin-build`) by the composition root (`hub`); kernel carries no bundler.
+   * implementation (`@helmx/plugin-build`) by the composition root (`hub`); kernel carries no bundler.
    * Rejects explicitly when missing (`unsupported_client_build` / `unsupported_backend_ts_build`).
    */
   buildProvider?: PluginBuildProvider
@@ -57,8 +57,8 @@ export interface KernelBootOptions {
 
 export interface BootstrappedKernelContext {
   dataDir: string
-  database: HelmDatabase
-  store: HelmStore
+  database: HelmxDatabase
+  store: HelmxStore
   harness: Harness
   registry: Registry
   providersSvc: ProviderService
@@ -84,7 +84,7 @@ export async function bootstrapKernelRuntime(
   options: KernelBootOptions = {},
 ): Promise<BootstrappedKernelContext> {
   if (options.models !== undefined && options.providers !== undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       'KernelRuntimeOptions.models and KernelRuntimeOptions.providers are mutually exclusive',
       400,
@@ -92,7 +92,7 @@ export async function bootstrapKernelRuntime(
   }
   const dataDir = resolveDataDir(options.dataDir)
   await ensureDataDir(dataDir)
-  const database = await openHelmDatabase(dataDir)
+  const database = await openHelmxDatabase(dataDir)
 
   const redactSlot: { current: (text: string) => string } = { current: (t) => t }
   const emitDiagnostic = createDiagnosticEmitter({
@@ -115,12 +115,12 @@ export async function bootstrapKernelRuntime(
     emitDiagnostic({
       level: 'error',
       source,
-      message: source === 'store' ? 'HelmStore persistence failed' : 'Harness closed due to fatal storage fault',
+      message: source === 'store' ? 'HelmxStore persistence failed' : 'Harness closed due to fatal storage fault',
       error,
     })
   }
 
-  const store = new HelmStore(database, {
+  const store = new HelmxStore(database, {
     onError: (error) => dispatchFatalStorage('store', error),
     onDiagnostic: options.onDiagnostic,
     redact: (text) => redactSlot.current(text),
@@ -247,7 +247,7 @@ export async function bootstrapKernelRuntime(
  */
 export async function ensureInitialConversation(deps: {
   harness: Harness
-  store: HelmStore
+  store: HelmxStore
   tracker: ConversationTracker
   conversations: {
     resolveEffectiveThinkingLevel(levelOverride?: string, profileId?: string, modelRef?: { provider: string; modelId: string }): Promise<string | undefined>
@@ -298,7 +298,7 @@ export async function recoverExistingConversations(deps: {
     recover(syncConv: (id: number, parentConversationId?: number) => Promise<void>): Promise<void>
   }
   harness: Harness
-  store: HelmStore
+  store: HelmxStore
   defaultCwd: string
 }): Promise<void> {
   await deps.conversations.recover(async (id, parentConversationId) => {
@@ -344,7 +344,7 @@ export async function teardownKernelRuntime(deps: {
     dispose(): Promise<void>
   }
   settledInflight: () => Promise<void>
-  store: HelmStore
+  store: HelmxStore
   harness: Harness
   tracker: ConversationTracker
   pluginHost?: {
@@ -359,7 +359,7 @@ export async function teardownKernelRuntime(deps: {
   processTokenHandle?: {
     dispose(): void
   }
-  database: HelmDatabase
+  database: HelmxDatabase
   events: {
     close(): void
   }
@@ -396,7 +396,7 @@ export async function teardownKernelRuntime(deps: {
   await step('nodes.dispose', () => deps.nodes.dispose())
   await step('assetReloader.waitForInflight', () => deps.assetReloader.waitForInflight())
   await step('modelsRegistry.dispose', () => deps.modelsRegistry.dispose())
-  // Close Harness first while pluginHost, envFabric, HelmStore, and managed tokens are still online:
+  // Close Harness first while pluginHost, envFabric, HelmxStore, and managed tokens are still online:
   // in-flight GenerationTask/ToolTask revert cleanly to pending via writeAtClose() (not marked aborted,
   // and not counted toward restarts) so they resume cleanly on next startup.
   await step('harness.close', () => deps.harness.close(BACKGROUND_CONTEXT))
@@ -429,14 +429,14 @@ export async function teardownKernelRuntime(deps: {
   if (storeError !== undefined || failures.length > 0) {
     const detail = failures.join('; ')
     if (storeError !== undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'store_flush_failed',
         `Persistence flush failed on close: ${String(storeError)}` + (detail === '' ? '' : `; additional teardown failures: ${detail}`),
         500,
         { error: String(storeError), ...(detail === '' ? {} : { failures: detail }) },
       )
     }
-    throw new HelmError('teardown_failed', `Partial failure during shutdown teardown: ${detail}`, 500, { failures: detail })
+    throw new HelmxError('teardown_failed', `Partial failure during shutdown teardown: ${detail}`, 500, { failures: detail })
   }
 }
 

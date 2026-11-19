@@ -19,9 +19,9 @@ import { after, describe, it } from 'node:test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HelmError, type AgentSpawnRequest, type ConversationSummary } from '@helm/protocol'
+import { HelmxError, type AgentSpawnRequest, type ConversationSummary } from '@helmx/protocol'
 import { parseWorkflowSpawnMeta } from '../src/contracts.js'
-import type { AgentNamespacedMeta } from '@helm/protocol'
+import type { AgentNamespacedMeta } from '@helmx/protocol'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
 
 const timeout = { timeout: 60_000 } as const
@@ -126,7 +126,7 @@ function makeHost(): CascadeHost {
         if (plan.rejectOnAbort === true && request.signal !== undefined) {
           const onAbort = () => {
             fireResolved()
-            reject(new HelmError('aborted', '子代理执行被取消', 409))
+            reject(new HelmxError('aborted', '子代理执行被取消', 409))
           }
           if (request.signal.aborted) {
             onAbort()
@@ -138,20 +138,20 @@ function makeHost(): CascadeHost {
       })
     },
     async invokeAction() {
-      throw new HelmError('unknown_action', '级联测试不调用动作', 404)
+      throw new HelmxError('unknown_action', '级联测试不调用动作', 404)
     },
     listActions() {
       return []
     },
     getConversation(id: number) {
       const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      if (found === undefined) throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
       return found
     },
     async abortConversationGuarded(id) {
       guardedAborts.push(id)
       if (guardRejections.has(id)) {
-        throw new HelmError('ownership_conflict', `会话 ${id} 当前归属 human，拒绝自动化变更（human 红线）`, 409)
+        throw new HelmxError('ownership_conflict', `会话 ${id} 当前归属 human，拒绝自动化变更（human 红线）`, 409)
       }
       if (guardHeld.has(id)) {
         await new Promise<void>((resolve) => {
@@ -263,13 +263,13 @@ describe('WorkflowService 级联取消', () => {
     // 边界内会话的新 run 被拒（不静默排队）。
     await assert.rejects(
       () => service.run({ conversationId: 11, script: FAST_SCRIPT }),
-      (err: unknown) => err instanceof HelmError && err.code === 'aborted' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'aborted' && err.status === 409,
     )
     // 边界内会话的新后台子代理同样被拒。
     host.plan = { executionConversationId: 21 }
     await assert.rejects(
       () => service.startBackgroundAgent({ parentConversationId: 11, prompt: '不该启动' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'aborted',
+      (err: unknown) => err instanceof HelmxError && err.code === 'aborted',
     )
 
     // 解除窗口：新 run 恢复允许。

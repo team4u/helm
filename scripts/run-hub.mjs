@@ -2,7 +2,7 @@
 /**
  * Dev-time Hub launcher: runs the packages/hub/src/main.ts sources directly via tsx.
  *
- * Why it exists: hub sources import @helm/kernel / @helm/plugins by package name; at
+ * Why it exists: hub sources import @helmx/kernel / @helmx/plugins by package name; at
  * tsx runtime the tsconfig.dev.json paths must resolve both to sources, matching the
  * repo's single-module-identity convention of running sources for dev/test (a dual
  * dist/source identity silently corrupts things like instanceof errors mapping to 500s).

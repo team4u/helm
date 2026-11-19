@@ -7,15 +7,15 @@
  * - Emit conversation.upsert events when ownership changes.
  */
 
-import type { ConversationSummary } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type { EventHub } from './events.js'
-import type { HelmStore } from './store.js'
+import type { HelmxStore } from './store.js'
 
-export type ConversationOwnership = 'helm' | 'bot' | 'human'
+export type ConversationOwnership = 'helmx' | 'bot' | 'human'
 
 interface RuntimeOwnershipDeps {
-  readonly store: HelmStore
+  readonly store: HelmxStore
   readonly documentStore: {
     get<T>(key: string, initial: T): T
     set<T>(key: string, value: T): void
@@ -38,11 +38,11 @@ export class RuntimeOwnershipManager {
   getOwnership(conversationId: number): ConversationOwnership {
     const meta = this.deps.store.getConv(conversationId)
     if (meta === undefined || this.deps.store.isDeleted(conversationId)) {
-      throw new HelmError('not_found', `conversation not found: ${conversationId}`, 404, { conversationId })
+      throw new HelmxError('not_found', `conversation not found: ${conversationId}`, 404, { conversationId })
     }
     const owners = this.deps.documentStore.get<Record<string, string>>('conversation-ownership', {})
     const marked = owners[String(conversationId)]
-    return marked === 'helm' || marked === 'bot' ? marked : 'human'
+    return marked === 'helmx' || marked === 'bot' ? marked : 'human'
   }
 
   /**
@@ -54,7 +54,7 @@ export class RuntimeOwnershipManager {
     const key = 'conversation-ownership'
     const current = this.deps.documentStore.get<Record<string, string>>(key, {})
     const previous = current[String(conversationId)]
-    const previousEffective = previous === 'helm' || previous === 'bot' ? previous : 'human'
+    const previousEffective = previous === 'helmx' || previous === 'bot' ? previous : 'human'
     if (previousEffective === owner) return
     const next = owner === 'human'
       ? (() => {

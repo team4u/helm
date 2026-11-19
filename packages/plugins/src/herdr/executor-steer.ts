@@ -14,7 +14,7 @@
  */
 
 import { randomUUID } from 'node:crypto'
-import { HelmError, type AgentSpawnRequest } from '@helm/protocol'
+import { HelmxError, type AgentSpawnRequest } from '@helmx/protocol'
 import type { HerdrPluginDependencies, HerdrTarget } from './contracts.js'
 import { nodeIdOf, paneStateKey, targetOf, type ManagedPane, type PaneRegistry } from './panes.js'
 import { parseAgentResult, type HerdrAgentInfo } from './rpc.js'
@@ -121,11 +121,11 @@ export class SteerDispatcher {
    */
   async steerPane(pane: ManagedPane, input: SteerPaneInput): Promise<{ stateChangeSeq: number }> {
     if (typeof input.text !== 'string' || input.text.trim() === '') {
-      throw new HelmError('validation_error', 'steer guidance text cannot be blank', 400)
+      throw new HelmxError('validation_error', 'steer guidance text cannot be blank', 400)
     }
     const key = paneStateKey(pane)
     if (this.activeSteers.has(key)) {
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_steer_in_flight',
         `pane ${pane.paneId} already has an in-flight steer; re-entry rejected (mutual exclusion per pane)`,
         409,
@@ -138,7 +138,7 @@ export class SteerDispatcher {
       // 3) The original run signal is not cancelled.
       const origin = this.port.activeTaskOf(key)
       if (origin === undefined || origin.signal?.aborted) {
-        throw new HelmError(
+        throw new HelmxError(
           'herdr_steer_task_ended',
           `pane ${pane.paneId}'s original task has ended or is being cancelled; steer rejected`,
           409,
@@ -152,7 +152,7 @@ export class SteerDispatcher {
         authority.tabId !== current.tabId ||
         authority.name !== current.agentName
       ) {
-        throw new HelmError(
+        throw new HelmxError(
           'herdr_steer_identity_mismatch',
           `pane ${current.paneId}'s authoritative identity does not match the managed record (name=${String(authority.name)} tab=${authority.tabId}); steer rejected`,
           409,
@@ -160,7 +160,7 @@ export class SteerDispatcher {
         )
       }
       if (authority.launchPending === true) {
-        throw new HelmError(
+        throw new HelmxError(
           'herdr_steer_not_ready',
           `pane ${current.paneId} is still starting (launch_pending); steer rejected`,
           409,
@@ -168,7 +168,7 @@ export class SteerDispatcher {
         )
       }
       if (authority.agentStatus === 'blocked') {
-        throw new HelmError(
+        throw new HelmxError(
           'herdr_steer_agent_blocked',
           `pane ${current.paneId} is currently blocked (awaiting approval); steering is the original approval bridge's job: complete the approval in the AskDock first`,
           409,
@@ -176,7 +176,7 @@ export class SteerDispatcher {
         )
       }
       if (authority.agentStatus !== 'working') {
-        throw new HelmError(
+        throw new HelmxError(
           'herdr_steer_not_working',
           `pane ${current.paneId}'s current state is ${authority.agentStatus}; only working is steerable (never start a new turn)`,
           409,
@@ -187,7 +187,7 @@ export class SteerDispatcher {
       this.assertSteerable(pane, input)
       const originAfter = this.port.activeTaskOf(key)
       if (originAfter === undefined || originAfter.signal?.aborted) {
-        throw new HelmError(
+        throw new HelmxError(
           'herdr_steer_task_ended',
           `pane ${pane.paneId}'s original task ended or was cancelled during the steer; delivery aborted (no input sent)`,
           409,
@@ -223,7 +223,7 @@ export class SteerDispatcher {
         throw error
       }
       if (this.port.activeTaskOf(key) !== origin || origin.signal?.aborted || this.port.isClosingPane(current)) {
-        throw new HelmError('herdr_steer_task_ended', `pane ${pane.paneId}'s input was delivered, but the original task was cancelled or closed; inspect the scene, do not resend`, 409)
+        throw new HelmxError('herdr_steer_task_ended', `pane ${pane.paneId}'s input was delivered, but the original task was cancelled or closed; inspect the scene, do not resend`, 409)
       }
       // Redirect the single handoff file after successful delivery and flush persistence; visible when settlement drains in-flight steers.
       this.port.registry.update(nodeIdOf(current), current.paneId, { outputFileName: next })
@@ -243,7 +243,7 @@ export class SteerDispatcher {
   private assertSteerable(pane: ManagedPane, input: SteerPaneInput): ManagedPane {
     const current = this.port.registry.get(nodeIdOf(pane), pane.paneId)
     if (current === undefined || current.outcome !== 'running') {
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_steer_not_running',
         `pane ${pane.paneId} is not under managed running (outcome=${current?.outcome ?? 'unmanaged'}); steer rejected`,
         409,
@@ -254,7 +254,7 @@ export class SteerDispatcher {
     // change only after several awaits -- non-abort closes (workflow/turn settle,
     // reconciliation reclaim) must also block steers, not just the task+running gate.
     if (this.port.isClosingPane(pane)) {
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_steer_task_ended',
         `pane ${pane.paneId} is closing (settle/cancel/reclaim in progress); steer rejected`,
         409,
@@ -263,7 +263,7 @@ export class SteerDispatcher {
     }
     const phase = this.port.phaseOf(paneStateKey(pane))
     if (phase !== 'task') {
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_steer_phase',
         `pane ${pane.paneId} is currently in phase ${phase ?? 'no in-flight task'}; only the task execution phase (task) is steerable`,
         409,
@@ -271,7 +271,7 @@ export class SteerDispatcher {
       )
     }
     if (current.workflowRunId !== input.workflowRunId || current.parentConversationId !== input.parentConversationId) {
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_steer_context_mismatch',
         `pane ${pane.paneId}'s managed ownership (workflow=${String(current.workflowRunId)} parent conversation=${current.parentConversationId}) does not match the steer target (workflow=${input.workflowRunId} parent conversation=${input.parentConversationId}); cross-track steer rejected`,
         409,
@@ -285,7 +285,7 @@ export class SteerDispatcher {
       )
     }
     if (this.steerFailures.has(paneStateKey(pane))) {
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_steer_uncertain',
         `pane ${pane.paneId}'s previous steer delivery is uncertain; inspect the scene first -- do not keep steering to bury that result`,
         409,
@@ -299,7 +299,7 @@ export class SteerDispatcher {
   private steerPromptText(pane: ManagedPane, input: SteerPaneInput, nextFileName: string): string {
     const previous = pane.outputFileName
     if (previous === undefined || previous === '') {
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_context_unavailable',
         `pane ${pane.paneId} has no handoff file name (abnormal task phase); steer rejected`,
         409,
@@ -310,9 +310,9 @@ export class SteerDispatcher {
       `Parent-conversation steer (background run ${input.workflowRunId}):`,
       this.port.redact(input.text),
       '',
-      '--- helm handoff contract update (must follow) ---',
-      `After finishing the remaining work per this steer's latest guidance, write the final result to the new file ${pane.effectiveCwd}/.helm/${nextFileName} (same content requirements as the original handoff contract; must still pass the original Schema and Gate).`,
-      `The original handoff file ${previous} is voided: do not write the old file again; helm accepts only the new file's delivery, and not writing it counts as task failure.`,
+      '--- helmx handoff contract update (must follow) ---',
+      `After finishing the remaining work per this steer's latest guidance, write the final result to the new file ${pane.effectiveCwd}/.helmx/${nextFileName} (same content requirements as the original handoff contract; must still pass the original Schema and Gate).`,
+      `The original handoff file ${previous} is voided: do not write the old file again; helmx accepts only the new file's delivery, and not writing it counts as task failure.`,
     ].join('\n')
   }
 
@@ -320,7 +320,7 @@ export class SteerDispatcher {
   private nextSteerOutputFileName(pane: ManagedPane): string {
     const fileName = pane.outputFileName
     if (fileName === undefined || fileName === '') {
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_context_unavailable',
         `pane ${pane.paneId} has no handoff file name (abnormal task phase); steer rejected`,
         409,
@@ -385,7 +385,7 @@ export class SteerDispatcher {
       if (inFlight !== undefined) await inFlight.catch(() => {})
       const uncertain = this.uncertainOf(key)
       if (uncertain !== undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'herdr_steer_uncertain',
           `pane ${pane.paneId}'s steer delivery is uncertain (${this.port.redact(uncertain)}): refusing to pass off an old handoff result or a self-heal follow-up as a latest-guidance delivery; the task fails explicitly and keeps the scene`,
           502,
@@ -398,7 +398,7 @@ export class SteerDispatcher {
         continue
       }
       if (authority.agentStatus === 'unknown') {
-        throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId} state unknown; completion cannot be confirmed`, 502)
+        throw new HelmxError('herdr_agent_unsettled', `pane ${pane.paneId} state unknown; completion cannot be confirmed`, 502)
       }
       if (!steerSettled()) continue
       const currentName = latestName()
@@ -409,7 +409,7 @@ export class SteerDispatcher {
           await this.port.transport.readOutput(targetOf(pane), pane.effectiveCwd, currentName, request.signal)
           present = true
         } catch (error) {
-          if (!(error instanceof HelmError && error.code === 'herdr_output_missing')) throw error
+          if (!(error instanceof HelmxError && error.code === 'herdr_output_missing')) throw error
         }
         if (!steerSettled() || latestName() !== currentName) continue
         if (!present) {
@@ -424,7 +424,7 @@ export class SteerDispatcher {
           if (!steerSettled() || latestName() !== currentName) continue
           if (info.agentStatus === 'working' || info.agentStatus === 'blocked') continue
           if (info.agentStatus === 'unknown') {
-            throw new HelmError('herdr_agent_unsettled', `pane ${pane.paneId} state unknown; completion cannot be confirmed`, 502)
+            throw new HelmxError('herdr_agent_unsettled', `pane ${pane.paneId} state unknown; completion cannot be confirmed`, 502)
           }
           // When still settled, the original single self-heal backstops on the latest file name; never read the old file.
         }

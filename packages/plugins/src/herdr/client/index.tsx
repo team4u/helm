@@ -8,7 +8,7 @@
  * - Terminal panes with ownedBy === 'human' only allow read-only diagnostics
  *   and status display; never render focus, snapshot, send-keys or abort
  *   controls for them.
- * - Only panes with ownedBy === 'helm' expose the linked conversation, focus
+ * - Only panes with ownedBy === 'helmx' expose the linked conversation, focus
  *   and read-only snapshot entries.
  *
  * Display copy resolves from copy.ts against the active host locale (no
@@ -18,7 +18,7 @@
 import { useMemo, useState } from 'react'
 import './styles.css'
 import type { CSSProperties, ReactNode } from 'react'
-import type { ScreenProps } from '@helm/protocol'
+import type { ScreenProps } from '@helmx/protocol'
 import {
   Callout,
   Dialog,
@@ -34,7 +34,7 @@ import {
   usePluginDoc,
   usePluginLocale,
   usePluginTranslator,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 import {
   agentStatusTone,
   canFocusPane,
@@ -133,7 +133,7 @@ function Icon({
   return <Cmp size={size} strokeWidth={1.75} className={className} style={style} />
 }
 
-/** Host Radix Select filter (reuses the @helm/plugin-client shared primitive; zero native <select>). */
+/** Host Radix Select filter (reuses the @helmx/plugin-client shared primitive; zero native <select>). */
 function FilterSelect({
   value,
   options,
@@ -241,7 +241,7 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
     }
     const showFocus = canFocusPane(row)
     const showRead = canSnapshotPane(row)
-    const showConversation = row.ownedBy === 'helm' && (row.pendingAsk === true || parentConversationId !== undefined)
+    const showConversation = row.ownedBy === 'helmx' && (row.pendingAsk === true || parentConversationId !== undefined)
     if (!showFocus && !showRead && !showConversation) {
       return <span className="herdr-subtle">—</span>
     }
@@ -349,8 +349,8 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
 
       <div className="herdr-overview-content">
         <div className="herdr-content-inner">
-          <div className="helm-table-wrap herdr-desktop-table">
-            <table className="helm-table">
+          <div className="helmx-table-wrap herdr-desktop-table">
+            <table className="helmx-table">
               <thead>
                 <tr>
                   <th className="herdr-col-node">{t(HDR_COL_NODE)}</th>
@@ -396,8 +396,8 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
                           {locText}
                         </td>
                         <td>
-                          <span className={`badge ${row.ownedBy === 'helm' ? 'badge-accent' : 'badge-neutral'}`}>
-                            {row.ownedBy === 'helm' ? 'helm' : 'human'}
+                          <span className={`badge ${row.ownedBy === 'helmx' ? 'badge-accent' : 'badge-neutral'}`}>
+                            {row.ownedBy === 'helmx' ? 'helmx' : 'human'}
                           </span>
                         </td>
                         <td>
@@ -445,11 +445,11 @@ export function HerdrOverviewScreen(props: ScreenProps): ReactNode {
                   <article
                     key={key}
                     className={`herdr-pane-card${humanOnly ? ' herdr-pane-card-human' : ''}`}
-                    data-owned-by={humanOnly ? 'human' : 'helm'}
+                    data-owned-by={humanOnly ? 'human' : 'helmx'}
                   >
                     <div className="herdr-pane-card-top">
                       <span className="mono herdr-pane-card-id">{`${row.paneId}@${row.nodeId}`}</span>
-                      <span className="herdr-pane-card-owner">{row.ownedBy === 'helm' ? 'helm' : 'human'}</span>
+                      <span className="herdr-pane-card-owner">{row.ownedBy === 'helmx' ? 'helmx' : 'human'}</span>
                       <StatusLight status={row.agentStatus} label={row.agentStatus} />
                       {outcomeMeta !== undefined ? (
                         <span className={`badge badge-${outcomeMeta.tone}`}>{outcomeMeta.label}</span>

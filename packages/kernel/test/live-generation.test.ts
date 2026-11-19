@@ -21,13 +21,13 @@ import { join } from 'node:path'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
-import type { ConversationEntry, ConversationLive, HelmEventFrame, HelmSnapshot } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive, HelmxEventFrame, HelmxSnapshot } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { ConversationTracker, type TrackerEvents } from '../src/runtime/conversations.js'
 import { deriveConversationLive, liveGenerationOf } from '../src/runtime/entries.js'
 import { EventHub } from '../src/runtime/events.js'
-import { openHelmDatabase } from '../src/runtime/sqlite.js'
-import { HelmStore, type ConvMeta } from '../src/runtime/store.js'
+import { openHelmxDatabase } from '../src/runtime/sqlite.js'
+import { HelmxStore, type ConvMeta } from '../src/runtime/store.js'
 import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
 // ---------------------------------------------------------------------------
@@ -142,7 +142,7 @@ describe('conversation.live generation event boundary validation', { timeout: 60
         pluginDocs: [],
         conversationLives: [],
         nodes: [],
-      } as HelmSnapshot),
+      } as HelmxSnapshot),
     })
   }
 
@@ -156,7 +156,7 @@ describe('conversation.live generation event boundary validation', { timeout: 60
 
       assert.throws(
         () => hub.publish('conversation.live', { live: { ...baseLive, generation: { taskId: 1, attempt: 1 } } }),
-        (error: unknown) => error instanceof HelmError && error.code === 'invalid_event',
+        (error: unknown) => error instanceof HelmxError && error.code === 'invalid_event',
       )
 
       hub.publishTransientLive({ ...baseLive, generation: { taskId: 1, attempt: 1 } })
@@ -215,13 +215,13 @@ describe('conversation.live generation event boundary validation', { timeout: 60
       for (const generation of rejects) {
         assert.throws(
           () => hub.publishTransientLive({ ...baseLive, generation } as never),
-          (error: unknown) => error instanceof HelmError,
+          (error: unknown) => error instanceof HelmxError,
           `must reject ${JSON.stringify(generation)}`,
         )
       }
       assert.throws(
         () => hub.publish('conversation.entry', { conversationId: 1, entry: { id: '9', kind: 'pi.assistant', taskId: 0, model: [] } }),
-        (error: unknown) => error instanceof HelmError,
+        (error: unknown) => error instanceof HelmxError,
         'entry.taskId may be omitted but must be valid if present',
       )
       assert.equal(hub.seq, 0, 'rejected events must not advance seq')
@@ -239,7 +239,7 @@ describe('ConversationTracker real SDK: live frame generation facts', { timeout:
   let root = ''
 
   before(async () => {
-    root = await makeTempDir('helm-live-generation-')
+    root = await makeTempDir('helmx-live-generation-')
   })
 
   after(async () => {
@@ -255,8 +255,8 @@ describe('ConversationTracker real SDK: live frame generation facts', { timeout:
     close: () => Promise<void>
   }> {
     const dir = join(root, `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
-    const database = await openHelmDatabase(dir)
-    const store = new HelmStore(database)
+    const database = await openHelmxDatabase(dir)
+    const store = new HelmxStore(database)
     await store.load()
     const { models, faux } = makeFauxModels({ tokensPerSecond: options?.tokensPerSecond })
     const registry = createRegistry()
@@ -291,7 +291,7 @@ describe('ConversationTracker real SDK: live frame generation facts', { timeout:
         await harness.close(BACKGROUND_CONTEXT)
         const err = await store.close()
         await database.close()
-        if (err !== undefined) throw new HelmError('store_flush_failed', String(err), 500)
+        if (err !== undefined) throw new HelmxError('store_flush_failed', String(err), 500)
       },
     }
   }
@@ -324,7 +324,7 @@ describe('ConversationTracker real SDK: live frame generation facts', { timeout:
         BACKGROUND_CONTEXT,
       )
       const id = conv.id as number
-      const store = (tracker as unknown as { store: HelmStore }).store
+      const store = (tracker as unknown as { store: HelmxStore }).store
       store.upsertConv(convMeta(id))
       await tracker.observe(id)
 
@@ -380,7 +380,7 @@ describe('ConversationTracker real SDK: live frame generation facts', { timeout:
         BACKGROUND_CONTEXT,
       )
       const id = conv.id as number
-      const store = (tracker as unknown as { store: HelmStore }).store
+      const store = (tracker as unknown as { store: HelmxStore }).store
       store.upsertConv(convMeta(id))
       await tracker.observe(id)
 

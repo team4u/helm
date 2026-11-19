@@ -12,14 +12,14 @@
  */
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { HelmError } from '@helm/protocol';
+import { HelmxError } from '@helmx/protocol';
 import { UiRegistry } from '../src/plugins/ui-registry.js';
-import { createPluginBuildProvider } from '@helm/plugin-build';
+import { createPluginBuildProvider } from '@helmx/plugin-build';
 
-const isHelmError = (code: string) => (err: unknown): boolean => err instanceof HelmError && err.code === code;
+const isHelmxError = (code: string) => (err: unknown): boolean => err instanceof HelmxError && err.code === code;
 
 /** Test clientRoot (needed for client-reference schema validation; directory does not need to exist yet). */
-const CLIENT_ROOT = '/tmp/helm-test-client-root';
+const CLIENT_ROOT = '/tmp/helmx-test-client-root';
 
 /** Minimal helper to register a valid commandPalette spec (uses actionId track by default; omits slash if unset). */
 function registerCommand(ui: UiRegistry, pluginId: string, id: string, slash?: string): void {
@@ -49,24 +49,24 @@ test('markdown.codeBlock: validates languages shape, rejects duplicates, require
   // Empty array / non-string / invalid uppercase / duplicates all reject
   assert.throws(
     () => ui.registerUi('p1', 'markdown.codeBlock', { id: 'bad1', languages: [], client }, 'markdownCodeBlock'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
   assert.throws(
     () => ui.registerUi('p1', 'markdown.codeBlock', { id: 'bad2', languages: ['a', 1], client }, 'markdownCodeBlock'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
   assert.throws(
     () => ui.registerUi('p1', 'markdown.codeBlock', { id: 'bad3', languages: ['UI'], client }, 'markdownCodeBlock'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
   assert.throws(
     () => ui.registerUi('p1', 'markdown.codeBlock', { id: 'bad4', languages: ['a', 'a'], client }, 'markdownCodeBlock'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
   // Missing client: rejects (no declarative fallback path)
   assert.throws(
     () => ui.registerUi('p1', 'markdown.codeBlock', { id: 'bad5', languages: ['a'] }, 'markdownCodeBlock'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
 
   // assertUiDocsRegistered is now a no-op hook without doc-ref checks: never throws for any args
@@ -103,22 +103,22 @@ test('ui.action: requires actionId or client and enforces field ownership', { ti
   // All execution tracks omitted: rejects
   assert.throws(
     () => ui.registerUi('p1', 'conversation.header.action', { id: 'bad1', target: 'conversation:header', label: 'L' }, 'action'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
   // actionId contains a dot: rejects
   assert.throws(
     () => ui.registerUi('p1', 'conversation.header.action', { id: 'bad2', target: 'conversation:header', label: 'L', actionId: 'x.y' }, 'action'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
   // placement allowed on header only
   assert.throws(
     () => ui.registerUi('p1', 'conversation.row.action', { id: 'bad3', target: 'conversation:row', label: 'L', actionId: 'x', placement: 'toolbar' }, 'action'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
   // kinds/roles allowed on timeline:entry only
   assert.throws(
     () => ui.registerUi('p1', 'conversation.header.action', { id: 'bad4', target: 'conversation:header', label: 'L', actionId: 'x', kinds: ['a'] }, 'action'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
   // target field stripped upon registration (surface carries that semantic)
   const list = ui.listUi();
@@ -135,7 +135,7 @@ test('priority/order must be finite safe integers', { timeout: 60_000 }, () => {
     for (const bad of [1.5, NaN, Infinity, -Infinity, '3', null]) {
       assert.throws(
         () => ui.registerUi('p1', 'sidebar.item', { id: `bad-${field}`, label: 'B', [field]: bad }, 'sidebarItem'),
-        isHelmError('invalid_ui_spec'),
+        isHelmxError('invalid_ui_spec'),
         `field=${field} value=${String(bad)}`,
       );
     }
@@ -151,7 +151,7 @@ test('commandPalette: slash format, reserved words, and intra-plugin duplicates'
   for (const bad of ['/wf', 'WF', 'a b', 'a#b', 'x'.repeat(66)]) {
     assert.throws(
       () => registerCommand(ui, 'p1', `cmd-bad`, bad),
-      isHelmError('invalid_ui_spec'),
+      isHelmxError('invalid_ui_spec'),
       `slash=${bad}`,
     );
   }
@@ -159,7 +159,7 @@ test('commandPalette: slash format, reserved words, and intra-plugin duplicates'
   for (const reserved of ['new', 'clear', 'compact', 'skill:run']) {
     assert.throws(
       () => registerCommand(ui, 'p1', `cmd-res`, reserved),
-      isHelmError('invalid_ui_spec'),
+      isHelmxError('invalid_ui_spec'),
       `slash=${reserved}`,
     );
   }
@@ -167,7 +167,7 @@ test('commandPalette: slash format, reserved words, and intra-plugin duplicates'
   assert.throws(
     () => registerCommand(ui, 'p1', 'cmd-dup', 'wf'),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError);
+      assert.ok(err instanceof HelmxError);
       assert.equal(err.code, 'duplicate_command_slash');
       assert.equal(err.status, 409);
       assert.deepEqual((err.details as { pluginId: string; slash: string }).slash, 'wf');
@@ -177,21 +177,21 @@ test('commandPalette: slash format, reserved words, and intra-plugin duplicates'
   // Commands must be triggerable: omitting slash and all execution tracks rejects
   assert.throws(
     () => ui.registerUi('p1', 'commandPalette', { id: 'cmd-empty', title: 'E' }, 'command'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
   // client-track command is valid; slash commands must supply an executable action (never an unexecutable suggestion)
   ui.registerUi('p1', 'commandPalette', { id: 'cmd-client', title: 'C', client: { module: 'index.tsx', export: 'X' } }, 'command', CLIENT_ROOT);
   assert.throws(
     () => ui.registerUi('p1', 'commandPalette', { id: 'slash-client-only', title: 'C', slash: 'client-only' }, 'command'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
   for (const actionId of ['', 5, 'bad.id']) {
     assert.throws(
       () => ui.registerUi('p1', 'commandPalette', { id: 'bad-action', title: 'A', actionId }, 'command'),
-      isHelmError('invalid_ui_spec'),
+      isHelmxError('invalid_ui_spec'),
     );
   }
-  assert.throws(() => ui.registerUi('p1', 'screen', null, 'screen'), isHelmError('invalid_ui_spec'));
+  assert.throws(() => ui.registerUi('p1', 'screen', null, 'screen'), isHelmxError('invalid_ui_spec'));
 });
 
 test('profile.runtime: kind/label/agentSuggestions validation and intra-plugin duplicate kind', { timeout: 60_000 }, () => {
@@ -202,24 +202,24 @@ test('profile.runtime: kind/label/agentSuggestions validation and intra-plugin d
   for (const bad of ['', ' bad', 'a b', 'a#b', 'x'.repeat(66)]) {
     assert.throws(
       () => registerProfileRuntime(ui, 'p1', bad),
-      isHelmError('invalid_ui_spec'),
+      isHelmxError('invalid_ui_spec'),
       `kind=${JSON.stringify(bad)}`,
     );
   }
   assert.throws(
     () => ui.registerUi('p1', 'profile.runtime', { id: 'rt-nolabel', kind: 'x' }, 'profileRuntime'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
   assert.throws(
     () =>
       ui.registerUi('p1', 'profile.runtime', { id: 'rt-sug', kind: 'x', label: 'X', agentSuggestions: ['a', ''] }, 'profileRuntime'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
   // Intra-plugin duplicate kind: 409 duplicate_profile_runtime_kind with kind in details
   assert.throws(
     () => ui.registerUi('p1', 'profile.runtime', { id: 'rt-worker-again', kind: 'worker', label: 'W' }, 'profileRuntime'),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError);
+      assert.ok(err instanceof HelmxError);
       assert.equal(err.code, 'duplicate_profile_runtime_kind');
       assert.equal(err.status, 409);
       assert.equal((err.details as { kind: string }).kind, 'worker');
@@ -242,14 +242,14 @@ test('assertCrossPluginUnique: checks across active+pending while excluding self
   // pending=b conflicts with active a: slash collision hits first
   assert.throws(
     () => ui.assertCrossPluginUnique('b', ['a', 'c']),
-    isHelmError('duplicate_command_slash'),
+    isHelmxError('duplicate_command_slash'),
   );
   // Removing b's command collision reveals the kind collision
   ui.removePlugin('b');
   registerProfileRuntime(ui, 'b', 'worker');
   assert.throws(
     () => ui.assertCrossPluginUnique('b', ['a', 'c']),
-    isHelmError('duplicate_profile_runtime_kind'),
+    isHelmxError('duplicate_profile_runtime_kind'),
   );
 
   // When pending also appears in the active list (e.g. host passes active ∪ pending), self must not collide with itself
@@ -275,13 +275,13 @@ test('inactive probe reserves no global names: disabled-by-default registrations
   // Once probe is enabled (entering active set), the final uniqueness check rejects it
   assert.throws(
     () => ui.assertCrossPluginUnique('probe', ['b', 'probe']),
-    isHelmError('duplicate_command_slash'),
+    isHelmxError('duplicate_command_slash'),
   );
 
   // Intra-plugin duplicate kind/slash is still rejected immediately at registerUi before the final check
   assert.throws(
     () => ui.registerUi('b', 'commandPalette', { id: 'cmd2', title: 'C', slash: 'wf', actionId: 'x' }, 'command'),
-    isHelmError('duplicate_command_slash'),
+    isHelmxError('duplicate_command_slash'),
   );
 });
 

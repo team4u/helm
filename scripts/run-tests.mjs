@@ -20,7 +20,7 @@
  *   process group drains (Windows has no group signals; taskkill /T /F already killed the
  *   tree, so it exits immediately) — no orphans, no infinite timers.
  *
- * Environment: HELM_TEST_SUITE_TIMEOUT_MS overrides the total timeout (milliseconds,
+ * Environment: HELMX_TEST_SUITE_TIMEOUT_MS overrides the total timeout (milliseconds,
  * positive integer).
  * Argument passthrough: every CLI argument this script receives is appended verbatim to the
  * tsx / node test runner (globs included).
@@ -61,7 +61,7 @@ function resolveTsxCLI() {
 }
 
 // pnpm's .bin shim stuffs node_modules/.pnpm/node_modules into NODE_PATH, which external
-// plugins dynamically loaded from a tmpdir in tests rely on to resolve @helm/protocol;
+// plugins dynamically loaded from a tmpdir in tests rely on to resolve @helmx/protocol;
 // when bypassing the shim and calling cli.mjs directly, rebuilding the equivalent is enough
 // — no need to enumerate every .pnpm entry.
 function pnpmFallbackNodePath() {
@@ -71,11 +71,11 @@ function pnpmFallbackNodePath() {
 }
 
 function suiteTimeoutMs() {
-  const raw = process.env.HELM_TEST_SUITE_TIMEOUT_MS;
+  const raw = process.env.HELMX_TEST_SUITE_TIMEOUT_MS;
   if (raw === undefined || raw === '') return DEFAULT_SUITE_TIMEOUT_MS;
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0 || Math.floor(n) !== n) {
-    console.error(`[run-tests] invalid HELM_TEST_SUITE_TIMEOUT_MS (positive integer ms required): ${raw}`);
+    console.error(`[run-tests] invalid HELMX_TEST_SUITE_TIMEOUT_MS (positive integer ms required): ${raw}`);
     process.exit(2);
   }
   return n;
@@ -93,7 +93,7 @@ if (fallback) {
     ? fallback + path.delimiter + process.env.NODE_PATH
     : fallback;
 }
-// At tsx runtime the @helm/kernel / @helm/plugins workspace packages resolve to sources:
+// At tsx runtime the @helmx/kernel / @helmx/plugins workspace packages resolve to sources:
 // this keeps a single module identity with tests importing kernel/plugin sources via
 // relative paths (otherwise the dual dist/source identity silently corrupts things like
 // instanceof errors mapping to 500s); build artifacts are unaffected.
@@ -101,7 +101,7 @@ if (childEnv.TSX_TSCONFIG_PATH === undefined) {
   childEnv.TSX_TSCONFIG_PATH = path.join(repoRoot, 'tsconfig.dev.json');
 }
 
-// Inject the V8 heap cap and the safe-test-assert preload (never inject any HELM_* vars).
+// Inject the V8 heap cap and the safe-test-assert preload (never inject any HELMX_* vars).
 {
   const preloadUrl = pathToFileURL(path.join(repoRoot, 'scripts', 'lib', 'safe-test-assert.mjs')).href;
   const existing = childEnv.NODE_OPTIONS?.trim() ?? '';
@@ -306,5 +306,5 @@ process.on('SIGQUIT', () => terminate('received SIGQUIT', 131, 'SIGQUIT'));
 process.on('SIGTERM', () => terminate('received SIGTERM', 143, 'SIGTERM'));
 
 suiteTimer = setTimeout(() => {
-  terminate(`suite total timeout (${timeoutMs}ms; tunable via HELM_TEST_SUITE_TIMEOUT_MS)`, 124);
+  terminate(`suite total timeout (${timeoutMs}ms; tunable via HELMX_TEST_SUITE_TIMEOUT_MS)`, 124);
 }, timeoutMs);

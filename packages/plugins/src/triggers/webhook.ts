@@ -4,7 +4,7 @@
  * Contract (§4.4):
  * - Public route POST /webhook/:id (host full path /api/plugins/builtin%3Atriggers/
  *   routes/webhook/:id; public:true skips token auth -- the plugin verifies signatures itself);
- * - HMAC-SHA256: header x-helm-signature: sha256=<hex>, the signature covering the raw body
+ * - HMAC-SHA256: header x-helmx-signature: sha256=<hex>, the signature covering the raw body
  *   bytes; timingSafeEqual constant-time comparison; missing/wrong signature 401, unknown id 404, success 202
  *   {accepted:true}；
  * - The secret lands only in credentials.json pluginSecrets['builtin:triggers']
@@ -24,9 +24,9 @@
  *   (reusing the http readBody streaming limit, cancel + 413 when exceeded; the signature is over the raw bytes,
  */
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
-import { HelmError } from '@helm/protocol'
-import type { HelmPluginContext, PluginActionContext } from '@helm/protocol'
-import { BodyError, readBody } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
+import type { HelmxPluginContext, PluginActionContext } from '@helmx/protocol'
+import { BodyError, readBody } from '@helmx/protocol'
 import {
   MAX_DESCRIPTION,
   TRIGGERS_PLUGIN_ID,
@@ -52,7 +52,7 @@ const MAX_WEBHOOK_BODY_BYTES = 256 * 1024
  */
 export const STOP_REQUEST_WAIT_MS = 10_000
 
-const SIGNATURE_HEADER = 'x-helm-signature'
+const SIGNATURE_HEADER = 'x-helmx-signature'
 const SIGNATURE_PREFIX = 'sha256='
 
 /** Uniform 404/401/413 JSON error body (public routes carry no internal detail). */
@@ -103,7 +103,7 @@ interface CreateWebhookInput {
  * no injected dependencies); the returned handler face is reused (tests/management UI share one implementation).
  */
 export function registerWebhook(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   shared: { dispatch: DispatchTriggerHelper },
 ): RegisterWebhookResult {
   const host = ctx.host
@@ -143,7 +143,7 @@ export function registerWebhook(
   /** Reject leftover calls after disable (old handler handles may still be held externally). */
   const assertActive = (): void => {
     if (!active) {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_disabled',
         'the builtin:triggers webhook service is disabled; refusing to handle the request',
         409,
@@ -156,7 +156,7 @@ export function registerWebhook(
   const requireWebhook = (id: string): WebhookMeta => {
     const found = readDoc().webhooks.find((w) => w.id === id)
     if (found === undefined) {
-      throw new HelmError('not_found', `webhook '${id}' does not exist`, 404, { id })
+      throw new HelmxError('not_found', `webhook '${id}' does not exist`, 404, { id })
     }
     return found
   }
@@ -227,9 +227,9 @@ export function registerWebhook(
     // secret has entered that conversation's model context -- this handler cannot clean it; reject outright;
     // the secret is configurable only via manual HTTP/CLI (as the docs honestly state).
     if (context.conversationId !== undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'webhook_secret_context_forbidden',
-        'webhook_create carries a plaintext secret; calling from a conversation context (run_action/workflow) is forbidden; configure it via manual HTTP/CLI (helm webhook create)',
+        'webhook_create carries a plaintext secret; calling from a conversation context (run_action/workflow) is forbidden; configure it via manual HTTP/CLI (helmx webhook create)',
         403,
         { pluginId: TRIGGERS_PLUGIN_ID, conversationId: context.conversationId },
       )
@@ -238,13 +238,13 @@ export function registerWebhook(
     const secret = assertWebhookSecret(input.secret)
     const description = input.description === undefined ? undefined : assertDescription(input.description)
     if (input.targetConversationId !== undefined && input.targetProfileId !== undefined) {
-      throw new HelmError('validation_error', 'targetConversationId and targetProfileId must not both be provided', 400, {})
+      throw new HelmxError('validation_error', 'targetConversationId and targetProfileId must not both be provided', 400, {})
     }
     if (input.targetConversationId !== undefined && (!Number.isInteger(input.targetConversationId) || input.targetConversationId <= 0)) {
-      throw new HelmError('validation_error', `targetConversationId is not a positive integer (${String(input.targetConversationId)})`, 400, {})
+      throw new HelmxError('validation_error', `targetConversationId is not a positive integer (${String(input.targetConversationId)})`, 400, {})
     }
     if (input.targetProfileId !== undefined && (typeof input.targetProfileId !== 'string' || input.targetProfileId.length === 0)) {
-      throw new HelmError('validation_error', 'targetProfileId must be a non-empty string', 400, {})
+      throw new HelmxError('validation_error', 'targetProfileId must be a non-empty string', 400, {})
     }
     const threadKey = input.threadKey === undefined ? undefined : assertThreadKey(input.threadKey)
     // targetProfileId is existence-checked at creation (fail-fast: no dead endpoint pointing at a
@@ -252,7 +252,7 @@ export function registerWebhook(
     if (input.targetProfileId !== undefined) {
       const profileId = input.targetProfileId
       if (await host.profiles.get(profileId) === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `targetProfileId does not exist: ${profileId} (refusing to point at the wrong role)`,
           400,
@@ -271,7 +271,7 @@ export function registerWebhook(
     }
     return enqueueMutation(async () => {
       if (readDoc().webhooks.some((w) => w.id === id)) {
-        throw new HelmError('webhook_exists', `webhook '${id}' already exists`, 409, { id })
+        throw new HelmxError('webhook_exists', `webhook '${id}' already exists`, 409, { id })
       }
       // Order: write the doc (the entry metadata) and flush first, then write the secret; on secret
       // write failure, roll back by removing the doc entry and flushing (the entry never went live); a rollback failure aggregates and propagates.
@@ -284,7 +284,7 @@ export function registerWebhook(
           writeDoc({ webhooks: readDoc().webhooks.filter((w) => w.id !== id) })
           await doc.flush()
         } catch (rollbackError) {
-          throw new HelmError(
+          throw new HelmxError(
             'webhook_create_rollback_failed',
             `webhook '${id}' secret write failed and the doc rollback also failed (a doc entry without a secret remains; the next request will explicitly report the inconsistency -- please verify manually): ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
             500,
@@ -312,7 +312,7 @@ export function registerWebhook(
       const current = readDoc()
       const existing = current.webhooks.find((w) => w.id === id)
       if (existing === undefined) {
-        throw new HelmError('not_found', `webhook '${id}' does not exist`, 404, { id })
+        throw new HelmxError('not_found', `webhook '${id}' does not exist`, 404, { id })
       }
       // Order: doc first (taking the entry offline), then secret; a secret deletion failure errors
       // explicitly (a leftover secret has no entry and is unusable; humans can clean credentials.json).
@@ -321,7 +321,7 @@ export function registerWebhook(
         await doc.flush()
         await host.secrets.delete(webhookSecretKey(id))
       } catch (err) {
-        throw new HelmError(
+        throw new HelmxError(
           'webhook_delete_secret_failed',
           `webhook '${id}' metadata deleted, but secret cleanup failed (left in credentials.json, unusable without an entry -- please verify manually): ${err instanceof Error ? err.message : String(err)}`,
           500,
@@ -339,7 +339,7 @@ export function registerWebhook(
     public: true,
     handler(request) {
       return trackRequest(async () => handleWebhookRequest(request)).catch((err: unknown) => {
-        if (err instanceof HelmError) {
+        if (err instanceof HelmxError) {
           // Doc corruption and post-disable leftover calls both pass through their original codes (not lumped into a generic 500).
           if (err.code === 'triggers_doc_corrupt') {
             return webhookError(500, err.code, err.message)
@@ -398,7 +398,7 @@ export function registerWebhook(
         return webhookError(400, 'invalid_body', `webhook body read failed: ${err instanceof Error ? err.message : String(err)}`)
       }
       if (!verifySignature(secret, body, signature)) {
-        return webhookError(401, 'unauthorized', 'signature verification failed (expected x-helm-signature: sha256=<hex>, the signature covering the raw body bytes)')
+        return webhookError(401, 'unauthorized', 'signature verification failed (expected x-helmx-signature: sha256=<hex>, the signature covering the raw body bytes)')
       }
       // Verify the signature (over raw bytes) before decoding: fatal:true makes bad UTF-8 throw an explicit 400,
       // never silently replacing characters (the replacement's semantics differ from the raw bytes).
@@ -433,7 +433,7 @@ export function registerWebhook(
           metaAtDispatch.targetProfileId,
         )
       } catch (err) {
-        if (err instanceof HelmError && (err.code === 'runtime_closing' || err.code === 'not_found')) {
+        if (err instanceof HelmxError && (err.code === 'runtime_closing' || err.code === 'not_found')) {
           return webhookError(err.status, err.code, err.message)
         }
         // Delivery failure is an explicit 500 (never swallowed; never silently truncating text as fake success).
@@ -447,8 +447,8 @@ export function registerWebhook(
     id: 'webhook_create',
     description: 'Create a webhook inbound endpoint (HMAC-SHA256 verified); the secret is configurable only via manual HTTP/CLI, rejecting conversation-context calls',
     promptGuidelines: [
-      'The secret is configured by humans only: have the user run helm webhook create or call HTTP directly; do not generate, fill in, or echo the secret inside a conversation -- conversation-context calls are rejected by the server (403 webhook_secret_context_forbidden)',
-      'After creation, hand the user the endpoint URL and the signing method: x-helm-signature: sha256=<hex>, an HMAC-SHA256 signature over the raw body bytes',
+      'The secret is configured by humans only: have the user run helmx webhook create or call HTTP directly; do not generate, fill in, or echo the secret inside a conversation -- conversation-context calls are rejected by the server (403 webhook_secret_context_forbidden)',
+      'After creation, hand the user the endpoint URL and the signing method: x-helmx-signature: sha256=<hex>, an HMAC-SHA256 signature over the raw body bytes',
     ],
     cli: { command: ['webhook', 'create'] },
     inputSchema: {

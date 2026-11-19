@@ -1,10 +1,10 @@
 /**
- * builtin:swarm 受管技能资产加载（兼容 tsx 源码、tsc 构建产物与 @helm/payload 运行形态）。
+ * builtin:swarm 受管技能资产加载（兼容 tsx 源码、tsc 构建产物与 @helmx/payload 运行形态）。
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmError, type PluginSkillAsset } from '@helm/protocol'
+import { HelmxError, type PluginSkillAsset } from '@helmx/protocol'
 import { SWARM_PLUGIN_ID, SWARM_SKILL_ID } from './contracts.js'
 
 export function resolveSwarmAssetsDir(): string {
@@ -16,7 +16,7 @@ export function resolveSwarmAssetsDir(): string {
   const candidate2 = join(pkgRoot, 'src', 'swarm', 'assets')
   if (existsSync(candidate2)) return candidate2
 
-  throw new HelmError(
+  throw new HelmxError(
     'swarm_asset_missing',
     `内置插件 ${SWARM_PLUGIN_ID} 资产目录未找到（tried: "${candidate1}", "${candidate2}"）`,
     500,

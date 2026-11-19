@@ -20,7 +20,7 @@ import { PassThrough } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'
 import { WebSocket } from 'ws'
 import type { WebSocket as WsSocket } from 'ws'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { NodeRegistry } from '../src/env/registry.js'
 import { attachNodeTunnelGateway } from '../src/env/ws-tunnel-gateway.js'
 import { createEnvFabric, type EnvFabric } from '../src/env/fabric.js'
@@ -58,12 +58,12 @@ test('openTunnel: offline node 409, unimplemented nodeTunnelOpen 501', { timeout
   try {
     await assert.rejects(
       registry.openTunnel('ghost', { port: 8080 }),
-      (error: unknown) => error instanceof HelmError && error.code === 'node_offline' && error.status === 409,
+      (error: unknown) => error instanceof HelmxError && error.code === 'node_offline' && error.status === 409,
     )
     const socket = await registerFakeNode(registry, 'node-a')
     await assert.rejects(
       registry.openTunnel('node-a', { port: 8080 }),
-      (error: unknown) => error instanceof HelmError && error.code === 'node_tunnel_not_supported' && error.status === 501,
+      (error: unknown) => error instanceof HelmxError && error.code === 'node_tunnel_not_supported' && error.status === 501,
     )
     socket.close()
   } finally {
@@ -119,7 +119,7 @@ test('node disconnect cleans up pending tunnels (rejects 409 without hanging)', 
     socket.close() // triggers eviction: pending must be rejected.
     await assert.rejects(
       pending,
-      (error: unknown) => error instanceof HelmError && error.code === 'node_offline' && error.status === 409,
+      (error: unknown) => error instanceof HelmxError && error.code === 'node_offline' && error.status === 409,
     )
     assert.deepEqual(registry.debugTunnelCounts(), { pending: 0, active: 0 })
   } finally {
@@ -138,7 +138,7 @@ test('openTunnel: signal abort cleans up pending tunnel (499 aborted)', { timeou
     controller.abort()
     await assert.rejects(
       pending,
-      (error: unknown) => error instanceof HelmError && error.code === 'aborted' && error.status === 499,
+      (error: unknown) => error instanceof HelmxError && error.code === 'aborted' && error.status === 499,
     )
     assert.deepEqual(registry.debugTunnelCounts(), { pending: 0, active: 0 })
     socket.close()
@@ -151,7 +151,7 @@ test('openTunnel: draining rejection maps to node_draining(503), distinct from a
   const registry = new NodeRegistry({ authenticate: () => true })
   try {
     // Node RPC explicitly returning node_draining (rejecting new work during upgrade drain) maps stably
-    // to HelmError node_draining 503, never collapsed into aborted or connect_failed.
+    // to HelmxError node_draining 503, never collapsed into aborted or connect_failed.
     const socket = await registerFakeNode(registry, 'node-drain', async () => ({
       ok: false,
       error: { code: 'node_draining', message: 'daemon is draining (upgrade in progress), rejecting new tunnels' },
@@ -159,7 +159,7 @@ test('openTunnel: draining rejection maps to node_draining(503), distinct from a
     await assert.rejects(
       registry.openTunnel('node-drain', { port: 9300 }),
       (error: unknown) =>
-        error instanceof HelmError &&
+        error instanceof HelmxError &&
         error.code === 'node_draining' &&
         error.status === 503 &&
         /draining/.test(error.message),
@@ -173,7 +173,7 @@ test('openTunnel: draining rejection maps to node_draining(503), distinct from a
     }))
     await assert.rejects(
       registry.openTunnel('node-abort', { port: 9301 }),
-      (error: unknown) => error instanceof HelmError && error.code === 'aborted' && error.status === 499,
+      (error: unknown) => error instanceof HelmxError && error.code === 'aborted' && error.status === 499,
     )
     socket2.close()
 
@@ -185,7 +185,7 @@ test('openTunnel: draining rejection maps to node_draining(503), distinct from a
     await assert.rejects(
       registry.openTunnel('node-slow', { port: 9302 }),
       (error: unknown) =>
-        error instanceof HelmError && error.code === 'node_tunnel_timeout' && error.status === 504,
+        error instanceof HelmxError && error.code === 'node_tunnel_timeout' && error.status === 504,
     )
     socket3.close()
   } finally {
@@ -200,46 +200,46 @@ test('nodeFetch port: rejects non-http(s), forwards arbitrary hosts; validates o
     const fetchRemote = fabric.nodeFetch('node-e')
     await assert.rejects(
       fetchRemote('ftp://127.0.0.1:8080/x'),
-      (error: unknown) => error instanceof HelmError && error.code === 'node_tunnel_connect_failed',
+      (error: unknown) => error instanceof HelmxError && error.code === 'node_tunnel_connect_failed',
     )
     // Arbitrary (non-loopback) hosts proceed to connection setup: offline node yields 409 (no longer rejects non-loopback).
     await assert.rejects(
       fetchRemote('http://example.com:8080/x'),
-      (error: unknown) => error instanceof HelmError && error.code === 'node_offline',
+      (error: unknown) => error instanceof HelmxError && error.code === 'node_offline',
     )
     await assert.rejects(
       fetchRemote('http://127.0.0.1:8080/x'),
-      (error: unknown) => error instanceof HelmError && error.code === 'node_offline',
+      (error: unknown) => error instanceof HelmxError && error.code === 'node_offline',
     )
     // Default ports (80/443) proceed to connection setup (adapter supplies default port by scheme).
     await assert.rejects(
       fetchRemote('http://127.0.0.1/x'),
-      (error: unknown) => error instanceof HelmError && error.code === 'node_offline',
+      (error: unknown) => error instanceof HelmxError && error.code === 'node_offline',
     )
     await assert.rejects(
       fetchRemote('https://example.com/x'),
-      (error: unknown) => error instanceof HelmError && error.code === 'node_offline',
+      (error: unknown) => error instanceof HelmxError && error.code === 'node_offline',
     )
     // openTunnel target validation: invalid port or host fails explicitly with 400 validation_error.
     await assert.rejects(
       fabric.openTunnel('node-e', { port: 0 }),
-      (error: unknown) => error instanceof HelmError && error.code === 'validation_error' && error.status === 400,
+      (error: unknown) => error instanceof HelmxError && error.code === 'validation_error' && error.status === 400,
     )
     await assert.rejects(
       fabric.openTunnel('node-e', { port: 70000 }),
-      (error: unknown) => error instanceof HelmError && error.code === 'validation_error',
+      (error: unknown) => error instanceof HelmxError && error.code === 'validation_error',
     )
     await assert.rejects(
       fabric.openTunnel('node-e', { host: 'bad host\n', port: 80 }),
-      (error: unknown) => error instanceof HelmError && error.code === 'validation_error',
+      (error: unknown) => error instanceof HelmxError && error.code === 'validation_error',
     )
     await assert.rejects(
       fabric.openTunnel('node-e', { host: '', port: 80 }),
-      (error: unknown) => error instanceof HelmError && error.code === 'validation_error',
+      (error: unknown) => error instanceof HelmxError && error.code === 'validation_error',
     )
     await assert.rejects(
       fabric.openTunnel('node-e', { host: 'a'.repeat(256), port: 80 }),
-      (error: unknown) => error instanceof HelmError && error.code === 'validation_error',
+      (error: unknown) => error instanceof HelmxError && error.code === 'validation_error',
     )
     // Local openTunnel: connects directly in-process (echo server round-trips data).
     const echo = net.createServer((socket) => {
@@ -265,14 +265,14 @@ test('nodeFetch port: rejects non-http(s), forwards arbitrary hosts; validates o
       // Local openTunnel: closed port fails explicitly (never silently fakes success).
       await assert.rejects(
         fabric.openTunnel('local', { port: 1 }),
-        (error: unknown) => error instanceof HelmError && error.code === 'node_tunnel_connect_failed',
+        (error: unknown) => error instanceof HelmxError && error.code === 'node_tunnel_connect_failed',
       )
       // Local openTunnel: abort yields explicit 499.
       const controller = new AbortController()
       controller.abort()
       await assert.rejects(
         fabric.openTunnel('local', { port: echoPort }, controller.signal),
-        (error: unknown) => error instanceof HelmError && error.code === 'aborted',
+        (error: unknown) => error instanceof HelmxError && error.code === 'aborted',
       )
     } finally {
       await new Promise<void>((resolve) => echo.close(() => resolve()))

@@ -13,7 +13,7 @@
  */
 import './styles.css'
 import type { ReactNode } from 'react'
-import type { ComposerScopeProps, TimelineRendererProps, ToolViewProps, WorkbenchPanelProps } from '@helm/protocol'
+import type { ComposerScopeProps, TimelineRendererProps, ToolViewProps, WorkbenchPanelProps } from '@helmx/protocol'
 import { SwarmToolView as SwarmToolViewImpl } from './SwarmToolView.tsx'
 import { SwarmActiveTray as SwarmActiveTrayImpl } from './SwarmActiveTray.tsx'
 import { SwarmWorkbenchPanel as SwarmWorkbenchPanelImpl } from './SwarmWorkbenchPanel.tsx'

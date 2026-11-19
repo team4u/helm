@@ -81,14 +81,14 @@ export interface WorkflowAgentEntry {
   durationMs?: number
 }
 
-/** Progress row for action nodes (added by helm: the action() primitive). */
+/** Progress row for action nodes (added by helmx: the action() primitive). */
 export interface WorkflowActionEntry {
   type: 'workflow_action'
   index: number
   actionId: string
   label?: string
   state: WorkflowEntryState
-  /** The owning phase (helm: pass-through of the ambient phase shared with agent rows). */
+  /** The owning phase (helmx: pass-through of the ambient phase shared with agent rows). */
   phaseIndex?: number
   phaseTitle?: string
   cached?: boolean

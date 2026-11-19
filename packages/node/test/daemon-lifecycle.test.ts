@@ -7,7 +7,7 @@
  * - `close()` waits for active generation cleanup (kills remote `envExec` child processes first);
  * - Rejects invalid identity / token / hubUrl explicitly without falling back to stale identity;
  * - At most one concurrent `bindIdentityFromJoinToken` succeeds per process (in-process lock);
- * - `shellEnv` prepends managed `helm` bin dir onto `PATH` (remote bash can run `helm`).
+ * - `shellEnv` prepends managed `helmx` bin dir onto `PATH` (remote bash can run `helmx`).
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -15,8 +15,8 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
-import { sleep as delay } from '@helm/test-kit';
-import { makeTempDir as tempDir } from '@helm/test-kit/node';
+import { sleep as delay } from '@helmx/test-kit';
+import { makeTempDir as tempDir } from '@helmx/test-kit/node';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createBirpc, type BirpcReturn } from 'birpc';
 import type {
@@ -24,13 +24,13 @@ import type {
   NodeEnvRpcFunctions,
   NodeRegisterInput,
   NodeRegisterResult,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import {
   bindIdentityFromJoinToken,
   createNodeDaemon,
   parseJoinToken,
   readNodeIdentity,
-  resolveManagedHelmBinDir,
+  resolveManagedHelmxBinDir,
   writeNodeIdentity,
 } from '../src/daemon/index.js';
 
@@ -186,7 +186,7 @@ async function startHub(options: {
 // ---------------------------------------------------------------------------
 
 test('reconnects after initial connection failure when Hub starts late', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-dlc-firstfail-');
+  const dir = await tempDir('helmx-dlc-firstfail-');
   const port = await reservePort();
   const logs: string[] = [];
   const daemon = await createNodeDaemon({
@@ -226,7 +226,7 @@ test('reconnects after initial connection failure when Hub starts late', { timeo
 // ---------------------------------------------------------------------------
 
 test('waitUntilRegistered returns false after disconnect and flips true on reconnect', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-dlc-wait-');
+  const dir = await tempDir('helmx-dlc-wait-');
   const hub = await startHub({ heartbeatMs: 15_000 });
   const daemon = await createNodeDaemon({
     hubUrl: hub.url,
@@ -265,7 +265,7 @@ test('waitUntilRegistered returns false after disconnect and flips true on recon
 // ---------------------------------------------------------------------------
 
 test('keeps at most one connection during repeated register rejections', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-dlc-reject-');
+  const dir = await tempDir('helmx-dlc-reject-');
   const hub = await startHub({ heartbeatMs: 15_000, rejectAll: true });
   const daemon = await createNodeDaemon({
     hubUrl: hub.url,
@@ -299,7 +299,7 @@ test('keeps at most one connection during repeated register rejections', { timeo
 // ---------------------------------------------------------------------------
 
 test('stays alive across offline backoff reconnects without unref draining the event loop', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-dlc-alive-');
+  const dir = await tempDir('helmx-dlc-alive-');
   const port = await reservePort();
   const daemon = await createNodeDaemon({
     hubUrl: `http://127.0.0.1:${port}`,
@@ -335,7 +335,7 @@ test('stays alive across offline backoff reconnects without unref draining the e
 // ---------------------------------------------------------------------------
 
 test('close awaits generation cleanup (kills active envExec child processes)', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-dlc-close-');
+  const dir = await tempDir('helmx-dlc-close-');
   const hub = await startHub({ heartbeatMs: 15_000 });
   const daemon = await createNodeDaemon({
     hubUrl: hub.url,
@@ -377,7 +377,7 @@ test('close awaits generation cleanup (kills active envExec child processes)', {
 // ---------------------------------------------------------------------------
 
 test('readNodeIdentity strictly validates parsed objects (rejects null/arrays/bad fields)', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-dlc-badid-');
+  const dir = await tempDir('helmx-dlc-badid-');
   const file = path.join(dir, 'node.json');
   const cases: unknown[] = [
     'not-an-object',
@@ -420,7 +420,7 @@ test('parseJoinToken rejects local, whitespace, and control-character tokens', {
 });
 
 test('bindIdentityFromJoinToken rejects invalid hubUrl without leaking token', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-dlc-bind-');
+  const dir = await tempDir('helmx-dlc-bind-');
   try {
     await assert.rejects(bindIdentityFromJoinToken(dir, 'n-1:sec', 'ftp://x'), /protocol must be http/);
     await assert.rejects(bindIdentityFromJoinToken(dir, 'n-1:sec', 'http://u:p@x'), /userinfo/);
@@ -441,7 +441,7 @@ test('bindIdentityFromJoinToken rejects invalid hubUrl without leaking token', {
 });
 
 test('writeNodeIdentity validates inputs and rejects invalid identities', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-dlc-write-');
+  const dir = await tempDir('helmx-dlc-write-');
   try {
     await assert.rejects(writeNodeIdentity(dir, { nodeId: 'local', token: 'x' }), /invalid node identity/);
     await assert.rejects(writeNodeIdentity(dir, { nodeId: 'n', token: '' }), /invalid node identity/);
@@ -460,7 +460,7 @@ test('writeNodeIdentity validates inputs and rejects invalid identities', { time
 // ---------------------------------------------------------------------------
 
 test('concurrent bindIdentityFromJoinToken with distinct nodeIds succeeds for exactly one caller', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-dlc-race-');
+  const dir = await tempDir('helmx-dlc-race-');
   try {
     const results = await Promise.allSettled([
       bindIdentityFromJoinToken(dir, 'race-a:sec-a', 'http://127.0.0.1:3202'),
@@ -492,11 +492,11 @@ test('concurrent bindIdentityFromJoinToken with distinct nodeIds succeeds for ex
 });
 
 // ---------------------------------------------------------------------------
-// 8. createNodeDaemon input validation + shellEnv prepending managed helm bin
+// 8. createNodeDaemon input validation + shellEnv prepending managed helmx bin
 // ---------------------------------------------------------------------------
 
 test('createNodeDaemon rejects invalid identity or hubUrl', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-dlc-badopts-');
+  const dir = await tempDir('helmx-dlc-badopts-');
   try {
     await assert.rejects(
       createNodeDaemon({ hubUrl: 'http://127.0.0.1:3202', identity: { nodeId: 'local', token: 'x' }, dataDir: dir }),
@@ -523,20 +523,20 @@ test('createNodeDaemon rejects invalid identity or hubUrl', { timeout: 60_000 },
   }
 });
 
-test('resolveManagedHelmBinDir locates workspace bin dir containing executable helm', { timeout: 60_000 }, async () => {
-  const resolved = await resolveManagedHelmBinDir();
-  assert.ok('dir' in resolved, `should locate managed helm bin (result: ${JSON.stringify(resolved)})`);
+test('resolveManagedHelmxBinDir locates workspace bin dir containing executable helmx', { timeout: 60_000 }, async () => {
+  const resolved = await resolveManagedHelmxBinDir();
+  assert.ok('dir' in resolved, `should locate managed helmx bin (result: ${JSON.stringify(resolved)})`);
   if ('dir' in resolved) {
-    const entry = path.join(resolved.dir, process.platform === 'win32' ? 'helm.cmd' : 'helm');
+    const entry = path.join(resolved.dir, process.platform === 'win32' ? 'helmx.cmd' : 'helmx');
     await fs.access(entry);
   }
   // Explicitly bad directory returns explicit diagnostics instead of false success
-  const bad = await resolveManagedHelmBinDir(path.join(os.tmpdir(), 'helm-no-such-bin-dir'));
+  const bad = await resolveManagedHelmxBinDir(path.join(os.tmpdir(), 'helmx-no-such-bin-dir'));
   assert.ok('error' in bad && bad.error.length > 0, 'invalid directory must produce explicit diagnostic');
 });
 
-test('daemon shellEnv prepends managed helm bin to PATH (remote bash can run helm)', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-dlc-helmpath-');
+test('daemon shellEnv prepends managed helmx bin to PATH (remote bash can run helmx)', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helmx-dlc-helmxpath-');
   const hub = await startHub({ heartbeatMs: 15_000 });
   const daemon = await createNodeDaemon({
     hubUrl: hub.url,
@@ -547,17 +547,17 @@ test('daemon shellEnv prepends managed helm bin to PATH (remote bash can run hel
     assert.equal(await daemon.waitUntilRegistered(10_000), true, 'prepended bin resolution failure prevents startup');
     const rpc = hub.nodeRpc();
     assert.ok(rpc !== undefined);
-    // Remote bash runs helm directly: prepended managed bin on PATH must resolve (--help needs no Hub).
+    // Remote bash runs helmx directly: prepended managed bin on PATH must resolve (--help needs no Hub).
     const output = await rpc!.envExec({
-      execId: 'helm-path-2',
-      command: 'command -v helm && helm --help >/dev/null && echo helm-runs',
+      execId: 'helmx-path-2',
+      command: 'command -v helmx && helmx --help >/dev/null && echo helmx-runs',
       timeout: 60,
     });
     assert.equal(output.ok, true, output.ok ? '' : output.error.message);
     // Environment carries the node's actual hubUrl / dataDir
     const envProbe = await rpc!.envExec({
-      execId: 'helm-path-3',
-      command: 'echo hub=$HELM_HUB_URL data=$HELM_DATA_DIR',
+      execId: 'helmx-path-3',
+      command: 'echo hub=$HELMX_HUB_URL data=$HELMX_DATA_DIR',
       timeout: 30,
     });
     assert.equal(envProbe.ok, true, envProbe.ok ? '' : envProbe.error.message);
@@ -568,8 +568,8 @@ test('daemon shellEnv prepends managed helm bin to PATH (remote bash can run hel
   }
 });
 
-test('daemon child process env sets HELM_HUB_URL to node actual hubUrl', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-dlc-env-');
+test('daemon child process env sets HELMX_HUB_URL to node actual hubUrl', { timeout: 60_000 }, async () => {
+  const dir = await tempDir('helmx-dlc-env-');
   const hub = await startHub({ heartbeatMs: 15_000 });
   const daemon = await createNodeDaemon({
     hubUrl: hub.url,
@@ -580,7 +580,7 @@ test('daemon child process env sets HELM_HUB_URL to node actual hubUrl', { timeo
     assert.equal(await daemon.waitUntilRegistered(10_000), true);
     const rpc = hub.nodeRpc();
     assert.ok(rpc !== undefined);
-    const r = await rpc!.envExec({ execId: 'env-echo', command: 'echo hub=$HELM_HUB_URL', timeout: 30 });
+    const r = await rpc!.envExec({ execId: 'env-echo', command: 'echo hub=$HELMX_HUB_URL', timeout: 30 });
     assert.equal(r.ok, true, r.ok ? '' : r.error.message);
   } finally {
     await daemon.close();

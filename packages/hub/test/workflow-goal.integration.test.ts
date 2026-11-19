@@ -4,7 +4,7 @@
  * Covers the multi-level workflow & retry design:
  *
  * T2 (automatic goal failure retries, full real stack):
- * - Real `createHelm` + real `KernelRuntime` + faux provider + real `WorkflowService` (via `builtin:workflow`
+ * - Real `createHelmx` + real `KernelRuntime` + faux provider + real `WorkflowService` (via `builtin:workflow`
  *   `run` action, same path as HTTP/CLI) + real `WorktreeAllocator`; gates run via `settleGate -> runGate -> runShell`
  *   with full process-group kill on timeout (never mocking kernel timeouts).
  * - `goal({ label: 'worker-c', isolation: 'worktree', maxAttempts: 3, gateTimeoutMs: 2000 })`:
@@ -32,7 +32,7 @@
  */
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { AssistantMessage, TranscriptContext } from '@earendil-works/pi-ai'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -109,8 +109,8 @@ let rootDir: string
 let gitTemplate: GitTemplate
 
 before(() => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-workflow-goal-'))
-  gitTemplate = createGitTemplate('helm-workflow-goal-tpl-')
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-workflow-goal-'))
+  gitTemplate = createGitTemplate('helmx-workflow-goal-tpl-')
 })
 
 after(() => {
@@ -130,7 +130,7 @@ interface RuntimeEnv {
   close(): Promise<void>
 }
 
-/** Opens a real `createHelm` (`builtin:workflow` enabled by default) + faux provider rooted at a real Git repo. */
+/** Opens a real `createHelmx` (`builtin:workflow` enabled by default) + faux provider rooted at a real Git repo. */
 async function openRuntime(dataDir: string, repoDir: string): Promise<RuntimeEnv> {
   const { app, kernel, faux } = await createHubTestApp({
     dataDir,
@@ -256,8 +256,8 @@ describe('T2 goal gate automatic retry (real kernel / faux / WorkflowService / w
       assert.equal(run.result.execution.conversationId > env.conversationId, true, 'should spawn child conversation')
       const worktree = run.result.execution.worktree
       assert.ok(worktree, 'isolation:worktree should return worktree metadata')
-      assert.ok(worktree.path.includes(join(dir, '.helm-worktrees')), `worktree should be under sibling .helm-worktrees: ${worktree.path}`)
-      assert.ok(worktree.branch.startsWith('helm/spawn-'), `branch should start with helm/spawn-: ${worktree.branch}`)
+      assert.ok(worktree.path.includes(join(dir, '.helmx-worktrees')), `worktree should be under sibling .helmx-worktrees: ${worktree.path}`)
+      assert.ok(worktree.branch.startsWith('helmx/spawn-'), `branch should start with helmx/spawn-: ${worktree.branch}`)
       assert.ok(typeof worktree.id === 'string' && worktree.id.length > 0, 'should return managed worktreeId')
       assert.equal(run.result.gate.ok, true, '3rd-attempt gate should pass')
 
@@ -483,7 +483,7 @@ describe('T3 3-level nested identical plan labels and resumeFromRunId checkpoint
             wait: true,
           }),
         (error: unknown) => {
-          assert.ok(error instanceof HelmError, `expected HelmError, got ${String(error)}`)
+          assert.ok(error instanceof HelmxError, `expected HelmxError, got ${String(error)}`)
           assert.equal(error.code, 'workflow_failed')
           const details = error.details as { runId?: string } | undefined
           assert.ok(typeof details?.runId === 'string', 'failure details should carry runId')
@@ -500,7 +500,7 @@ describe('T3 3-level nested identical plan labels and resumeFromRunId checkpoint
       const journal1 = readJournal(dataDir, env.conversationId, failedRunId)
       const agentEntries = journal1.filter((e) => e['type'] === 'agent')
       const goalEntry = agentEntries.find(
-        (e) => e['ok'] === true && e['execution']?.['worktree']?.['branch']?.startsWith('helm/spawn-'),
+        (e) => e['ok'] === true && e['execution']?.['worktree']?.['branch']?.startsWith('helmx/spawn-'),
       )
       assert.ok(goalEntry, 'module A goal should succeed and record worktree metadata')
       const failedPlan = agentEntries.find((e) => e['ok'] === false)

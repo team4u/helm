@@ -1,8 +1,8 @@
 import {
-  HelmError,
+  HelmxError,
   type ConversationSummary,
-  type HelmPluginContext,
-} from '@helm/protocol'
+  type HelmxPluginContext,
+} from '@helmx/protocol'
 import {
   ARCHIVED_COORDINATOR_TAG,
   ARCHIVED_WORKER_TAG,
@@ -37,7 +37,7 @@ export function assertCoordinatorAuthority(
 ): void {
   if (conversationId === undefined) return
   if (conversationId !== group.coordinatorConversationId) {
-    throw new HelmError(
+    throw new HelmxError(
       'conversation_scope_violation',
       `该操作仅允许协作组 '${group.id}' 的主控会话 #${group.coordinatorConversationId} 执行（当前会话 #${conversationId}）`,
       403,
@@ -73,14 +73,14 @@ export function resolveCoordinatorGroup(
   if (explicitGroupId !== undefined && explicitGroupId.trim() !== '') {
     const group = groups.getGroup(assertGroupId(explicitGroupId))
     if (group === undefined) {
-      throw new HelmError('swarm_group_not_found', `协作组 '${explicitGroupId}' 不存在`, 404, {
+      throw new HelmxError('swarm_group_not_found', `协作组 '${explicitGroupId}' 不存在`, 404, {
         pluginId: SWARM_PLUGIN_ID,
         groupId: explicitGroupId,
       })
     }
     assertCoordinatorAuthority(conversationId, group)
     if (requireActive && group.status !== 'active') {
-      throw new HelmError('swarm_group_closed', `协作组 '${group.id}' 已结单`, 409, {
+      throw new HelmxError('swarm_group_closed', `协作组 '${group.id}' 已结单`, 409, {
         pluginId: SWARM_PLUGIN_ID,
         groupId: group.id,
       })
@@ -95,7 +95,7 @@ export function resolveCoordinatorGroup(
       if (latest !== undefined && latest.coordinatorConversationId === conversationId) return latest
     }
   }
-  throw new HelmError(
+  throw new HelmxError(
     'swarm_group_not_found',
     '未找到关联的活跃协作组；请显式指定 groupId 或先调用 create_group 建组',
     404,
@@ -105,7 +105,7 @@ export function resolveCoordinatorGroup(
 
 export function checkCoordinatorEligibility(
   conv: ConversationSummary,
-  ownership: 'human' | 'bot' | 'helm' | string,
+  ownership: 'human' | 'bot' | 'helmx' | string,
 ): { code: 'validation_error' | 'conversation_scope_violation'; message: string; status: 400 | 403; details: Record<string, unknown> } | undefined {
   if (conv.parentConversationId !== undefined) {
     return {
@@ -131,7 +131,7 @@ export function checkCoordinatorEligibility(
 }
 
 export async function ensureCoordinatorGroup(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   coordinator: SwarmCoordinator,
   input: EnsureCoordinatorGroupInput,
 ): Promise<{ groupId: string; group: BoardViewDoc['group'] }> {
@@ -139,11 +139,11 @@ export async function ensureCoordinatorGroup(
   const targetConvId = input.conversationId
   const conv = readConversationOrUndefined(targetConvId)
   if (conv === undefined) {
-    throw new HelmError('not_found', `目标会话 #${targetConvId} 不存在`, 404, { conversationId: targetConvId })
+    throw new HelmxError('not_found', `目标会话 #${targetConvId} 不存在`, 404, { conversationId: targetConvId })
   }
   const eligibilityErr = checkCoordinatorEligibility(conv, ctx.host.getConversationOwnership(targetConvId))
   if (eligibilityErr !== undefined) {
-    throw new HelmError(eligibilityErr.code, eligibilityErr.message, eligibilityErr.status, eligibilityErr.details)
+    throw new HelmxError(eligibilityErr.code, eligibilityErr.message, eligibilityErr.status, eligibilityErr.details)
   }
 
   return enqueueDispatch(async () => {
@@ -185,7 +185,7 @@ function isPosIntId(v: unknown): v is number {
   return typeof v === 'number' && Number.isInteger(v) && v > 0
 }
 
-export function createGroupHandlers(ctx: HelmPluginContext, coordinator: SwarmCoordinator) {
+export function createGroupHandlers(ctx: HelmxPluginContext, coordinator: SwarmCoordinator) {
   const { readConversationOrUndefined, enqueueDispatch, groups } = coordinator
 
   const createGroup = async (
@@ -199,14 +199,14 @@ export function createGroupHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
     idempotencyKey?: string,
   ): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
     if (typeof input.title !== 'string' || input.title.trim() === '') {
-      throw new HelmError('validation_error', 'create_group 需要非空 title', 400, {})
+      throw new HelmxError('validation_error', 'create_group 需要非空 title', 400, {})
     }
     if (
       input.conversationId !== undefined &&
       contextConversationId !== undefined &&
       input.conversationId !== contextConversationId
     ) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `conversationId 冲突：输入指定 #${input.conversationId} 与调用上下文 #${contextConversationId} 不一致`,
         400,
@@ -215,7 +215,7 @@ export function createGroupHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
     }
     const targetConvId = input.conversationId ?? contextConversationId
     if (!isPosIntId(targetConvId)) {
-      throw new HelmError('validation_error', 'create_group 需要有效的目标主控会话 conversationId', 400, {})
+      throw new HelmxError('validation_error', 'create_group 需要有效的目标主控会话 conversationId', 400, {})
     }
     return ensureCoordinatorGroup(ctx, coordinator, {
       conversationId: targetConvId,
@@ -233,10 +233,10 @@ export function createGroupHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
   ): Promise<{ groupId: string; group: BoardViewDoc['group'] }> => {
     const group = resolveCoordinatorGroup(groups, input.groupId, conversationId, true)
     if (input.title !== undefined && (typeof input.title !== 'string' || input.title.trim() === '')) {
-      throw new HelmError('validation_error', 'title 必须是非空字符串', 400, {})
+      throw new HelmxError('validation_error', 'title 必须是非空字符串', 400, {})
     }
     if (input.objective !== undefined && typeof input.objective !== 'string') {
-      throw new HelmError('validation_error', 'objective 必须是字符串', 400, {})
+      throw new HelmxError('validation_error', 'objective 必须是字符串', 400, {})
     }
     await groups.updateGroup(group.id, {
       ...(input.title !== undefined ? { title: input.title.trim().slice(0, 120) } : {}),
@@ -258,7 +258,7 @@ export function createGroupHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
   ): Promise<{ groupId: string; channels: Array<{ name: string; topic?: string; archived?: boolean }> }> => {
     const group = resolveCoordinatorGroup(groups, input.groupId, conversationId, true)
     if (!['create', 'subscribe', 'unsubscribe', 'archive'].includes(input.op)) {
-      throw new HelmError('validation_error', `未知频道操作 '${String(input.op)}'`, 400, {})
+      throw new HelmxError('validation_error', `未知频道操作 '${String(input.op)}'`, 400, {})
     }
     const updated = await groups.manageChannel(group.id, input)
     return {
@@ -289,7 +289,7 @@ export function createGroupHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
     return enqueueDispatch(async () => {
       const freshGroup = groups.getGroup(group.id)
       if (freshGroup === undefined) {
-        throw new HelmError('swarm_group_not_found', `协作组 '${group.id}' 不存在`, 404, {
+        throw new HelmxError('swarm_group_not_found', `协作组 '${group.id}' 不存在`, 404, {
           pluginId: SWARM_PLUGIN_ID,
           groupId: group.id,
         })
@@ -309,11 +309,11 @@ export function createGroupHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
         if (s === undefined || !isWorkerBusy(coordinator, member.conversationId, s.status)) continue
         if (input.abortRunning === true) {
           if (s.status === 'working' || s.status === 'blocked') {
-            await ctx.host.abortConversationGuarded(member.conversationId, { expectedOwnership: 'helm' })
+            await ctx.host.abortConversationGuarded(member.conversationId, { expectedOwnership: 'helmx' })
           }
           continue
         }
-        throw new HelmError(
+        throw new HelmxError(
           'swarm_worker_busy',
           `协作组 '${freshGroup.id}' 成员 @${member.name} (#${member.conversationId}) 仍在运行中；请等待完工或传 abortRunning: true`,
           409,
@@ -341,7 +341,7 @@ export function createGroupHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
           const branchList = unmerged
             .map((item) => `@${item.member.name}:${item.inspected.currentBranch ?? item.inspected.record.branch}`)
             .join(', ')
-          throw new HelmError(
+          throw new HelmxError(
             'swarm_worktree_unmerged',
             `协作组 '${freshGroup.id}' 含未合入或脏工作树分支（${branchList}）；请传 keepWorktree: true 解锁主控合入收尾后再清理`,
             409,

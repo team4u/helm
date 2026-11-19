@@ -16,7 +16,7 @@ export const PROFILE_STARTER_LABEL_MAX_LENGTH = 24
 export const PROFILE_STARTER_PROMPT_MAX_LENGTH = 4000
 
 /**
- * Conversation Profile: `~/.helm/profiles/<id>/profile.json` + SYSTEM.md.
+ * Conversation Profile: `~/.helmx/profiles/<id>/profile.json` + SYSTEM.md.
  * MEMORY.md long-term memory is self-managed by the builtin:memory plugin (not part
  * of the Profile contract). `runtime` is the protocol-layer config shape (e.g.
  * binding a Herdr CLI); the actual driving lives in builtin:herdr.
@@ -69,7 +69,7 @@ export interface ProfileRuntime {
   env?: Record<string, string>
 }
 
-/** Skill catalog summary: dataDir root `~/.helm/skills/<id>/` (SKILL.md + references/*.md), or machine-level shared source `~/.agents/skills/<id>/` (source='agents'; marks the discovery source, not a filesystem write permission). */
+/** Skill catalog summary: dataDir root `~/.helmx/skills/<id>/` (SKILL.md + references/*.md), or machine-level shared source `~/.agents/skills/<id>/` (source='agents'; marks the discovery source, not a filesystem write permission). */
 export interface SkillSummary {
   id: string
   name: string
@@ -78,7 +78,7 @@ export interface SkillSummary {
   references: string[]
   /** Plugin ID managing this skill; when that plugin is not enabled, the conversation catalog, skill menu and load_skill are all unavailable. */
   managedByPlugin?: string
-  /** Source root marker: default 'data' (~/.helm/skills); 'agents' marks the machine-level shared source ~/.agents/skills (the pi ecosystem skill library); only marks the scan source, not a filesystem permission boundary. */
+  /** Source root marker: default 'data' (~/.helmx/skills); 'agents' marks the machine-level shared source ~/.agents/skills (the pi ecosystem skill library); only marks the scan source, not a filesystem permission boundary. */
   source?: 'data' | 'agents'
 }
 
@@ -160,7 +160,7 @@ export interface SetModelFilterResult {
 }
 
 /**
- * `~/.helm/providers.json` custom model gateway entry.
+ * `~/.helmx/providers.json` custom model gateway entry.
  * Must never contain secret fields — API keys always live in credentials.json (mode 0600).
  */
 export interface ProviderConfig {

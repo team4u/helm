@@ -26,7 +26,7 @@ import { strict as assert } from 'node:assert'
 import { after, before, describe, it } from 'node:test'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import type { ConversationSummary, HelmEventFrame } from '@helm/protocol'
+import type { ConversationSummary, HelmxEventFrame } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
@@ -42,7 +42,7 @@ interface RecordedUpsert {
 let root = ''
 
 before(async () => {
-  root = await makeTempDir('helm-run-summary-')
+  root = await makeTempDir('helmx-run-summary-')
 })
 
 after(async () => {
@@ -66,7 +66,7 @@ function recordUpserts(kernel: KernelRuntime, conversationId: number): {
   stop: () => void
 } {
   const frames: RecordedUpsert[] = []
-  const unsubscribe = kernel.events.subscribe((frame: HelmEventFrame) => {
+  const unsubscribe = kernel.events.subscribe((frame: HelmxEventFrame) => {
     if (frame.event.type !== 'conversation.upsert') return
     const conversation = (frame.event as { conversation?: ConversationSummary }).conversation
     if (conversation?.id !== conversationId) return

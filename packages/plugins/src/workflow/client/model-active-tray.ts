@@ -9,8 +9,8 @@
  * - frontline action digests reuse collectExecutionFrontline /
  *   collectExecutionApprovals.
  */
-import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/plugin-client'
-import type { ConversationSummary } from '@helm/protocol'
+import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/plugin-client'
+import type { ConversationSummary } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import type { ExecutionNodeStatus } from './model-execution-status.ts'
 import { buildExecutionTree, type ExecutionNode } from './model-execution-tree.ts'
@@ -108,7 +108,7 @@ export function buildActiveTraySummary(
     runs: ReadonlyArray<WorkflowRunSummary>
     viewer?: DetachViewerScope
   },
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): ActiveTraySummary {
   const tree = buildExecutionTree({
     rootConversationId: input.rootConversationId,

@@ -189,16 +189,16 @@ const ICON_MAP = {
   outline: ListTree,
 } satisfies Record<string, LucideIcon>
 
-export type HelmIconName = keyof typeof ICON_MAP
+export type HelmxIconName = keyof typeof ICON_MAP
 
-export interface HelmIconProps {
-  name?: HelmIconName | (string & {})
+export interface HelmxIconProps {
+  name?: HelmxIconName | (string & {})
   size?: number
   className?: string
   style?: CSSProperties
 }
 
-export function HelmIcon({ name, size = 14, className, style }: HelmIconProps) {
+export function HelmxIcon({ name, size = 14, className, style }: HelmxIconProps) {
   const key = (name ?? 'circle').toLowerCase().trim()
   const Comp = Object.hasOwn(ICON_MAP, key)
     ? (ICON_MAP as Record<string, LucideIcon>)[key]!

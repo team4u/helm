@@ -4,10 +4,10 @@
  * The SDK package never depends on any host implementation (store / API /
  * navigation / markdown rendering / plugin slot rendering); all host
  * capabilities are injected as a typed port object via
- * <PluginClientHostContext.Provider>. The host (@helm/web) implements this
- * port with the real store inside HelmStoreProvider; plugins and the host
+ * <PluginClientHostContext.Provider>. The host (@helmx/web) implements this
+ * port with the real store inside HelmxStoreProvider; plugins and the host
  * share the same React / context instance (the compiler virtualizes
- * '@helm/plugin-client' into the __helm_shared_plugin_client global
+ * '@helmx/plugin-client' into the __helmx_shared_plugin_client global
  * namespace).
  *
  * Types and context only in this file (no component exports, Fast Refresh friendly).
@@ -20,13 +20,13 @@ import type {
   ConversationDetail,
   ConversationLive,
   ConversationSummary,
-  HelmLocale,
+  HelmxLocale,
   LocaleTranslator,
   PluginSlotContributionSpec,
   PluginSummary,
   ScreenSpec,
   WhenBusy,
-} from '@helm/protocol/browser'
+} from '@helmx/protocol/browser'
 
 /** Conversation-scoped plugin doc subscription tuple (key for the host ref-counted shared SSE stream). */
 export interface PluginSessionDocKey {
@@ -79,13 +79,13 @@ export interface PluginClientHostPort {
   authenticated: boolean
   theme: 'light' | 'dark'
   /**
-   * Current host UI locale (normalized via HELM_LOCALES / normalizeLocaleTag).
+   * Current host UI locale (normalized via HELMX_LOCALES / normalizeLocaleTag).
    * Optional so hosts can adopt it additively: when absent, the plugin client
-   * context factory falls back to DEFAULT_HELM_LOCALE ('en') — a locale always
+   * context factory falls back to DEFAULT_HELMX_LOCALE ('en') — a locale always
    * has a well-defined default, so no silent degradation of data fidelity is
    * involved.
    */
-  locale?: HelmLocale
+  locale?: HelmxLocale
   /**
    * Minimal translator for the current locale (resolves LocalizedText display
    * copy). Optional for the same additive reason: when absent, the context
@@ -159,7 +159,7 @@ export const PluginClientHostContext = createContext<PluginClientHostPort | null
 export function usePluginClientHost(): PluginClientHostPort {
   const port = useContext(PluginClientHostContext)
   if (port === null) {
-    throw new Error('usePluginClientHost must be called inside <PluginClientHostContext.Provider> (injected by the host HelmStoreProvider)')
+    throw new Error('usePluginClientHost must be called inside <PluginClientHostContext.Provider> (injected by the host HelmxStoreProvider)')
   }
   return port
 }

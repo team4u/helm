@@ -34,7 +34,7 @@ async function assertNoWriteLeftovers(dir: string): Promise<void> {
 }
 
 test('Windows rename transient contention (alternating EPERM/EACCES) backs off and succeeds without leaving tmp files', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-rename-retry-')
+  const dir = useTempDir(t, 'helmx-cli-rename-retry-')
   const restorePlatform = fakeWin32Platform()
   const rename = fsp.rename.bind(fsp)
   let occupied = 0
@@ -64,7 +64,7 @@ test('Windows rename transient contention (alternating EPERM/EACCES) backs off a
 })
 
 test('Windows rename persistent EPERM: bounded backoff exhausts, throws credentials_write_failed, preserves old value, cleans tmp', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-rename-busy-')
+  const dir = useTempDir(t, 'helmx-cli-rename-busy-')
   const restorePlatform = fakeWin32Platform()
   const stub = t.mock.method(fsp, 'rename', async (...args: Parameters<typeof fsp.rename>) => {
     void args

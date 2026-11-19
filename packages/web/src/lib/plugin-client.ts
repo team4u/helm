@@ -5,18 +5,18 @@
  *   data URL 掩盖；Node/无 Blob 环境用 data URL（测试与 SSR 唯一可行路径）；
  * - 按 (pluginId, module, contentHash) 缓存模块命名空间（含已解析 resolved 快路径）；
  *   插件停用/卸载（uiContributions 移除）时失效缓存并回收其注入样式；
- * - 共享 Chunk 桥（__helm_import_chunk）：preload fetch 全并发去重（同一 chunk 零重复
+ * - 共享 Chunk 桥（__helmx_import_chunk）：preload fetch 全并发去重（同一 chunk 零重复
  *   网络请求）、模块求值按拓扑顺序 await；epoch 守卫确保 evict/reset 后迟到的 chunk
- *   不得回写 __helm_chunk_share（显式 client_module_invalidated，绝不静默）；
- *   __helm_chunk_share 条目按 pluginId + moduleRef + contentHash + chunk 隔离，
+ *   不得回写 __helmx_chunk_share（显式 client_module_invalidated，绝不静默）；
+ *   __helmx_chunk_share 条目按 pluginId + moduleRef + contentHash + chunk 隔离，
  *   两插件同源同 hash 时停用一个不会删掉另一个的共享表；
- * - 编译产物只携带样式文本（保留导出 __helmClientCss，绝不写 DOM）；模块解析成功且
+ * - 编译产物只携带样式文本（保留导出 __helmxClientCss，绝不写 DOM）；模块解析成功且
  *   epoch / 插件 epoch / 缓存 entry 身份仍有效后，由本加载器统一注入或回收每个入口的
- *   单个 <style data-helm-plugin-css>，resolved 缓存发布发生在样式装载之后；
+ *   单个 <style data-helmx-plugin-css>，resolved 缓存发布发生在样式装载之后；
  * - 导出不存在 / HTTP 错误 / import 抛错 / 保留导出类型非法均显式报错，绝不静默空白。
  */
 import type { ComponentType } from 'react'
-import { PLUGIN_CLIENT_CSS_EXPORT, type PluginSummary } from '@helm/protocol/browser'
+import { PLUGIN_CLIENT_CSS_EXPORT, type PluginSummary } from '@helmx/protocol/browser'
 import { getStoredToken } from './api.js'
 
 export interface LoadedClientModule {
@@ -103,8 +103,8 @@ const cacheKey = (pluginId: string, moduleRef: string): string => JSON.stringify
 /** 移除某插件注入的样式表（停用/卸载后不留全局样式泄漏）。 */
 function removePluginStyleSheets(pluginId: string | undefined): void {
   if (typeof document === 'undefined') return
-  for (const node of [...document.querySelectorAll('style[data-helm-plugin-css-plugin]')]) {
-    if (pluginId === undefined || node.getAttribute('data-helm-plugin-css-plugin') === pluginId) node.remove()
+  for (const node of [...document.querySelectorAll('style[data-helmx-plugin-css-plugin]')]) {
+    if (pluginId === undefined || node.getAttribute('data-helmx-plugin-css-plugin') === pluginId) node.remove()
   }
 }
 
@@ -112,8 +112,8 @@ function removePluginStyleSheets(pluginId: string | undefined): void {
 const pluginStyleKey = (pluginId: string, moduleRef: string): string => `${pluginId}::${moduleRef}`
 
 function findPluginStyleNode(key: string): HTMLStyleElement | null {
-  for (const node of document.querySelectorAll<HTMLStyleElement>('style[data-helm-plugin-css]')) {
-    if (node.getAttribute('data-helm-plugin-css') === key) return node
+  for (const node of document.querySelectorAll<HTMLStyleElement>('style[data-helmx-plugin-css]')) {
+    if (node.getAttribute('data-helmx-plugin-css') === key) return node
   }
   return null
 }
@@ -150,15 +150,15 @@ function applyPluginClientCss(
   }
   if (existing === null) {
     const style = document.createElement('style')
-    style.setAttribute('data-helm-plugin-css', key)
-    style.setAttribute('data-helm-plugin-css-plugin', pluginId)
-    style.setAttribute('data-helm-plugin-css-hash', contentHash)
+    style.setAttribute('data-helmx-plugin-css', key)
+    style.setAttribute('data-helmx-plugin-css-plugin', pluginId)
+    style.setAttribute('data-helmx-plugin-css-hash', contentHash)
     style.textContent = css
     document.head.appendChild(style)
     return
   }
-  if (existing.getAttribute('data-helm-plugin-css-hash') === contentHash && existing.textContent === css) return
-  existing.setAttribute('data-helm-plugin-css-hash', contentHash)
+  if (existing.getAttribute('data-helmx-plugin-css-hash') === contentHash && existing.textContent === css) return
+  existing.setAttribute('data-helmx-plugin-css-hash', contentHash)
   existing.textContent = css
 }
 
@@ -172,7 +172,7 @@ function deleteChunksByPrefix(prefix: string): void {
   for (const k of [...chunkTextFetchCache.keys()]) {
     if (k.startsWith(prefix)) chunkTextFetchCache.delete(k)
   }
-  const share = (globalThis as Record<string, unknown>).__helm_chunk_share as Record<string, unknown> | undefined
+  const share = (globalThis as Record<string, unknown>).__helmx_chunk_share as Record<string, unknown> | undefined
   if (share) {
     for (const k of Object.keys(share)) {
       if (k.startsWith(prefix)) delete share[k]
@@ -226,8 +226,8 @@ export function evictPluginClientCache(pluginId: string): void {
   // 共享表按 pluginId + moduleRef + contentHash + chunk 隔离清理：只删属于本插件的条目，
   // 另一插件同源同 hash 的共享条目不受影响（key = pluginId\0moduleRef\0hash\0chunk）。
   const hashes = pluginLoadedHashes.get(pluginId)
-  if (hashes && (globalThis as Record<string, unknown>).__helm_chunk_share) {
-    const share = (globalThis as Record<string, unknown>).__helm_chunk_share as Record<string, unknown>
+  if (hashes && (globalThis as Record<string, unknown>).__helmx_chunk_share) {
+    const share = (globalThis as Record<string, unknown>).__helmx_chunk_share as Record<string, unknown>
     const prefix = `${pluginId}\0`
     for (const k of Object.keys(share)) {
       if (k.startsWith(prefix) && hashes.has(k.split('\0')[2] ?? '')) {
@@ -289,12 +289,12 @@ export function reconcilePluginClientCache(nextPlugins: readonly PluginSummary[]
   }
 
   if (typeof document !== 'undefined') {
-    for (const node of [...document.querySelectorAll('style[data-helm-plugin-css-plugin]')]) {
-      const pluginId = node.getAttribute('data-helm-plugin-css-plugin') ?? ''
-      const styleAttr = node.getAttribute('data-helm-plugin-css') ?? ''
+    for (const node of [...document.querySelectorAll('style[data-helmx-plugin-css-plugin]')]) {
+      const pluginId = node.getAttribute('data-helmx-plugin-css-plugin') ?? ''
+      const styleAttr = node.getAttribute('data-helmx-plugin-css') ?? ''
       const prefix = `${pluginId}::`
       const moduleRef = styleAttr.startsWith(prefix) ? styleAttr.slice(prefix.length) : undefined
-      const styleHash = node.getAttribute('data-helm-plugin-css-hash') ?? undefined
+      const styleHash = node.getAttribute('data-helmx-plugin-css-hash') ?? undefined
       const valid =
         moduleRef !== undefined
           ? isModuleValid(pluginId, moduleRef, styleHash)
@@ -323,7 +323,7 @@ export function reconcilePluginClientCache(nextPlugins: readonly PluginSummary[]
   }
   cleanChunkMap(chunkPromiseCache)
   cleanChunkMap(chunkTextFetchCache)
-  const share = (globalThis as Record<string, unknown>).__helm_chunk_share as Record<string, unknown> | undefined
+  const share = (globalThis as Record<string, unknown>).__helmx_chunk_share as Record<string, unknown> | undefined
   if (share) {
     for (const k of Object.keys(share)) {
       const parts = k.split('\0')
@@ -368,8 +368,8 @@ export function resetPluginClientCache(): void {
   chunkPromiseCache.clear()
   chunkTextFetchCache.clear()
   pluginLoadedHashes.clear()
-  if ((globalThis as Record<string, unknown>).__helm_chunk_share) {
-    const share = (globalThis as Record<string, unknown>).__helm_chunk_share as Record<string, unknown>
+  if ((globalThis as Record<string, unknown>).__helmx_chunk_share) {
+    const share = (globalThis as Record<string, unknown>).__helmx_chunk_share as Record<string, unknown>
     for (const k of Object.keys(share)) {
       delete share[k]
     }
@@ -431,7 +431,7 @@ async function fetchChunkText(
   contentHash: string,
   chunkName: string,
 ): Promise<string> {
-  const nodeLookup = (globalThis as Record<string, unknown>).__helm_node_chunk_lookup as
+  const nodeLookup = (globalThis as Record<string, unknown>).__helmx_node_chunk_lookup as
     | ((pluginId: string, moduleRef: string, contentHash: string, chunkName: string) => string | undefined)
     | undefined
   if (typeof nodeLookup === 'function') {
@@ -533,7 +533,7 @@ async function loadSingleChunk(
  * 顺序 await（共享表先写依赖、后写使用者）。失败时：后续 preload 的 fetch 仍会被
  * 并发消费（有 catch 兑底，不产生 unhandled rejection）；模块缓存失败即清除可重试。
  */
-;(globalThis as Record<string, unknown>).__helm_import_chunk = async (
+;(globalThis as Record<string, unknown>).__helmx_import_chunk = async (
   pluginId: string,
   moduleRef: string,
   contentHash: string,
@@ -603,7 +603,7 @@ async function fetchModuleText(
     }
     throw new PluginClientError('client_module_http_error', `Plugin ${pluginId} client module ${moduleRef}: ${message}`, res.status)
   }
-  const contentHash = res.headers.get('x-helm-client-hash') ?? ''
+  const contentHash = res.headers.get('x-helmx-client-hash') ?? ''
   if (expectedHash !== undefined && contentHash !== expectedHash) {
     throw new PluginClientError(
       'client_module_stale',

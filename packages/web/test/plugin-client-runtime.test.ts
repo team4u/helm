@@ -7,7 +7,7 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import { compilePluginClientModule } from '@helm/plugin-build'
+import { compilePluginClientModule } from '@helmx/plugin-build'
 import { PluginUiView } from '../src/ui/PluginUiView.js'
 import {
   getCachedClientComponent,
@@ -32,14 +32,14 @@ const originalFetch = globalThis.fetch
 afterEach(() => { globalThis.fetch = originalFetch; resetPluginClientCache() })
 
 test('同步缓存按 plugin/module/export 隔离，组件复用时不在新上下文渲染旧导出', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-client-identity-'))
+  const dir = await mkdtemp(join(tmpdir(), 'helmx-client-identity-'))
   const renders: string[] = []
   Object.assign(globalThis, { __clientTestRenders: renders })
   const compile = async (pluginId: string, moduleRef: string, marker: string) => {
     const root = join(dir, marker)
     await mkdir(root)
     await writeFile(join(root, moduleRef), `
-      import { usePluginContext } from '@helm/plugin-client'
+      import { usePluginContext } from '@helmx/plugin-client'
       export function First() { const ctx = usePluginContext(); globalThis.__clientTestRenders.push(ctx.pluginId + ':${marker}:first'); return <div>${marker}:first</div> }
       export function Second() { const ctx = usePluginContext(); globalThis.__clientTestRenders.push(ctx.pluginId + ':${marker}:second'); return <div>${marker}:second</div> }
     `)
@@ -59,7 +59,7 @@ test('同步缓存按 plugin/module/export 隔离，组件复用时不在新上�
     globalThis.fetch = async (url) => {
       const hash = hashes.get(String(url))
       assert.ok(hash, `意外下载：${String(url)}`)
-      return new Response('', { headers: { 'x-helm-client-hash': hash } })
+      return new Response('', { headers: { 'x-helmx-client-hash': hash } })
     }
     const store = makeTestStore()
     for (const [pluginId, module, name, expected] of [
@@ -87,7 +87,7 @@ test('同步缓存按 plugin/module/export 隔离，组件复用时不在新上�
     await act(async () => root.render(e(HostStoreProviders, { value: store },
       e(PluginUiView, { pluginId: 'beta', spec: { client: { module: 'index.tsx', export: 'Second' } } }))))
     assert.match(host.textContent!, /HTTP 503/)
-    globalThis.fetch = async () => new Response('', { headers: { 'x-helm-client-hash': hashes.get('/api/plugins/beta/client.mjs?module=index.tsx')! } })
+    globalThis.fetch = async () => new Response('', { headers: { 'x-helmx-client-hash': hashes.get('/api/plugins/beta/client.mjs?module=index.tsx')! } })
     await act(async () => { (host.querySelector('button') as HTMLElement).click() })
     assert.match(host.textContent!, /c:second/)
     assert.doesNotMatch(host.textContent!, /加载失败/)
@@ -99,7 +99,7 @@ test('同步缓存按 plugin/module/export 隔离，组件复用时不在新上�
 })
 
 test('停用仅清目标插件缓存，不误清具有相似 ID 的插件；重新挂载不能复用旧组件', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-client-evict-'))
+  const dir = await mkdtemp(join(tmpdir(), 'helmx-client-evict-'))
   try {
     await writeFile(join(dir, 'index.tsx'), 'export function Panel() { return <div>有效组件</div> }')
     const { code } = await compilePluginClientModule('p', dir, 'index.tsx', join(dir, 'cache'))
@@ -122,7 +122,7 @@ test('停用或重建快照后，在途下载不得重新填回插件缓存', { 
     globalThis.fetch = async () => await new Promise<Response>((resolve) => { respond = resolve })
     const pending = loadPluginClientModule('p', 'index.tsx')
     invalidate()
-    respond(new Response('export function Panel() {}', { headers: { 'x-helm-client-hash': 'late' } }))
+    respond(new Response('export function Panel() {}', { headers: { 'x-helmx-client-hash': 'late' } }))
     await assert.rejects(pending, (error) => error instanceof PluginClientError && error.code === 'client_module_invalidated')
     assert.equal(getCachedClientComponent('p', 'index.tsx', 'Panel'), undefined)
   }
@@ -132,7 +132,7 @@ test('模块导入失败显式报错且不毒化同 hash 的重试', { timeout: 
   const createObjectURL = URL.createObjectURL
   const revokeObjectURL = URL.revokeObjectURL
   let attempts = 0
-  globalThis.fetch = async () => new Response('throw new Error("真实模块求值失败")', { headers: { 'x-helm-client-hash': 'same' } })
+  globalThis.fetch = async () => new Response('throw new Error("真实模块求值失败")', { headers: { 'x-helmx-client-hash': 'same' } })
   URL.createObjectURL = () => { attempts++; return 'data:text/javascript,throw%20new%20Error(%22真实模块求值失败%22)' }
   URL.revokeObjectURL = () => {}
   try {
@@ -150,8 +150,8 @@ test('模块导入失败显式报错且不毒化同 hash 的重试', { timeout: 
 test('插件样式随停用/登出回收：仅移除目标插件注入的 style，不误删其他插件', { timeout: 60_000 }, async () => {
   const addSheet = (key: string, pluginId: string): HTMLStyleElement => {
     const style = document.createElement('style')
-    style.dataset.helmPluginCss = key
-    style.dataset.helmPluginCssPlugin = pluginId
+    style.dataset.helmxPluginCss = key
+    style.dataset.helmxPluginCssPlugin = pluginId
     style.textContent = `.${key} { color: red }`
     document.head.appendChild(style)
     return style
@@ -176,7 +176,7 @@ test('并发加载同一插件模块合并为单次 fetch（in-flight 复用）'
   globalThis.fetch = async () => {
     fetchCount++
     await new Promise((r) => setTimeout(r, 10))
-    return new Response('export function Test() {}', { headers: { 'x-helm-client-hash': 'hash-shared' } })
+    return new Response('export function Test() {}', { headers: { 'x-helmx-client-hash': 'hash-shared' } })
   }
   try {
     const [a, b, c] = await Promise.all([
@@ -199,13 +199,13 @@ test('O(1) expectedHash 内存命中零 fetch；缺失时请求携带 &hash=，4
   const revokeObjectURL = URL.revokeObjectURL
   const urls: string[] = []
   let seq = 0
-  URL.createObjectURL = () => `data:text/javascript,export%20const%20__helmClientCss%3D%22.h%7Bcolor%3Ared%7D%22%3Bexport%20function%20Panel()%7Breturn%20null%7D#${++seq}`
+  URL.createObjectURL = () => `data:text/javascript,export%20const%20__helmxClientCss%3D%22.h%7Bcolor%3Ared%7D%22%3Bexport%20function%20Panel()%7Breturn%20null%7D#${++seq}`
   URL.revokeObjectURL = () => {}
   globalThis.fetch = async (input) => {
     const url = String(input)
     urls.push(url)
     if (url.includes('hash=h-ok')) {
-      return new Response('export function Panel() {}', { headers: { 'x-helm-client-hash': 'h-ok' } })
+      return new Response('export function Panel() {}', { headers: { 'x-helmx-client-hash': 'h-ok' } })
     }
     if (url.includes('hash=h-409')) {
       return new Response(JSON.stringify({ error: { code: 'client_module_stale', message: 'module hash stale' } }), {
@@ -214,7 +214,7 @@ test('O(1) expectedHash 内存命中零 fetch；缺失时请求携带 &hash=，4
       })
     }
     if (url.includes('hash=h-mismatch')) {
-      return new Response('export function Panel() {}', { headers: { 'x-helm-client-hash': 'h-old' } })
+      return new Response('export function Panel() {}', { headers: { 'x-helmx-client-hash': 'h-old' } })
     }
     return new Response('not found', { status: 404 })
   }
@@ -235,16 +235,16 @@ test('O(1) expectedHash 内存命中零 fetch；缺失时请求携带 &hash=，4
       (err) => err instanceof PluginClientError && err.code === 'client_module_stale' && err.status === 409,
     )
     assert.equal(getCachedClientComponent('p-hash', 'index.tsx', 'Panel'), undefined, '409 后旧缓存必须被逐出')
-    assert.ok(document.querySelector('style[data-helm-plugin-css="p-hash::index.tsx"]') === null, '409 后旧样式必须移除')
+    assert.ok(document.querySelector('style[data-helmx-plugin-css="p-hash::index.tsx"]') === null, '409 后旧样式必须移除')
 
-    // 重新种子缓存后遇到响应 x-helm-client-hash 不匹配：逐出缓存、不把陈旧模块按 expectedHash 写入
-    seedPluginClientModule('p-hash', 'index.tsx', { Panel: () => null, __helmClientCss: '.old{}' }, 'h-seed')
+    // 重新种子缓存后遇到响应 x-helmx-client-hash 不匹配：逐出缓存、不把陈旧模块按 expectedHash 写入
+    seedPluginClientModule('p-hash', 'index.tsx', { Panel: () => null, __helmxClientCss: '.old{}' }, 'h-seed')
     await assert.rejects(
       loadPluginClientModule('p-hash', 'index.tsx', 'h-mismatch'),
       (err) => err instanceof PluginClientError && err.code === 'client_module_stale',
     )
     assert.equal(getCachedClientComponent('p-hash', 'index.tsx', 'Panel'), undefined)
-    assert.ok(document.querySelector('style[data-helm-plugin-css="p-hash::index.tsx"]') === null)
+    assert.ok(document.querySelector('style[data-helmx-plugin-css="p-hash::index.tsx"]') === null)
   } finally {
     URL.createObjectURL = createObjectURL
     URL.revokeObjectURL = revokeObjectURL
@@ -259,8 +259,8 @@ test('不同 expectedHash 在途请求竞争：新 hash 独立拉取并淘汰旧
   URL.createObjectURL = ((blob: Blob) => {
     const marker = urls.length
     return blob.size > 30
-      ? `data:text/javascript,export%20const%20v%3D%22v2%22%3Bexport%20const%20__helmClientCss%3D%22.v2%7Bcolor%3Ablue%7D%22%3Bexport%20function%20Panel()%7Breturn%20%22v2%22%7D#${marker}`
-      : `data:text/javascript,export%20const%20v%3D%22v1%22%3Bexport%20const%20__helmClientCss%3D%22.v1%7Bcolor%3Ared%7D%22%3Bexport%20function%20Panel()%7Breturn%20%22v1%22%7D#${marker}`
+      ? `data:text/javascript,export%20const%20v%3D%22v2%22%3Bexport%20const%20__helmxClientCss%3D%22.v2%7Bcolor%3Ablue%7D%22%3Bexport%20function%20Panel()%7Breturn%20%22v2%22%7D#${marker}`
+      : `data:text/javascript,export%20const%20v%3D%22v1%22%3Bexport%20const%20__helmxClientCss%3D%22.v1%7Bcolor%3Ared%7D%22%3Bexport%20function%20Panel()%7Breturn%20%22v1%22%7D#${marker}`
   }) as typeof URL.createObjectURL
   URL.revokeObjectURL = () => {}
   globalThis.fetch = async (input) => {
@@ -270,7 +270,7 @@ test('不同 expectedHash 在途请求竞争：新 hash 独立拉取并淘汰旧
       return await new Promise<Response>((resolve) => { resolveOldFetch = resolve })
     }
     return new Response('export const v = "v2"; export function Panel() { return "v2" } // padded-for-v2', {
-      headers: { 'x-helm-client-hash': 'h2' },
+      headers: { 'x-helmx-client-hash': 'h2' },
     })
   }
   try {
@@ -282,11 +282,11 @@ test('不同 expectedHash 在途请求竞争：新 hash 独立拉取并淘汰旧
     assert.equal(r2.module.v, 'v2')
 
     // 旧请求迟到返回 h1：必须失效，不得覆盖 h2 缓存与样式
-    resolveOldFetch(new Response('export const v = "v1"', { headers: { 'x-helm-client-hash': 'h1' } }))
+    resolveOldFetch(new Response('export const v = "v1"', { headers: { 'x-helmx-client-hash': 'h1' } }))
     await assert.rejects(p1, (err) => err instanceof PluginClientError && err.code === 'client_module_invalidated')
     const hit = await loadPluginClientModule('p-race', 'index.tsx', 'h2')
     assert.equal(hit.module.v, 'v2')
-    assert.equal(document.querySelector('style[data-helm-plugin-css="p-race::index.tsx"]')?.getAttribute('data-helm-plugin-css-hash'), 'h2')
+    assert.equal(document.querySelector('style[data-helmx-plugin-css="p-race::index.tsx"]')?.getAttribute('data-helmx-plugin-css-hash'), 'h2')
   } finally {
     URL.createObjectURL = createObjectURL
     URL.revokeObjectURL = revokeObjectURL
@@ -297,9 +297,9 @@ test('reconcilePluginClientCache 增量对账：保留未变更启用插件，�
   const PanelA = () => null
   const PanelB = () => null
   const PanelC = () => null
-  seedPluginClientModule('keep-p', 'index.tsx', { Panel: PanelA, __helmClientCss: '.keep{}' }, 'hash-keep')
-  seedPluginClientModule('change-p', 'index.tsx', { Panel: PanelB, __helmClientCss: '.chg{}' }, 'hash-old')
-  seedPluginClientModule('disable-p', 'index.tsx', { Panel: PanelC, __helmClientCss: '.dis{}' }, 'hash-dis')
+  seedPluginClientModule('keep-p', 'index.tsx', { Panel: PanelA, __helmxClientCss: '.keep{}' }, 'hash-keep')
+  seedPluginClientModule('change-p', 'index.tsx', { Panel: PanelB, __helmxClientCss: '.chg{}' }, 'hash-old')
+  seedPluginClientModule('disable-p', 'index.tsx', { Panel: PanelC, __helmxClientCss: '.dis{}' }, 'hash-dis')
 
   let notifications = 0
   const unsub = subscribePluginClientCacheInvalidation(() => { notifications++ })
@@ -330,11 +330,11 @@ test('reconcilePluginClientCache 增量对账：保留未变更启用插件，�
     assert.notEqual(getPluginClientCacheRevision('change-p'), revChange0)
     assert.notEqual(getPluginClientCacheRevision('disable-p'), revDisable0)
     assert.equal(getCachedClientComponent('keep-p', 'index.tsx', 'Panel', 'hash-keep'), PanelA)
-    assert.ok(document.querySelector('style[data-helm-plugin-css="keep-p::index.tsx"]') !== null)
+    assert.ok(document.querySelector('style[data-helmx-plugin-css="keep-p::index.tsx"]') !== null)
     assert.equal(getCachedClientComponent('change-p', 'index.tsx', 'Panel'), undefined)
     assert.equal(getCachedClientComponent('disable-p', 'index.tsx', 'Panel'), undefined)
-    assert.ok(document.querySelector('style[data-helm-plugin-css="change-p::index.tsx"]') === null)
-    assert.ok(document.querySelector('style[data-helm-plugin-css="disable-p::index.tsx"]') === null)
+    assert.ok(document.querySelector('style[data-helmx-plugin-css="change-p::index.tsx"]') === null)
+    assert.ok(document.querySelector('style[data-helmx-plugin-css="disable-p::index.tsx"]') === null)
   } finally {
     unsub()
   }

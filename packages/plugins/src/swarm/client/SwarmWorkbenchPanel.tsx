@@ -18,10 +18,10 @@
  */
 import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { WorkbenchPanelProps } from '@helm/protocol'
+import type { WorkbenchPanelProps } from '@helmx/protocol'
 import {
   Callout,
-  HelmIcon,
+  HelmxIcon,
   StatusLight,
   formatDurationMs,
   resolveLocalizedText,
@@ -30,7 +30,7 @@ import {
   usePluginDoc,
   usePluginLocale,
   usePluginSessionDoc,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 import type { SwarmIndexDoc } from './models.ts'
 import {
   mergeBoardViewWithRead,
@@ -201,7 +201,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
         <Callout tone={loadError !== undefined ? 'err' : 'warn'} title={resolveLocalizedText(PANEL_STATUS_LOAD_FAILED, locale)}>
           {loadError !== undefined ? <p className="sw-panel-error-text">{loadError}</p> : null}
           <button type="button" className="btn btn-xs" onClick={fallback.reload}>
-            <HelmIcon name="rotate-cw" size={11} />
+            <HelmxIcon name="rotate-cw" size={11} />
             <span>{resolveLocalizedText(PANEL_RETRY, locale)}</span>
           </button>
         </Callout>
@@ -229,7 +229,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
           <span className="stack-row">
             <span className="badge badge-neutral">{resolveLocalizedText(PANEL_FALLBACK_NOTE, locale)}</span>
             <button type="button" className="btn btn-xs" onClick={fallback.reload}>
-              <HelmIcon name="rotate-cw" size={11} />
+              <HelmxIcon name="rotate-cw" size={11} />
               <span>{resolveLocalizedText(PANEL_REFRESH, locale)}</span>
             </button>
           </span>
@@ -295,7 +295,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
                       className="sw-panel-member-worktree"
                       title={`${row.worktree.worktreeId}${row.worktree.branch ? ` · ${row.worktree.branch}` : ''}`}
                     >
-                      <HelmIcon name="git-branch" size={11} />
+                      <HelmxIcon name="git-branch" size={11} />
                       <span>{panelWorktreeSummary(row.worktree, locale)}</span>
                     </span>
                   ) : null}
@@ -315,7 +315,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
           <ul className="sw-panel-retained">
             {model.retainedWorktrees.map((item) => (
               <li key={item.worktreeId} className="sw-panel-retained-item">
-                <HelmIcon name="git-branch" size={11} />
+                <HelmxIcon name="git-branch" size={11} />
                 <span title={`${item.path} · ${item.worktreeId}`}>{panelRetainedSummary(item, locale)}</span>
               </li>
             ))}
@@ -332,7 +332,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
             aria-expanded={historyExpanded}
             onClick={() => setHistoryExpanded((v) => !v)}
           >
-            <HelmIcon name={historyExpanded ? 'chevron-up' : 'chevron-down'} size={11} />
+            <HelmxIcon name={historyExpanded ? 'chevron-up' : 'chevron-down'} size={11} />
             <span>{resolveLocalizedText(historyExpanded ? PANEL_HISTORY_COLLAPSE : PANEL_HISTORY_TOGGLE, locale)}</span>
           </button>
         </div>
@@ -354,7 +354,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
                 <PostBodyText body={post.body} collapsible={shouldCollapsePostBody(post.body)} />
                 {post.worktreeSnapshot !== undefined ? (
                   <div className="sw-panel-post-worktree">
-                    <HelmIcon name="git-branch" size={11} />
+                    <HelmxIcon name="git-branch" size={11} />
                     <span>{panelWorktreeSummary(post.worktreeSnapshot, locale)}</span>
                   </div>
                 ) : null}
@@ -366,7 +366,7 @@ export function SwarmWorkbenchPanel(props?: Partial<WorkbenchPanelProps>): React
           <div className="sw-panel-empty-hint stack-row">
             <span>{readState.error}</span>
             <button type="button" className="btn btn-xs" onClick={readState.retry}>
-              <HelmIcon name="rotate-cw" size={11} />
+              <HelmxIcon name="rotate-cw" size={11} />
               <span>{resolveLocalizedText(PANEL_RETRY, locale)}</span>
             </button>
           </div>

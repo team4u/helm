@@ -7,8 +7,8 @@
  */
 import { useEffect, useState, useSyncExternalStore, type ReactNode } from 'react'
 import type { ComponentType } from 'react'
-import type { MarkdownCodeBlockProps } from '@helm/protocol/browser'
-import { CopyButton, createPluginClientContext, HelmIcon, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helm/plugin-client'
+import type { MarkdownCodeBlockProps } from '@helmx/protocol/browser'
+import { CopyButton, createPluginClientContext, HelmxIcon, PluginClientContext, usePluginClientHost, ViewBoundary } from '@helmx/plugin-client'
 import { usePluginsUi } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
@@ -36,7 +36,7 @@ function CodeBlockError({ language, code, message, onRetry }: { language: string
         <CopyButton text={code} />
       </div>
       <div className="callout callout--error" role="alert">
-        <HelmIcon name="alert-triangle" size={13} />
+        <HelmxIcon name="alert-triangle" size={13} />
         <div>
           <strong>{t('conv.codeblock.renderFailed')}</strong>
           <p className="selectable">{message}</p>
@@ -135,7 +135,7 @@ function PluginCodeBlock(props: {
           <span>{language}</span>
         </div>
         <div className="callout" style={{ display: 'flex', gap: 6, alignItems: 'center', fontSize: 12 }}>
-          <HelmIcon name="loader" size={13} className="spin-slow" />
+          <HelmxIcon name="loader" size={13} className="spin-slow" />
           <span>{t('conv.codeblock.loadingRenderer', { language })}</span>
         </div>
       </div>

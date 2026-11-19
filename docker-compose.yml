@@ -1,18 +1,18 @@
 services:
-  helm-hub:
+  helmx-hub:
     build:
       context: .
       dockerfile: Dockerfile
-    image: helm-hub:dev
-    container_name: helm-hub
+    image: helmx-hub:dev
+    container_name: helmx-hub
     restart: unless-stopped
     ports:
       # Host 3333 -> container 3202; other machines on the LAN reach it directly via http://<server-lan-ip>:3333
       - "0.0.0.0:3333:3202"
     environment:
-      - HELM_HOST=0.0.0.0
-      - HELM_PORT=3202
-      - HELM_DATA_DIR=/data/.helm
+      - HELMX_HOST=0.0.0.0
+      - HELMX_PORT=3202
+      - HELMX_DATA_DIR=/data/.helmx
     volumes:
-      # Persist the Hub database, credentials and artifacts (independent of the host's ~/.helm, avoiding lock contention with the host CLI / helm-node)
-      - ~/.helm-hub-docker:/data/.helm
+      # Persist the Hub database, credentials and artifacts (independent of the host's ~/.helmx, avoiding lock contention with the host CLI / helmx-node)
+      - ~/.helmx-hub-docker:/data/.helmx

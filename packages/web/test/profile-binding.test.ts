@@ -14,7 +14,7 @@ import { test } from 'node:test'
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { Profile } from '@helm/protocol'
+import type { Profile } from '@helmx/protocol'
 import { ProfileService } from '../../kernel/src/services/profiles-skills.js'
 import { parseProfileBody } from '../../kernel/src/http/validate.js'
 import { buildProfileSavePayload, createDraft, editProfileField } from '../src/modals/profile-editor-model.js'
@@ -29,7 +29,7 @@ async function detailOf(svc: ProfileService, id: string): Promise<Profile> {
 }
 
 test('Profile 文件资产拒绝未知运行时靶点字段，不静默回到本机', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-profile-invalid-target-'))
+  const dir = await mkdtemp(join(tmpdir(), 'helmx-profile-invalid-target-'))
   try {
     const service = new ProfileService(dir)
     const invalid = { id: 'old-target', runtime: { kind: 'herdr', agent: 'pi', machine: 'remote-box' } }
@@ -42,7 +42,7 @@ test('Profile 文件资产拒绝未知运行时靶点字段，不静默回到本
 })
 
 test('只改 name 的载荷保存后完整保留执行配置；MEMORY.md 不受 Profile 保存影响', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-profile-binding-'))
+  const dir = await mkdtemp(join(tmpdir(), 'helmx-profile-binding-'))
   try {
     const svc = new ProfileService(dir)
     const memoryStore = new MemoryStore(createProfileFileHost(dir, svc))
@@ -110,7 +110,7 @@ test('只改 name 的载荷保存后完整保留执行配置；MEMORY.md 不受 
 })
 
 test('清空 nodeId 的载荷保存后 profile.json 不再回读出 nodeId（回退默认 local）', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-profile-binding-'))
+  const dir = await mkdtemp(join(tmpdir(), 'helmx-profile-binding-'))
   try {
     const svc = new ProfileService(dir)
     const detail: Profile = {
@@ -138,7 +138,7 @@ test('清空 nodeId 的载荷保存后 profile.json 不再回读出 nodeId（回
 })
 
 test('Profile 契约删除 memory 字段后请求携带 memory 被边界拒绝', { timeout: 60_000 }, async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-profile-memory-reject-'))
+  const dir = await mkdtemp(join(tmpdir(), 'helmx-profile-memory-reject-'))
   try {
     // HTTP 边界（parseProfileBody 白名单）拒绝 memory 字段。
     assert.throws(

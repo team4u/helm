@@ -8,8 +8,8 @@
  * When no member is in flight the summary is empty and the tray must render
  * null (zero height).
  */
-import type { AskSpec, ConversationLive, ConversationSummary } from '@helm/protocol'
-import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
+import type { AskSpec, ConversationLive, ConversationSummary } from '@helmx/protocol'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
 import {
   boardProgressOf,
   isMemberInFlight,
@@ -139,7 +139,7 @@ export function resolveSwarmTrayLiveSnippet(
     detailError?: string
     fallbackDoing?: string
   },
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string | undefined {
   if (input.detailError !== undefined) {
     return `${resolveLocalizedText(TRAY_LOAD_FAILED_TAG, locale)}: ${firstLineCompact(input.detailError)}`

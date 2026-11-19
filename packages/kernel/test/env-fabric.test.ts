@@ -1,6 +1,6 @@
 /**
  * Cross-platform node fabric (EnvFabric) end-to-end tests: real Hub WS gateway + real
- * @helm/node daemon (one isolated env RPC server per connection; destroyed on reconnect/replacement).
+ * @helmx/node daemon (one isolated env RPC server per connection; destroyed on reconnect/replacement).
  *
  * Covers:
  * 1. NodeRegistry + attachNodeWsGateway + RemoteExecutionEnv + ScopedExecutionEnv:
@@ -24,7 +24,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { WebSocket } from 'ws'
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
-import type { NodeRegisterInput, NodeRegisterResult } from '@helm/protocol'
+import type { NodeRegisterInput, NodeRegisterResult } from '@helmx/protocol'
 import type { HubConnectionLocal } from '../src/env/registry.js'
 import { createBirpc } from 'birpc'
 import {
@@ -40,7 +40,7 @@ import {
   createNodeDaemon,
   type NodeDaemon,
   type NodeIdentity,
-} from '@helm/node'
+} from '@helmx/node'
 import { cleanupDir, makeFauxModels, makeTempDir, sleep as delay } from './helpers.js'
 
 const bg = BACKGROUND_CONTEXT
@@ -59,7 +59,7 @@ async function startFabricHub(
     heartbeatIntervalMs: 60_000,
     heartbeatTimeoutMs: 60_000,
     envOptions: ({ conversationId }): Record<string, string> =>
-      conversationId === undefined ? {} : { HELM_CONVERSATION_ID: String(conversationId) },
+      conversationId === undefined ? {} : { HELMX_CONVERSATION_ID: String(conversationId) },
   })
   const server = http.createServer((_req, res) => {
     res.writeHead(404)
@@ -104,7 +104,7 @@ async function startNode(opts: {
 let rootDir: string
 
 before(async () => {
-  rootDir = await makeTempDir('helm-envfabric-')
+  rootDir = await makeTempDir('helmx-envfabric-')
 })
 
 after(async () => {
@@ -210,12 +210,12 @@ describe('EnvFabric node connectivity and remote execution', { timeout: 60_000 }
       assert.ok(env instanceof RemoteExecutionEnv)
 
       // Write + flush (real RPC forwarding) + read back.
-      const w = await env.writeFile('hello.txt', '你好 helm', bg)
+      const w = await env.writeFile('hello.txt', '你好 helmx', bg)
       assert.ok(w.ok, JSON.stringify(w))
       const f = await env.flushFile('hello.txt', bg)
       assert.ok(f.ok, `envFlushFile should forward and succeed: ${JSON.stringify(f)}`)
       const r = await env.readTextFile('hello.txt', bg)
-      assert.ok(r.ok && r.value === '你好 helm')
+      assert.ok(r.ok && r.value === '你好 helmx')
 
       // Streaming exec: onOutput emits in arrival order.
       const chunks: string[] = []
@@ -276,12 +276,12 @@ describe('EnvFabric node connectivity and remote execution', { timeout: 60_000 }
       const s1 = hub.fabric.envForTarget({ conversationId: 101, nodeId: 'node-scope', cwd: workDir })
       const s2 = hub.fabric.envForTarget({ conversationId: 202, nodeId: 'node-scope', cwd: workDir })
       // Env stays isolated per conversation even when sharing a node/cwd.
-      await s1.exec('echo "$HELM_CONVERSATION_ID" > who.txt', undefined, bg)
+      await s1.exec('echo "$HELMX_CONVERSATION_ID" > who.txt', undefined, bg)
       assert.equal((await readFile(join(workDir, 'who.txt'), 'utf8')).trim(), '101')
-      await s2.exec('echo "$HELM_CONVERSATION_ID" > who.txt', undefined, bg)
+      await s2.exec('echo "$HELMX_CONVERSATION_ID" > who.txt', undefined, bg)
       assert.equal((await readFile(join(workDir, 'who.txt'), 'utf8')).trim(), '202')
       // Bound key cannot be spoofed by per-call env overrides.
-      await s1.exec('echo "$HELM_CONVERSATION_ID" > who.txt', { env: { HELM_CONVERSATION_ID: '999' } }, bg)
+      await s1.exec('echo "$HELMX_CONVERSATION_ID" > who.txt', { env: { HELMX_CONVERSATION_ID: '999' } }, bg)
       assert.equal((await readFile(join(workDir, 'who.txt'), 'utf8')).trim(), '101')
       await daemon.close()
     } finally {
@@ -692,7 +692,7 @@ describe('node management and env/exec HTTP routes', { timeout: 60_000 }, () => 
 
       faux.setResponses([
         fauxAssistantMessage(
-          [fauxToolCall('bash', { command: 'cat remote-only.txt && echo NODE=$HELM_NODE_ID && pwd' })],
+          [fauxToolCall('bash', { command: 'cat remote-only.txt && echo NODE=$HELMX_NODE_ID && pwd' })],
           { stopReason: 'toolUse' },
         ),
         fauxAssistantMessage([fauxToolCall('write', { path: 'written.txt', content: 'written-by-write-tool' })], {

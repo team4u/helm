@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react'
-import type { PluginSummary } from '@helm/protocol/browser'
-import { DEFAULT_HELM_LOCALE, resolveLocalizedText } from '@helm/protocol/browser'
-import { HelmIcon, StatusLight, Switch } from '@helm/plugin-client'
+import type { PluginSummary } from '@helmx/protocol/browser'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/protocol/browser'
+import { HelmxIcon, StatusLight, Switch } from '@helmx/plugin-client'
 import { createWebTranslator } from '../i18n/catalog.js'
 import { useOptionalGroupedUi, useOptionalLocale, useOptionalStoreActions } from '../lib/store-context.js'
 import {
@@ -38,7 +38,7 @@ export function PluginCard({
   const actions = useOptionalStoreActions()
   // 展示名 / 描述属 LocalizedText 显示元数据：按 store 的权威 locale 解析；
   // 组件保留无 Provider 的 SSR 渲染容忍（缺省英文桥接）。
-  const locale = storeLocale ?? DEFAULT_HELM_LOCALE
+  const locale = storeLocale ?? DEFAULT_HELMX_LOCALE
   const t = useMemo(() => createWebTranslator(locale), [locale])
   const name = resolveLocalizedText(plugin.name, locale) || plugin.id
   const description = getPluginDescription(plugin, locale, t)
@@ -106,7 +106,7 @@ export function PluginCard({
             )}
             {isLocked && (
               <span className="plugin-card-locked-badge" title={t('plugins.card.lockedTitle')}>
-                <HelmIcon name="lock" size={10} />
+                <HelmxIcon name="lock" size={10} />
                 <span>{t('plugins.resident')}</span>
               </span>
             )}
@@ -147,19 +147,19 @@ export function PluginCard({
         <div className="plugin-card-pills">
           {(plugin.tools?.length ?? 0) > 0 && (
             <span className="plugin-card-pill" title={t('plugins.card.toolsTitle', { count: plugin.tools.length })}>
-              <HelmIcon name="wrench" size={11} />
+              <HelmxIcon name="wrench" size={11} />
               <span>{`${plugin.tools.length} Tools`}</span>
             </span>
           )}
           {(plugin.actions?.length ?? 0) > 0 && (
             <span className="plugin-card-pill" title={t('plugins.card.actionsTitle', { count: plugin.actions.length })}>
-              <HelmIcon name="zap" size={11} />
+              <HelmxIcon name="zap" size={11} />
               <span>{`${plugin.actions.length} Actions`}</span>
             </span>
           )}
           {(plugin.hooks?.length ?? 0) > 0 && (
             <span className="plugin-card-pill" title={t('plugins.card.hooksTitle', { count: plugin.hooks.length })}>
-              <HelmIcon name="layers" size={11} />
+              <HelmxIcon name="layers" size={11} />
               <span>{`${plugin.hooks.length} Hooks`}</span>
             </span>
           )}
@@ -181,7 +181,7 @@ export function PluginCard({
                 })
               }}
             >
-              <HelmIcon name="play" size={10} />
+              <HelmxIcon name="play" size={10} />
               <span>{t('plugins.openView')}</span>
             </button>
           )}

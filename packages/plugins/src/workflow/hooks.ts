@@ -10,7 +10,7 @@
  * - 宿主事件：conversation.upsert / conversation.deleted 触发 runs 重投影；
  *   diagnostics.collect 追加可安全续跑的后台失败 Run 探针（Watchdog 面）。
  */
-import { HelmError, type HelmPluginContext } from '@helm/protocol'
+import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import { HARD_MAX_SUBAGENT_DEPTH, parseWorkflowSpawnMeta } from '../contracts.js'
 import { DIAGNOSTICS_COLLECT_EVENT, appendProbes, parseCollection } from '../diagnostics.js'
 import type { WorktreeIsolation } from './isolation.js'
@@ -35,7 +35,7 @@ function extractDeletedConversationId(payload: unknown): number | undefined {
     : undefined
 }
 
-export function registerWorkflowHooks(ctx: HelmPluginContext, deps: WorkflowHookDeps): void {
+export function registerWorkflowHooks(ctx: HelmxPluginContext, deps: WorkflowHookDeps): void {
   const { registry, isolation, workflows, projection } = deps
 
   // ---- agent_spawn 深度守卫（兜底防线；priority 300 = 最外层） ----
@@ -58,7 +58,7 @@ export function registerWorkflowHooks(ctx: HelmPluginContext, deps: WorkflowHook
       explicitCeiling !== undefined &&
       (!Number.isInteger(explicitCeiling) || explicitCeiling < 1 || explicitCeiling > HARD_MAX_SUBAGENT_DEPTH)
     ) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `maxSubagentDepth 必须是 1..${HARD_MAX_SUBAGENT_DEPTH} 的整数（收到 ${JSON.stringify(explicitCeiling)}）`,
         400,
@@ -67,7 +67,7 @@ export function registerWorkflowHooks(ctx: HelmPluginContext, deps: WorkflowHook
     }
     const childCeiling = explicitCeiling ?? parentFacts.maxSubagentDepth
     if (childCeiling < childDepth || (parentFacts.managed && childCeiling > parentFacts.maxSubagentDepth)) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `maxSubagentDepth 必须至少为目标层级 ${childDepth}，受管子代理不能提高继承的上限 ${parentFacts.maxSubagentDepth}`,
         400,
@@ -178,7 +178,7 @@ export function registerWorkflowHooks(ctx: HelmPluginContext, deps: WorkflowHook
         targetKind: 'external' as const,
         targetId: `workflow:${run.runId}`,
         nodeId: 'local',
-        ownedBy: 'helm' as const,
+        ownedBy: 'helmx' as const,
         status: 'error',
         stateChangeSeq: run.autoResumeCount,
         facts: {

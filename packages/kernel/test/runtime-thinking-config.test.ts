@@ -6,7 +6,7 @@ import { after, before, it, type TestContext } from 'node:test'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness } from '@earendil-works/pi-durable'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import type { ConversationSummary, HelmEventFrame } from '@helm/protocol'
+import type { ConversationSummary, HelmxEventFrame } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/runtime.js'
 import { assertRejectsCode, cleanupDir, makeFauxModels, makeTempDir } from './helpers.js'
 
@@ -14,12 +14,12 @@ type Runtime = KernelRuntime & { faux: ReturnType<typeof makeFauxModels>['faux']
 type ThinkingSummary = ConversationSummary & { thinkingLevelOverride?: string }
 let savedModel: string | undefined
 before(() => {
-  savedModel = process.env['HELM_MODEL']
-  delete process.env['HELM_MODEL']
+  savedModel = process.env['HELMX_MODEL']
+  delete process.env['HELMX_MODEL']
 })
 after(() => {
-  if (savedModel === undefined) delete process.env['HELM_MODEL']
-  else process.env['HELM_MODEL'] = savedModel
+  if (savedModel === undefined) delete process.env['HELMX_MODEL']
+  else process.env['HELMX_MODEL'] = savedModel
 })
 
 async function open(dir: string): Promise<Runtime> {
@@ -30,7 +30,7 @@ async function open(dir: string): Promise<Runtime> {
 }
 
 async function fixture(t: TestContext): Promise<{ dir: string; kernel: Runtime }> {
-  const dir = await makeTempDir('helm-thinking-')
+  const dir = await makeTempDir('helmx-thinking-')
   const kernel = await open(dir)
   t.after(async () => {
     await kernel.close()
@@ -59,7 +59,7 @@ it('changing global thinking keeps model; model override does not block thinking
   const inherited = await kernel.createConversation()
   const modelOverride = await kernel.createConversation({ model: 'faux/faux-2' })
   const seq = modelOverride.stateChangeSeq
-  const frames: HelmEventFrame[] = []
+  const frames: HelmxEventFrame[] = []
   const subscription = kernel.events.subscribe((frame) => frames.push(frame))
   t.after(subscription)
 
@@ -184,7 +184,7 @@ it('fork preserves thinking override; clearing fork override does not affect ori
   const detail = await kernel.getConversationDetail(conv.id)
   const entry = detail.entries.findLast((entry) => entry.kind === 'pi.assistant')
   assert.ok(entry)
-  // Forked SDK snapshot comes from an older entry, yet Helm must still align the forked conversation's current override (max).
+  // Forked SDK snapshot comes from an older entry, yet Helmx must still align the forked conversation's current override (max).
   await kernel.updateConversation(conv.id, { thinkingLevel: 'max' })
   const forked = await kernel.forkConversation(conv.id, { entryId: Number(entry.id) })
   await kernel.setDefaultModel(undefined, 'medium')
@@ -336,7 +336,7 @@ it('setModelThinkingDefault persists config.json entries, clears single entries,
 })
 
 it('startup loads config.json.modelThinkingLevels including slashed model IDs; corrupt shapes fail explicitly', { timeout: 60_000 }, async (t) => {
-  const dir = await makeTempDir('helm-thinking-permodel-')
+  const dir = await makeTempDir('helmx-thinking-permodel-')
   t.after(async () => { await cleanupDir(dir) })
   writeFileSync(join(dir, 'config.json'), JSON.stringify({
     model: 'faux/faux-1',

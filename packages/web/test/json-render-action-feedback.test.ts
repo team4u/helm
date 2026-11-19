@@ -6,17 +6,17 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import * as HelmPluginClient from '@helm/plugin-client'
-import type { HelmLocale } from '@helm/plugin-client'
+import * as HelmxPluginClient from '@helmx/plugin-client'
+import type { HelmxLocale } from '@helmx/plugin-client'
 import { normalizeSpec, type NormalizedSpecNode } from '../../plugins/src/json-render/client/spec-normalize.js'
 import type { EvalScope } from '../../plugins/src/json-render/client/evaluator.js'
-import { compilePluginClientModule } from '@helm/plugin-build'
+import { compilePluginClientModule } from '@helmx/plugin-build'
 import type { ReactNode } from 'react'
 
 /** spec-primitives 的渲染上下文形状（client 目录不入 typecheck，此处本地最小声明）。 */
 interface SpecRenderContext {
   scope: EvalScope
-  locale: HelmLocale
+  locale: HelmxLocale
   conversationId?: number
   pluginId?: string
   renderChildren(children: NormalizedSpecNode[]): ReactNode
@@ -26,13 +26,13 @@ interface SpecRenderContext {
 }
 
 ;(globalThis as Record<string, unknown>).React = React
-;(globalThis as Record<string, unknown>).__helm_shared_react = React
-;(globalThis as Record<string, unknown>).__helm_shared_react_jsx_runtime = await import('react/jsx-runtime')
-;(globalThis as Record<string, unknown>).__helm_shared_plugin_client = HelmPluginClient
-;(globalThis as Record<string, unknown>).__helm_shared_lucide_react = await import('lucide-react')
+;(globalThis as Record<string, unknown>).__helmx_shared_react = React
+;(globalThis as Record<string, unknown>).__helmx_shared_react_jsx_runtime = await import('react/jsx-runtime')
+;(globalThis as Record<string, unknown>).__helmx_shared_plugin_client = HelmxPluginClient
+;(globalThis as Record<string, unknown>).__helmx_shared_lucide_react = await import('lucide-react')
 
 const here = dirname(fileURLToPath(import.meta.url))
-const CACHE = mkdtempSync(join(tmpdir(), 'helm-jr-feedback-'))
+const CACHE = mkdtempSync(join(tmpdir(), 'helmx-jr-feedback-'))
 const { code } = await compilePluginClientModule(
   'builtin:json-render',
   resolve(here, '../../plugins/src/json-render/client'),
@@ -45,7 +45,7 @@ writeFileSync(f, code, 'utf8')
 const { SpecNodeList } = await import(pathToFileURL(f).href)
 rmSync(CACHE, { recursive: true, force: true })
 
-function render(spec: Record<string, unknown>, pending: boolean, succeeded: boolean, locale: HelmLocale = 'en'): string {
+function render(spec: Record<string, unknown>, pending: boolean, succeeded: boolean, locale: HelmxLocale = 'en'): string {
   const normalized = normalizeSpec(spec)
   assert.ok(normalized.root)
   const ctx: SpecRenderContext = {
@@ -55,7 +55,7 @@ function render(spec: Record<string, unknown>, pending: boolean, succeeded: bool
   return renderToString(React.createElement(SpecNodeList, { nodes: [normalized.root], ctx }))
 }
 
-const action = { type: 'helm:send', text: '执行检查' }
+const action = { type: 'helmx:send', text: '执行检查' }
 const fixtures: Array<{ name: string; spec: Record<string, unknown> }> = [
   { name: 'Button', spec: { component: 'Button', label: '检查', action } },
   { name: 'ActionBar', spec: { component: 'ActionBar', actions: [{ label: '检查', action }] } },

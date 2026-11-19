@@ -4,17 +4,17 @@ import { mkdtemp, mkdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createHelm } from '../packages/hub/dist/index.js'
+import { createHelmx } from '../packages/hub/dist/index.js'
 import { startHub } from '../packages/kernel/dist/http/index.js'
 import { writeNodeIdentity } from '../packages/node/dist/index.js'
 
 // Black-box acceptance against build artifacts; all data and background processes belong to this script, no external model calls.
 const repository = dirname(dirname(fileURLToPath(import.meta.url)))
-const root = await mkdtemp(join(tmpdir(), 'helm-env-compiled-'))
+const root = await mkdtemp(join(tmpdir(), 'helmx-env-compiled-'))
 const nodeDir = join(root, 'node')
 const workspace = join(root, 'workspace')
 await Promise.all([mkdir(nodeDir), mkdir(workspace)])
-const app = await createHelm({ dataDir: join(root, 'hub'), cwd: root })
+const app = await createHelmx({ dataDir: join(root, 'hub'), cwd: root })
 let hub
 let credential
 
@@ -35,7 +35,7 @@ const node = (args) => command(nodeEntry, [...args, '--data-dir', nodeDir, '--js
 try {
   hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port: 0 })
   credential = app.kernel.auth.createProcessToken()
-  const cli = (args) => command(cliEntry, args, { HELM_HUB_URL: hub.url, HELM_TOKEN: credential.token, HELM_DATA_DIR: join(root, 'client') })
+  const cli = (args) => command(cliEntry, args, { HELMX_HUB_URL: hub.url, HELMX_TOKEN: credential.token, HELMX_DATA_DIR: join(root, 'client') })
   const issued = await cli(['nodes', 'issue', 'smoke-node', '--json'])
   assert.equal(issued.code, 0, issued.err)
   const token = JSON.parse(issued.out).token
@@ -49,7 +49,7 @@ try {
   const listed = await cli(['nodes', 'list', '--json'])
   assert.equal(listed.code, 0, listed.err)
   assert.ok(JSON.parse(listed.out).some((entry) => entry.id === 'smoke-node' && entry.online))
-  const remote = await cli(['env', 'exec', '--node', 'smoke-node', '--cwd', workspace, '--json', '--', 'helm status --json'])
+  const remote = await cli(['env', 'exec', '--node', 'smoke-node', '--cwd', workspace, '--json', '--', 'helmx status --json'])
   assert.equal(remote.code, 0, remote.err)
   assert.equal(JSON.parse(JSON.parse(remote.out).output).authenticated, true)
   const stream = await cli(['env', 'exec', '--node', 'smoke-node', '--cwd', workspace, '--stream', '--json', '--', process.execPath, '-e', 'process.stdout.write("compiled-stream-ok")'])
@@ -62,7 +62,7 @@ try {
   assert.equal(stopped.code, 0, stopped.err)
   const removed = await cli(['nodes', 'remove', 'smoke-node', '--json'])
   assert.equal(removed.code, 0, removed.err)
-  console.log('EnvFabric compiled smoke passed: separate helm-node processes, registration, independent helm client, remote managed CLI, NDJSON output/exit, stop and revoke. No model was called.')
+  console.log('EnvFabric compiled smoke passed: separate helmx-node processes, registration, independent helmx client, remote managed CLI, NDJSON output/exit, stop and revoke. No model was called.')
 } finally {
   try { await node(['stop']) } finally {
     credential?.dispose()

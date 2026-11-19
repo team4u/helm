@@ -5,7 +5,7 @@ import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ArtifactMetadata, ConversationSummary, PluginSummary, PluginUiContribution } from '@helm/protocol'
+import type { ArtifactMetadata, ConversationSummary, PluginSummary, PluginUiContribution } from '@helmx/protocol'
 import { buildTimelineItems, findLatestProcessTurnKey, type TimelineItem } from '../src/conversation/timeline-model.js'
 import {
   artifactFormatLabel,
@@ -18,7 +18,7 @@ import {
 } from '../src/conversation/workbench-model.js'
 import { createWebTranslator } from '../src/i18n/catalog.js'
 import { groupUiContributions } from '../src/lib/types.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { jsonResponse, waitForCondition } from './helpers/dom-harness.js'
 import { seedPluginClientModule, resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { resetSessionDocSubscriptions } from '../src/lib/session-docs.js'
@@ -67,7 +67,7 @@ function mountNode() {
   roots.push({ root, host })
   return {
     host,
-    render: async (store: HelmExternalStore, node: React.ReactNode) => {
+    render: async (store: HelmxExternalStore, node: React.ReactNode) => {
       await act(async () => {
         root.render(e(HostStoreProviders, { value: store }, node))
       })
@@ -237,7 +237,7 @@ test('ConversationTimeline Ctrl+O 仅作用于目标面板最新含过程回合�
       null,
       e(
         'div',
-        { 'data-helm-panel': 'primary', id: 'panel-primary' },
+        { 'data-helmx-panel': 'primary', id: 'panel-primary' },
         e(ConversationTimeline, {
           conversation: convPrimary,
           detailEntries: [],
@@ -257,7 +257,7 @@ test('ConversationTimeline Ctrl+O 仅作用于目标面板最新含过程回合�
       ),
       e(
         'div',
-        { 'data-helm-panel': 'split', id: 'panel-split' },
+        { 'data-helmx-panel': 'split', id: 'panel-split' },
         e(ConversationTimeline, {
           conversation: convSplit,
           detailEntries: [],
@@ -285,7 +285,7 @@ test('ConversationTimeline Ctrl+O 仅作用于目标面板最新含过程回合�
 
   // 按 Ctrl+O（primary 面板）：仅展开 primary 最新含过程回合（含思考详情）
   await act(async () => {
-    window.dispatchEvent(new CustomEvent('helm:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
+    window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
   })
   assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
   assert.equal(primaryTurn1Toggle.getAttribute('aria-expanded'), 'false', '较早回合应保持折叠')
@@ -295,7 +295,7 @@ test('ConversationTimeline Ctrl+O 仅作用于目标面板最新含过程回合�
 
   // 再次按 Ctrl+O（primary 面板）：折叠最新含过程回合
   await act(async () => {
-    window.dispatchEvent(new CustomEvent('helm:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
+    window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
   })
   assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'false')
 
@@ -305,7 +305,7 @@ test('ConversationTimeline Ctrl+O 仅作用于目标面板最新含过程回合�
   })
   assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
   await act(async () => {
-    window.dispatchEvent(new CustomEvent('helm:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
+    window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
   })
   assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'false')
 
@@ -319,13 +319,13 @@ test('ConversationTimeline Ctrl+O 仅作用于目标面板最新含过程回合�
   })
   assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'false')
   await act(async () => {
-    window.dispatchEvent(new CustomEvent('helm:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
+    window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'primary' } }))
   })
   assert.equal(primaryTurn2Toggle.getAttribute('aria-expanded'), 'true')
 
   // 单独对 split 面板发 Ctrl+O：只展开 split 面板
   await act(async () => {
-    window.dispatchEvent(new CustomEvent('helm:shortcut', { detail: { action: 'toggle-process-groups', panel: 'split' } }))
+    window.dispatchEvent(new CustomEvent('helmx:shortcut', { detail: { action: 'toggle-process-groups', panel: 'split' } }))
   })
   assert.equal(splitTurn2Toggle.getAttribute('aria-expanded'), 'true')
 })
@@ -336,7 +336,7 @@ test('ConversationPane 顶栏类名、分屏隐藏容器、标题 Popover 与抽
     profileId: 'coder',
     nodeId: 'gpu-box-1',
     cwd: '/srv/app/repo',
-    ownedBy: 'helm',
+    ownedBy: 'helmx',
   })
   const baseStore = makeTestStore({
     conversations: [conv],
@@ -369,7 +369,7 @@ test('ConversationPane 顶栏类名、分屏隐藏容器、标题 Popover 与抽
   assert.match(popover.textContent ?? '', /#42/)
   assert.match(popover.textContent ?? '', /gpu-box-1/)
   assert.match(popover.textContent ?? '', /\/srv\/app\/repo/)
-  assert.match(popover.textContent ?? '', /helm/)
+  assert.match(popover.textContent ?? '', /helmx/)
 
   // 2) 分屏激活态：分屏关闭按钮不被 .pane-split-btn 隐藏
   await act(async () => {
@@ -391,7 +391,7 @@ test('ConversationPane 顶栏类名、分屏隐藏容器、标题 Popover 与抽
   assert.match(envBar.textContent ?? '', /#42/)
   assert.match(envBar.textContent ?? '', /coder/)
   assert.match(envBar.textContent ?? '', /gpu-box-1:\/srv\/app\/repo/)
-  assert.match(envBar.textContent ?? '', /Owner helm/)
+  assert.match(envBar.textContent ?? '', /Owner helmx/)
 
   const actionsContainer = ui.host.querySelector('.pane-actions')
   assert.ok(actionsContainer)
@@ -458,7 +458,7 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
     if (url.includes('/api/artifacts/')) {
       return new Response(new Blob(['hello-artifact'], { type: 'text/plain' }), { status: 200 })
     }
-    return new Response('', { status: 200, headers: { 'x-helm-client-hash': 'seeded' } })
+    return new Response('', { status: 200, headers: { 'x-helmx-client-hash': 'seeded' } })
   }) as typeof fetch
 
   URL.createObjectURL = (() => 'blob:mock-artifact-url') as typeof URL.createObjectURL
@@ -505,7 +505,7 @@ test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去�
   assert.ok(!tabTexts.some((t) => /MEMORY/i.test(t ?? '')), '不添加 MEMORY.md 标签页')
 
   // 关闭按钮位于 .tabs-bar 末尾且不在可滚动 tabs 容器内部
-  const tabsBar = ui.host.querySelector('.helm-workbench .tabs-bar')!
+  const tabsBar = ui.host.querySelector('.helmx-workbench .tabs-bar')!
   const closeBtn = tabsBar.lastElementChild?.querySelector('.workbench-close-btn') ?? (
     tabsBar.lastElementChild?.classList.contains('workbench-close-btn') ? tabsBar.lastElementChild : null
   )

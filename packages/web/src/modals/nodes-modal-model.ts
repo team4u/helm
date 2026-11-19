@@ -10,7 +10,7 @@
  * keep rendering English until they migrate and pass their own translator.
  */
 
-import type { NodeInfo, NodeUpgradeCheckResult } from '@helm/protocol/browser'
+import type { NodeInfo, NodeUpgradeCheckResult } from '@helmx/protocol/browser'
 import { formatBytes } from '../lib/format.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
@@ -55,11 +55,11 @@ export function buildNodeConnectGuide(
   // the background daemon, and the child argv carries no token (avoiding
   // token leaks from long-running process command lines).
   return {
-    connectCommand: `helm-node connect ${hubOrigin} --token ${issued.token}`,
-    startDaemonCommand: 'helm-node start -d',
-    oneLineCommand: `helm-node start -d --hub ${hubOrigin} --token ${issued.token}`,
-    serviceInstallCommand: 'helm-node service install',
-    doctorCommand: 'helm-node doctor',
+    connectCommand: `helmx-node connect ${hubOrigin} --token ${issued.token}`,
+    startDaemonCommand: 'helmx-node start -d',
+    oneLineCommand: `helmx-node start -d --hub ${hubOrigin} --token ${issued.token}`,
+    serviceInstallCommand: 'helmx-node service install',
+    doctorCommand: 'helmx-node doctor',
   }
 }
 

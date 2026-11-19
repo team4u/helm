@@ -1,8 +1,8 @@
 /**
- * builtin:superagent 编辑重发（helm.rewind）× RecallGraph 联动验收。
+ * builtin:superagent 编辑重发（helmx.rewind）× RecallGraph 联动验收。
  *
- * 背景：内核 submitInput replaceFromEntryId 原生路径写入 helm.rewind 截断标记
- * （kind:'helm.rewind'，data.omittedInputIds 携带被覆盖输入 ID），并作为
+ * 背景：内核 submitInput replaceFromEntryId 原生路径写入 helmx.rewind 截断标记
+ * （kind:'helmx.rewind'，data.omittedInputIds 携带被覆盖输入 ID），并作为
  * conversation.entry 事件广播。superagent 经组合层注入的订阅端口监听该标记，
  * 删除对应会话中 inputIds 相交的 RecallGraph 节点，并用 per-worker rewind
  * 纪元防止在途结算把被覆盖的旧回合写回图谱。
@@ -24,10 +24,10 @@ import { dirname, join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 
 import {
-  HelmError,
+  HelmxError,
   type ConversationSummary,
   type TurnSettledPayload,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { EventHub } from '../../kernel/src/runtime/events.js'
 import { ProfileService, SkillService } from '../../kernel/src/services/index.js'
@@ -38,8 +38,8 @@ import {
   removeRecallNodesByInputs,
   assertRecallDoc,
 } from '../src/superagent.js'
-import type { ConversationEntry } from '@helm/protocol'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import type { ConversationEntry } from '@helmx/protocol'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   MemoryDocStore,
   makeConversationSummary,
@@ -95,7 +95,7 @@ interface TestHarness {
 }
 
 async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-rewind-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-superagent-rewind-'))
   const conversations = new Map<number, ConversationSummary>()
   conversations.set(1, makeConversation(1, { tags: ['root'] }))
   const notifications: Array<{ title: string; body: string }> = []
@@ -119,8 +119,8 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
   }
   const secrets = {
     get: async () => undefined,
-    set: async () => { throw new HelmError('unsupported', 'fixture 只读 secrets', 501) },
-    delete: async () => { throw new HelmError('unsupported', 'fixture 只读 secrets', 501) },
+    set: async () => { throw new HelmxError('unsupported', 'fixture 只读 secrets', 501) },
+    delete: async () => { throw new HelmxError('unsupported', 'fixture 只读 secrets', 501) },
     addRedaction: () => () => {},
   }
   const backend: PluginHostBackend = {
@@ -141,7 +141,7 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
     },
     async forkConversation(id, opts) {
       const source = conversations.get(id)
-      if (!source) throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
+      if (!source) throw new HelmxError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
       const nextId = Math.max(0, ...conversations.keys()) + 1
       const forked = makeConversation(nextId, {
         title: opts?.title ?? `${source.title} (分叉)`,
@@ -155,24 +155,24 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
     listConversations() { return [...conversations.values()] },
     getConversation(id) {
       const found = conversations.get(id)
-      if (!found) throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
+      if (!found) throw new HelmxError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
       return found
     },
     async updateConversation(id, patch) {
       const found = conversations.get(id)
-      if (!found) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+      if (!found) throw new HelmxError('not_found', `会话不存在：${id}`, 404)
       const next = { ...found, ...patch }
       conversations.set(id, next)
       return next
     },
     manageConversation() { return () => {} },
     markConversationOwnership() {},
-    async createAsk() { throw new HelmError('unsupported', 'test', 400) },
+    async createAsk() { throw new HelmxError('unsupported', 'test', 400) },
     async cancelAsk() {},
     registerAskSeqResolver() { return () => {} },
     onEvent() { return () => {} },
     abortConversation: async () => {},
-    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
       return 'human'
     },
     isClosing: () => false,
@@ -199,19 +199,19 @@ async function makeHarness(opts: HarnessOptions = {}): Promise<TestHarness> {
       }
     },
     async listArtifacts() { return [] },
-    async createArtifact(): Promise<never> { throw new HelmError('unsupported', 'fixture does not create artifacts', 501) },
-    async getArtifact() { throw new HelmError('not_found', '无产物', 404) },
-    async completeText() { throw new HelmError('unsupported', '本 fixture 无模型', 501) },
-    executionEnv: () => { throw new HelmError('unsupported', '本 fixture 无执行环境', 501) },
+    async createArtifact(): Promise<never> { throw new HelmxError('unsupported', 'fixture does not create artifacts', 501) },
+    async getArtifact() { throw new HelmxError('not_found', '无产物', 404) },
+    async completeText() { throw new HelmxError('unsupported', '本 fixture 无模型', 501) },
+    executionEnv: () => { throw new HelmxError('unsupported', '本 fixture 无执行环境', 501) },
     withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() },
     atomicWriteFile: (path: string, content: string) => atomicWriteFileFixture(path, content),
-    async refreshModels() { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) },
-    async resolveSpawnTarget() { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) },
+    async refreshModels() { throw new HelmxError('unsupported', '本 fixture 无模型刷新', 501) },
+    async resolveSpawnTarget() { throw new HelmxError('unsupported', '本 fixture 不解析 spawn 靶点', 501) },
     listActiveSpawnExecutions: () => [],
-    async inspectNodePathUsage() { throw new HelmError('unsupported', '本 fixture 不扫描进程占用', 501) },
+    async inspectNodePathUsage() { throw new HelmxError('unsupported', '本 fixture 不扫描进程占用', 501) },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    execEnv: async () => { throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501) },
     withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     emitEvent(type, payload) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string })
@@ -306,12 +306,12 @@ function settledPayload(over: {
   }
 }
 
-/** FIXTURE：模拟内核原生编辑重发写入的 helm.rewind 截断标记（主代理合入
+/** FIXTURE：模拟内核原生编辑重发写入的 helmx.rewind 截断标记（主代理合入
  * runtime 后由真实 tracker 经 conversation.entry 广播同一形状）。 */
 function rewindMarker(entryId: number, omittedInputIds: string[], fromEntryId = 1, throughEntryId = entryId - 1): ConversationEntry {
   return {
     id: String(entryId),
-    kind: 'helm.rewind',
+    kind: 'helmx.rewind',
     data: { fromEntryId, throughEntryId, omittedEntryIds: [], omittedInputIds, createdAt: Date.now() },
   }
 }
@@ -330,11 +330,11 @@ async function dispatchWorker(h: TestHarness, prompt: string): Promise<number> {
 
 test('rewindOmittedInputIds：合法标记解析出 omittedInputIds；非 rewind/载荷非法返回 undefined', { timeout: 60_000 }, () => {
   assert.deepEqual(rewindOmittedInputIds(rewindMarker(9, ['a', 'b'])), ['a', 'b'])
-  assert.deepEqual(rewindOmittedInputIds({ id: '9', kind: 'helm.rewind', data: { fromEntryId: 1, omittedInputIds: [] } }), [])
-  assert.equal(rewindOmittedInputIds({ id: '5', kind: 'helm.input', data: { omittedInputIds: ['a'] } }), undefined)
+  assert.deepEqual(rewindOmittedInputIds({ id: '9', kind: 'helmx.rewind', data: { fromEntryId: 1, omittedInputIds: [] } }), [])
+  assert.equal(rewindOmittedInputIds({ id: '5', kind: 'helmx.input', data: { omittedInputIds: ['a'] } }), undefined)
   // FIXTURE 对齐的旧形状（无 omittedInputIds）：显式 undefined，不静默当空集。
-  assert.equal(rewindOmittedInputIds({ id: '9', kind: 'helm.rewind', data: { fromEntryId: 1 } }), undefined)
-  assert.equal(rewindOmittedInputIds({ id: '9', kind: 'helm.rewind', data: { omittedInputIds: ['a', 3] } }), undefined)
+  assert.equal(rewindOmittedInputIds({ id: '9', kind: 'helmx.rewind', data: { fromEntryId: 1 } }), undefined)
+  assert.equal(rewindOmittedInputIds({ id: '9', kind: 'helmx.rewind', data: { omittedInputIds: ['a', 3] } }), undefined)
 })
 
 test('removeRecallNodesByInputs：只删 inputIds 相交节点；其他会话与不相交节点保留；空集零写回', { timeout: 60_000 }, () => {
@@ -385,7 +385,7 @@ test('assertRecallDoc：RecallNode 缺 inputIds / 空数组 / 重复项显式 co
 // 2. 实时订阅：编辑第二轮只删相应节点
 // ---------------------------------------------------------------------------
 
-test('helm.rewind 事件：删除该会话 inputIds 相交节点；前轮与其它会话 Worker 节点保留；新回合照常写新节点', { timeout: 60_000 }, async () => {
+test('helmx.rewind 事件：删除该会话 inputIds 相交节点；前轮与其它会话 Worker 节点保留；新回合照常写新节点', { timeout: 60_000 }, async () => {
   const h = await makeHarness()
   try {
     const workerA = await dispatchWorker(h, 'Worker A 任务')
@@ -426,7 +426,7 @@ test('rewind 载荷非法：显式通知诊断，不静默、不清节点', { ti
   try {
     const worker = await dispatchWorker(h, '任务')
     await h.turnSettled(settledPayload({ conversationId: worker, completionSeq: 1, inputs: [{ id: 'in-1', origin: 'human' }] }))
-    h.publishEntry(worker, { id: '9', kind: 'helm.rewind', data: { fromEntryId: 1 } })
+    h.publishEntry(worker, { id: '9', kind: 'helmx.rewind', data: { fromEntryId: 1 } })
     assert.equal(h.readRecall().nodes.length, 1, '载荷非法不得误删节点')
     assert.ok(
       h.backend.notifications.some((n) => n.title.includes('rewind 联动失败')),
@@ -443,7 +443,7 @@ test('rewind 载荷非法：显式通知诊断，不静默、不清节点', { ti
 
 test('竞态：collectWorkerSettlement await 期间发生 rewind——旧节点不写回、旧汇报不再投递', { timeout: 60_000 }, async () => {
   // 用受控 gate：turn_settled 处理器在 getConversationDetail await 期间插入 rewind。
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-rewind-race-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-superagent-rewind-race-'))
   const conversations = new Map<number, ConversationSummary>()
   conversations.set(1, makeConversation(1))
   const notifications: Array<{ title: string; body: string }> = []
@@ -471,7 +471,7 @@ test('竞态：collectWorkerSettlement await 期间发生 rewind——旧节点�
     listConversations: () => [...conversations.values()],
     getConversation(id) {
       const found = conversations.get(id)
-      if (!found) throw new HelmError('not_found', 'no', 404)
+      if (!found) throw new HelmxError('not_found', 'no', 404)
       return found
     },
     async updateConversation(id, patch) { const found = conversations.get(id)!; const next = { ...found, ...patch }; conversations.set(id, next); return next },
@@ -489,7 +489,7 @@ test('竞态：collectWorkerSettlement await 期间发生 rewind——旧节点�
       ensureSkill: (asset: Parameters<typeof skillsSvc.ensureSkill>[0]) => skillsSvc.ensureSkill(asset),
     },
     isClosing: () => false,
-    getConversationOwnership: () => 'helm' as const,
+    getConversationOwnership: () => 'helmx' as const,
     onEvent: (type, listener) => {
       if (type !== 'conversation.entry') return () => {}
       const l = (conversationId: number, entry: ConversationEntry) => {
@@ -511,7 +511,7 @@ test('竞态：collectWorkerSettlement await 期间发生 rewind——旧节点�
     abortConversation: async () => {},
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    execEnv: async () => { throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501) },
     withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     emitEvent: (type: string, payload: unknown) => { if (type === 'notification') notifications.push(payload as { title: string; body: string }) },
   }
@@ -596,7 +596,7 @@ test('订阅生命周期：stop 后事件不再处理；重新 enable 重建订�
 test('启用补偿：详情 API 失败时 enable 显式失败（不伪成功）；有效早期节点不误删', { timeout: 60_000 }, async () => {
   const h = await makeHarness({
     detailError: (id) =>
-      new HelmError('document_store_failed', `测试注入：会话 ${id} 详情读取失败`, 500),
+      new HelmxError('document_store_failed', `测试注入：会话 ${id} 详情读取失败`, 500),
   })
   try {
     const worker = await dispatchWorker(h, '补偿失败任务')
@@ -604,7 +604,7 @@ test('启用补偿：详情 API 失败时 enable 显式失败（不伪成功）�
     await h.host.disable('builtin:superagent')
     await assert.rejects(
       () => h.host.enable('builtin:superagent'),
-      (err: unknown) => err instanceof HelmError && err.message.includes('详情读取失败'),
+      (err: unknown) => err instanceof HelmxError && err.message.includes('详情读取失败'),
       'API 不可读必须显式启动失败',
     )
   } finally {
@@ -613,7 +613,7 @@ test('启用补偿：详情 API 失败时 enable 显式失败（不伪成功）�
 
   // 会话已删（not_found）：事实性不可得，节点保留、启动不失败。
   const h4 = await makeHarness({
-    detailError: (id) => new HelmError('not_found', `会话不存在：${id}`, 404),
+    detailError: (id) => new HelmxError('not_found', `会话不存在：${id}`, 404),
   })
   try {
     h4.seedRecallNode({ id: '99:1', conversationId: 99, inputIds: ['in-gone'] })
@@ -626,7 +626,7 @@ test('启用补偿：详情 API 失败时 enable 显式失败（不伪成功）�
 
   // 有效早期节点（无 rewind 覆盖其输入）不得误删。
   const pages = new Map<number, DetailPage[]>([
-    [7, [{ entries: [{ id: '3', kind: 'helm.input', data: { id: 'in-early', origin: 'human' } }], nextCursor: '1' }, { entries: [] }]],
+    [7, [{ entries: [{ id: '3', kind: 'helmx.input', data: { id: 'in-early', origin: 'human' } }], nextCursor: '1' }, { entries: [] }]],
   ])
   const h3 = await makeHarness({ detailPages: pages })
   try {

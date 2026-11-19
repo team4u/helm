@@ -12,8 +12,8 @@ import { existsSync, openSync, closeSync, unlinkSync } from 'node:fs';
 import { rm, readFile, writeFile as writeFilePromise } from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
-import { useTempDir, sanitizedHostEnv } from '@helm/test-kit/node';
-import { readBlockedRelease, readCurrentRelease, writeBlockedRelease, writeCurrentRelease } from '@helm/env-io';
+import { useTempDir, sanitizedHostEnv } from '@helmx/test-kit/node';
+import { readBlockedRelease, readCurrentRelease, writeBlockedRelease, writeCurrentRelease } from '@helmx/env-io';
 import { readPidRecord, readLaunchConfig, writePidRecord } from '../../src/launcher/records.js';
 import { performHubUpdate, checkHubUpgrade, type PerformUpdateOptions } from '../../src/launcher/update.js';
 import { stageHubRelease } from '../../src/launcher/staging.js';
@@ -54,7 +54,7 @@ interface FlowHarness {
 async function setupFlow(t: import('node:test').TestContext, root: string, latest = '1.1.0'): Promise<FlowHarness> {
   const payloads = new Map<string, string>();
   const core = createFakeCore({ pkgName: PKG, latest, payloads });
-  const { io } = captureIo(sanitizedHostEnv({ HELM_PAYLOAD_PACKAGE: PKG }));
+  const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
   const harness: FlowHarness = {
     root,
     io,
@@ -89,7 +89,7 @@ function baseOptions(h: FlowHarness) {
 }
 
 test('update installs a release even when nothing is running and clears blocked state', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'));
+  const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-flow-'));
   await h.addPayload('1.1.0');
   await writeBlockedRelease(h.root, { version: '0.9.0', reason: 'old unrelated block', at: new Date().toISOString() });
 
@@ -116,7 +116,7 @@ test('update installs a release even when nothing is running and clears blocked 
 });
 
 test('same-version update is a no-op and downgrades are rejected without --force', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.0.0');
+  const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-flow-'), '1.0.0');
   await h.addPayload('1.0.0');
   await performHubUpdate(baseOptions(h));
   const noop = await performHubUpdate(baseOptions(h));
@@ -139,7 +139,7 @@ test('same-version update is a no-op and downgrades are rejected without --force
 });
 
 test('blocked cooldown suppresses the same version until expiry, another version, or --force', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.2.0');
+  const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-flow-'), '1.2.0');
   await h.addPayload('1.0.0');
   await h.addPayload('1.2.0');
   await performHubUpdate({ ...baseOptions(h), targetVersion: '1.0.0' });
@@ -174,7 +174,7 @@ test('blocked cooldown suppresses the same version until expiry, another version
 });
 
 test('staging failures change no state and write no blocked marker', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
+  const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-flow-'), '1.1.0');
   await h.addPayload('1.1.0', 'check-fail');
   await assert.rejects(
     performHubUpdate(baseOptions(h)),
@@ -193,7 +193,7 @@ test('staging failures change no state and write no blocked marker', { timeout: 
 });
 
 test('tarball installs require an explicit version and stage from the local file', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'));
+  const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-flow-'));
   await assert.rejects(
     performHubUpdate({ ...baseOptions(h), tarballPath: '/tmp/whatever.tgz' }),
     (error: unknown) => {
@@ -220,7 +220,7 @@ test('tarball installs require an explicit version and stage from the local file
 });
 
 test('running update: old hub stops, new hub serves, pid/launch records follow', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
+  const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-flow-'), '1.1.0');
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
   const port = await freePort();
@@ -246,7 +246,7 @@ test('running update: old hub stops, new hub serves, pid/launch records follow',
 });
 
 test('failed candidate readiness rolls the pointer back, restarts the old hub, and blocks the version', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
+  const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-flow-'), '1.1.0');
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0', 'never-ready');
   const port = await freePort();
@@ -284,7 +284,7 @@ test('failed candidate readiness rolls the pointer back, restarts the old hub, a
 });
 
 test('an unverifiable activity signal leaves the active release and process alone', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
+  const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-flow-'), '1.1.0');
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
   await performHubUpdate({ ...baseOptions(h), targetVersion: '1.0.0' });
@@ -314,7 +314,7 @@ test('an unverifiable activity signal leaves the active release and process alon
 });
 
 test('concurrent updates are excluded by the engine upgrade lock', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
+  const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-flow-'), '1.1.0');
   await h.addPayload('1.1.0');
   const lockPath = path.join(h.root, 'upgrade.lock');
   const fd = openSync(lockPath, 'wx');
@@ -329,7 +329,7 @@ test('concurrent updates are excluded by the engine upgrade lock', { timeout: 60
 });
 
 test('staged releases are reused via the engine .complete cache instead of reinstalling', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
+  const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-flow-'), '1.1.0');
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
   await performHubUpdate({ ...baseOptions(h), targetVersion: '1.0.0' }); // install #1 (1.0.0)
@@ -348,7 +348,7 @@ test('staged releases are reused via the engine .complete cache instead of reins
 });
 
 test('cache reuse revalidates the candidate: a post-staging mutation never commits', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-cachereval-'), '1.1.0');
+  const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-cachereval-'), '1.1.0');
   await h.addPayload('1.0.0');
   const first = await stageHubRelease({ ...baseOptions(h), version: '1.0.0' });
   assert.equal(first.reusedCached, false);
@@ -387,7 +387,7 @@ test('cache reuse revalidates the candidate: a post-staging mutation never commi
 });
 
 test('staging enforces the manifest nodeEngines floor against the launcher Node', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
+  const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-flow-'), '1.1.0');
   await h.addPayload('1.1.0', 'ok', '>=99.0.0');
   await assert.rejects(
     stageHubRelease({ ...baseOptions(h), version: '1.1.0' }),
@@ -405,7 +405,7 @@ test('staging enforces the manifest nodeEngines floor against the launcher Node'
 });
 
 test('staging refuses install/data nesting via the effective data directory', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
+  const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-flow-'), '1.1.0');
   await h.addPayload('1.1.0');
   await assert.rejects(
     stageHubRelease({ ...baseOptions(h), version: '1.1.0', dataDir: path.join(h.root, 'data-inside') }),
@@ -418,7 +418,7 @@ test('staging refuses install/data nesting via the effective data directory', { 
 });
 
 test('staging validates the npm layout contract files', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.1.0');
+  const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-flow-'), '1.1.0');
   const payloadDir = await h.addPayload('1.1.0');
   // Sabotage: remove manifest.json from the fixture payload.
   await rm(path.join(payloadDir, 'manifest.json'));
@@ -429,7 +429,7 @@ test('staging validates the npm layout contract files', { timeout: 60_000 }, asy
 });
 
 test('check reports current/latest/blocked without touching state', { timeout: 60_000 }, async (t) => {
-  const h = await setupFlow(t, useTempDir(t, 'helm-launcher-flow-'), '1.2.0');
+  const h = await setupFlow(t, useTempDir(t, 'helmx-launcher-flow-'), '1.2.0');
   await h.addPayload('1.0.0');
   await performHubUpdate({ ...baseOptions(h), targetVersion: '1.0.0' });
   const result = await checkHubUpgrade({ io: h.io, root: h.root, pkgName: PKG, core: h.core });
@@ -440,11 +440,11 @@ test('check reports current/latest/blocked without touching state', { timeout: 6
 });
 
 test('golden path: real npm pack tarball stages through the production extractor (registry channel)', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-golden-');
+  const root = useTempDir(t, 'helmx-launcher-golden-');
   const registry = await createFakeRegistry(PKG, '2.1.0');
   const payloadDir = await writeFakePayload({ dir: path.join(root, 'fixture-payload'), pkgName: PKG, version: '2.1.0' });
   await registry.serve('2.1.0', await packPayloadTarball(payloadDir));
-  const { io } = captureIo(sanitizedHostEnv({ HELM_PAYLOAD_PACKAGE: PKG }));
+  const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
 
   const staged = await stageHubRelease({
     io,
@@ -480,10 +480,10 @@ test('golden path: real npm pack tarball stages through the production extractor
 });
 
 test('golden path: local --tarball of a real npm pack artifact installs and self-checks', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-goldentgz-');
+  const root = useTempDir(t, 'helmx-launcher-goldentgz-');
   const payloadDir = await writeFakePayload({ dir: path.join(root, 'fixture-payload'), pkgName: PKG, version: '3.0.0' });
   const tarballPath = await packPayloadTarball(payloadDir);
-  const { io } = captureIo(sanitizedHostEnv({ HELM_PAYLOAD_PACKAGE: PKG }));
+  const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
 
   const staged = await stageHubRelease({
     io,
@@ -532,7 +532,7 @@ async function setupGate(t: import('node:test').TestContext, root: string, lates
   const core = createFakeCore({ pkgName: PKG, latest, payloads });
   const statePath = path.join(root, 'activity-state.json');
   const dataDir = path.join(path.dirname(root), `${path.basename(root)}-user-data`);
-  const { io } = captureIo(sanitizedHostEnv({ HELM_PAYLOAD_PACKAGE: PKG, HELM_FIXTURE_ACTIVITY_STATE: statePath }));
+  const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG, HELMX_FIXTURE_ACTIVITY_STATE: statePath }));
   return {
     root,
     io,
@@ -605,7 +605,7 @@ async function forceActivityCounts(dataDir: string, counts: Record<string, numbe
 }
 
 test('a busy Hub stages a candidate without stopping or committing', { timeout: 60_000 }, async (t) => {
-  const h = await setupGate(t, useTempDir(t, 'helm-launcher-gate-'));
+  const h = await setupGate(t, useTempDir(t, 'helmx-launcher-gate-'));
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
   const port = await freePort();
@@ -644,7 +644,7 @@ test('a busy Hub stages a candidate without stopping or committing', { timeout: 
 });
 
 test('a Hub that becomes busy during staging defers the switch and reuses the candidate', { timeout: 60_000 }, async (t) => {
-  const h = await setupGate(t, useTempDir(t, 'helm-launcher-gate2-'));
+  const h = await setupGate(t, useTempDir(t, 'helmx-launcher-gate2-'));
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
   const port = await freePort();
@@ -693,7 +693,7 @@ test('a Hub that becomes busy during staging defers the switch and reuses the ca
 });
 
 test('a stale or missing heartbeat fails closed (unknown) and keeps the hub serving', { timeout: 60_000 }, async (t) => {
-  const h = await setupGate(t, useTempDir(t, 'helm-launcher-gate3-'));
+  const h = await setupGate(t, useTempDir(t, 'helmx-launcher-gate3-'));
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
   const port = await freePort();
@@ -744,7 +744,7 @@ test('a stale or missing heartbeat fails closed (unknown) and keeps the hub serv
 });
 
 test('--force bypasses a busy hub explicitly', { timeout: 60_000 }, async (t) => {
-  const h = await setupGate(t, useTempDir(t, 'helm-launcher-gate4-'));
+  const h = await setupGate(t, useTempDir(t, 'helmx-launcher-gate4-'));
   await h.addPayload('1.0.0');
   await h.addPayload('1.1.0');
   const port = await freePort();

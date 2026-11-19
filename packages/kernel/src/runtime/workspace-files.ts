@@ -11,7 +11,7 @@
  */
 import { BACKGROUND_CONTEXT, withAbortSignal } from '@earendil-works/chord/context'
 import type { FileError } from '@earendil-works/pi-durable/env'
-import { HelmError, targetPathShape } from '@helm/protocol'
+import { HelmxError, targetPathShape } from '@helmx/protocol'
 import { open, realpath } from 'node:fs/promises'
 import type { EnvFabric } from '../env/index.js'
 import { MAX_ARTIFACT_BYTES, detectWorkspaceFileMime } from '../services/index.js'
@@ -38,7 +38,7 @@ interface ReadWorkspaceFileDeps {
 
 function assertNotAborted(signal?: AbortSignal): void {
   if (signal?.aborted) {
-    throw new HelmError('aborted', 'workspace file read cancelled', 499)
+    throw new HelmxError('aborted', 'workspace file read cancelled', 499)
   }
 }
 
@@ -46,50 +46,50 @@ function pathsEqualForShape(a: string, b: string, shape: 'posix' | 'win32' | und
   return shape === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
-function mapLocalFsError(error: unknown, rawPath: string, fromOpenNoFollow = false): HelmError {
+function mapLocalFsError(error: unknown, rawPath: string, fromOpenNoFollow = false): HelmxError {
   const code = (error as NodeJS.ErrnoException | undefined)?.code
   if (code === 'ENOENT' || code === 'ENOTDIR') {
-    return new HelmError('file_not_found', `file not found: ${rawPath}`, 404)
+    return new HelmxError('file_not_found', `file not found: ${rawPath}`, 404)
   }
   if (code === 'EISDIR') {
-    return new HelmError('not_a_regular_file', `requested path is not a regular file: ${rawPath}`, 400)
+    return new HelmxError('not_a_regular_file', `requested path is not a regular file: ${rawPath}`, 400)
   }
   if (code === 'ELOOP') {
     return fromOpenNoFollow
-      ? new HelmError('path_outside_workspace', 'requested path is outside conversation workspace', 403)
-      : new HelmError('invalid_path', `symlink loop at path: ${rawPath}`, 400)
+      ? new HelmxError('path_outside_workspace', 'requested path is outside conversation workspace', 403)
+      : new HelmxError('invalid_path', `symlink loop at path: ${rawPath}`, 400)
   }
   if (code === 'EACCES' || code === 'EPERM') {
-    return new HelmError('permission_denied', `permission denied: ${rawPath}`, 403)
+    return new HelmxError('permission_denied', `permission denied: ${rawPath}`, 403)
   }
-  return new HelmError(
+  return new HelmxError(
     'file_read_failed',
     error instanceof Error ? error.message : String(error),
     500,
   )
 }
 
-function mapRemoteFileError(error: FileError, rawPath: string): HelmError {
+function mapRemoteFileError(error: FileError, rawPath: string): HelmxError {
   if (error.code === 'not_found' || error.code === 'not_directory') {
-    return new HelmError('file_not_found', `file not found: ${rawPath}`, 404)
+    return new HelmxError('file_not_found', `file not found: ${rawPath}`, 404)
   }
   if (error.code === 'is_directory') {
-    return new HelmError('not_a_regular_file', `requested path is not a regular file: ${rawPath}`, 400)
+    return new HelmxError('not_a_regular_file', `requested path is not a regular file: ${rawPath}`, 400)
   }
   if (error.code === 'permission_denied') {
-    return new HelmError('permission_denied', `permission denied: ${rawPath}`, 403)
+    return new HelmxError('permission_denied', `permission denied: ${rawPath}`, 403)
   }
   if (error.code === 'aborted') {
-    return new HelmError('aborted', 'workspace file read cancelled', 499)
+    return new HelmxError('aborted', 'workspace file read cancelled', 499)
   }
   if (error.code === 'invalid') {
     const msg = error.message.toLowerCase()
     if (msg.includes('symbolic link') || msg.includes('symlink') || msg.includes('eloop')) {
-      return new HelmError('path_outside_workspace', 'requested path is outside conversation workspace', 403)
+      return new HelmxError('path_outside_workspace', 'requested path is outside conversation workspace', 403)
     }
-    return new HelmError('not_a_regular_file', error.message, 400)
+    return new HelmxError('not_a_regular_file', error.message, 400)
   }
-  return new HelmError('file_read_failed', error.message, 502)
+  return new HelmxError('file_read_failed', error.message, 502)
 }
 
 async function readLocalWorkspaceFile(
@@ -108,7 +108,7 @@ async function readLocalWorkspaceFile(
   }
   const realShape = targetPathShape(cwdReal) ?? lexicalShape
   if (!isStrictlyInsideRoot(lexicalAbs, cwdNorm, lexicalShape) && !isStrictlyInsideRoot(lexicalAbs, cwdReal, realShape)) {
-    throw new HelmError('path_outside_workspace', 'requested path is outside conversation workspace', 403)
+    throw new HelmxError('path_outside_workspace', 'requested path is outside conversation workspace', 403)
   }
   assertNotAborted(signal)
   let targetReal: string
@@ -118,7 +118,7 @@ async function readLocalWorkspaceFile(
     throw mapLocalFsError(error, rawPath)
   }
   if (!isStrictlyInsideRoot(targetReal, cwdReal, realShape)) {
-    throw new HelmError('path_outside_workspace', 'requested path is outside conversation workspace', 403)
+    throw new HelmxError('path_outside_workspace', 'requested path is outside conversation workspace', 403)
   }
   assertNotAborted(signal)
   let handle: Awaited<ReturnType<typeof open>>
@@ -130,10 +130,10 @@ async function readLocalWorkspaceFile(
   try {
     const statInfo = await handle.stat()
     if (!statInfo.isFile()) {
-      throw new HelmError('not_a_regular_file', `requested path is not a regular file: ${rawPath}`, 400)
+      throw new HelmxError('not_a_regular_file', `requested path is not a regular file: ${rawPath}`, 400)
     }
     if (statInfo.size > MAX_ARTIFACT_BYTES) {
-      throw new HelmError(
+      throw new HelmxError(
         'file_too_large',
         `file size ${statInfo.size} exceeds ${MAX_ARTIFACT_BYTES} byte limit`,
         413,
@@ -143,14 +143,14 @@ async function readLocalWorkspaceFile(
     const read = await readArtifactBytesFromHandle(handle)
     if (!read.ok) {
       if (read.code === 'artifact_too_large') {
-        throw new HelmError(
+        throw new HelmxError(
           'file_too_large',
           `file size ${read.read} exceeds ${MAX_ARTIFACT_BYTES} byte limit`,
           413,
           { maxBytes: MAX_ARTIFACT_BYTES, actualBytes: read.read },
         )
       }
-      throw new HelmError('file_changed', read.detail, 409)
+      throw new HelmxError('file_changed', read.detail, 409)
     }
     return {
       rawBytes: new Uint8Array(read.bytes.buffer, read.bytes.byteOffset, read.bytes.byteLength),
@@ -172,7 +172,7 @@ async function readRemoteWorkspaceFile(
   signal?: AbortSignal,
 ): Promise<{ rawBytes: Uint8Array; resolvedPath: string }> {
   if (envFabric === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'env_fabric_missing',
       `node ${nodeId} is remote but EnvFabric is not configured`,
       503,
@@ -180,7 +180,7 @@ async function readRemoteWorkspaceFile(
     )
   }
   if (!envFabric.isOnline(nodeId)) {
-    throw new HelmError(
+    throw new HelmxError(
       'node_offline',
       `node ${nodeId} is offline, cannot read remote workspace file`,
       409,
@@ -195,13 +195,13 @@ async function readRemoteWorkspaceFile(
   const cwdReal = cwdRealR.value
   const realShape = targetPathShape(cwdReal) ?? lexicalShape
   if (!isStrictlyInsideRoot(lexicalAbs, cwdNorm, lexicalShape) && !isStrictlyInsideRoot(lexicalAbs, cwdReal, realShape)) {
-    throw new HelmError('path_outside_workspace', 'requested path is outside conversation workspace', 403)
+    throw new HelmxError('path_outside_workspace', 'requested path is outside conversation workspace', 403)
   }
   const targetRealR = await env.canonicalPath(lexicalAbs, ctx)
   if (!targetRealR.ok) throw mapRemoteFileError(targetRealR.error, rawPath)
   const targetReal = targetRealR.value
   if (!isStrictlyInsideRoot(targetReal, cwdReal, realShape)) {
-    throw new HelmError('path_outside_workspace', 'requested path is outside conversation workspace', 403)
+    throw new HelmxError('path_outside_workspace', 'requested path is outside conversation workspace', 403)
   }
   const readerR = await env.openBinaryReader(targetReal, { noFollow: true }, ctx)
   if (!readerR.ok) throw mapRemoteFileError(readerR.error, rawPath)
@@ -211,10 +211,10 @@ async function readRemoteWorkspaceFile(
     if (!openedR.ok) throw mapRemoteFileError(openedR.error, rawPath)
     const opened = openedR.value
     if (opened.kind !== 'file') {
-      throw new HelmError('not_a_regular_file', `requested path is not a regular file: ${rawPath}`, 400)
+      throw new HelmxError('not_a_regular_file', `requested path is not a regular file: ${rawPath}`, 400)
     }
     if (opened.size > MAX_ARTIFACT_BYTES) {
-      throw new HelmError(
+      throw new HelmxError(
         'file_too_large',
         `file size ${opened.size} exceeds ${MAX_ARTIFACT_BYTES} byte limit`,
         413,
@@ -225,7 +225,7 @@ async function readRemoteWorkspaceFile(
     if (!readR.ok) throw mapRemoteFileError(readR.error, rawPath)
     const readBytes = readR.value
     if (readBytes.byteLength > MAX_ARTIFACT_BYTES) {
-      throw new HelmError(
+      throw new HelmxError(
         'file_too_large',
         `file size ${readBytes.byteLength} exceeds ${MAX_ARTIFACT_BYTES} byte limit`,
         413,
@@ -236,7 +236,7 @@ async function readRemoteWorkspaceFile(
     if (!afterR.ok) throw mapRemoteFileError(afterR.error, rawPath)
     const after = afterR.value
     if (after.size !== opened.size || after.mtimeMs !== opened.mtimeMs || readBytes.byteLength !== opened.size) {
-      throw new HelmError(
+      throw new HelmxError(
         'file_changed',
         `file changed while reading: ${rawPath} (size ${opened.size} -> ${after.size}, read ${readBytes.byteLength})`,
         409,
@@ -252,30 +252,30 @@ async function readRemoteWorkspaceFile(
 export async function readWorkspaceFile(deps: ReadWorkspaceFileDeps): Promise<ConversationFileContent> {
   const { nodeId, cwd, rawPath, envFabric, redact, signal } = deps
   if (typeof rawPath !== 'string' || rawPath.trim().length === 0) {
-    throw new HelmError('invalid_path', 'path must be a non-empty string', 400)
+    throw new HelmxError('invalid_path', 'path must be a non-empty string', 400)
   }
   if (rawPath.length > 1024) {
-    throw new HelmError('invalid_path', 'path length must be <= 1024 characters', 400)
+    throw new HelmxError('invalid_path', 'path length must be <= 1024 characters', 400)
   }
   if (rawPath.includes('\0')) {
-    throw new HelmError('invalid_path', 'path must not contain NUL bytes', 400)
+    throw new HelmxError('invalid_path', 'path must not contain NUL bytes', 400)
   }
 
   const platformInfo = targetPlatformForNode(envFabric, nodeId)
   const platform = platformInfo.known ? platformInfo.platform : undefined
   const resolved = resolveTargetPath(rawPath, cwd, platform)
   if (!resolved.ok) {
-    throw new HelmError('invalid_path', resolved.reason, 400)
+    throw new HelmxError('invalid_path', resolved.reason, 400)
   }
   const cwdNormR = resolveTargetPath('.', cwd, platform)
   if (!cwdNormR.ok) {
-    throw new HelmError('invalid_path', cwdNormR.reason, 400)
+    throw new HelmxError('invalid_path', cwdNormR.reason, 400)
   }
   const lexicalAbs = resolved.abs
   const cwdNorm = cwdNormR.abs
   const lexicalShape = targetPathShape(cwdNorm) ?? targetPathShape(lexicalAbs)
   if (pathsEqualForShape(lexicalAbs, cwdNorm, lexicalShape)) {
-    throw new HelmError('invalid_path', 'requested path must not resolve to conversation workspace root', 400)
+    throw new HelmxError('invalid_path', 'requested path must not resolve to conversation workspace root', 400)
   }
 
   const { rawBytes, resolvedPath } =

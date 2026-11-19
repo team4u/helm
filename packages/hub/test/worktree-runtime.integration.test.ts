@@ -2,7 +2,7 @@
  * worktree runtime real integration test (new contract:WorktreeAllocator/cleanup_worktree
  * fully belongs to builtin:workflow plugin).
  *
- * override (via real createHelm + faux model + temporary real Git repository + plugin public API):
+ * override (via real createHelmx + faux model + temporary real Git repository + plugin public API):
  * 1. real spawnAgent isolation:'worktree'(agent_spawn continuation by
  *    builtin:workflow fall back): real isolated tree create, sub-conversation and gate in tree inside execute,
  *    onResolved back pass managed id;cleanup_worktree action by default keep branch.
@@ -23,7 +23,7 @@
  *    lease release can clean up.
  *
  * contract discipline: does not use KernelRuntime  worktrees/cleanupWorktree(deleted);
- * all via real createHelm + builtin:workflow public action/tool verify; lease assertion via
+ * all via real createHelmx + builtin:workflow public action/tool verify; lease assertion via
  * plugin private durable doc real leftover state simulated (process death after disk on real store in content).
  *
  * honest discipline: true SQLite + true pi-durable SDK + faux model script + real temporary Git
@@ -33,8 +33,8 @@
  */
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import type { AssistantMessage } from '@earendil-works/pi-ai'
-import type { AgentExecutionInfo, AgentSpawnRequest } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { AgentExecutionInfo, AgentSpawnRequest } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -42,7 +42,7 @@ import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHubHandler } from '../../kernel/src/http/index.js'
-import { extractWorkflowExecutionMeta } from '@helm/plugins/contracts'
+import { extractWorkflowExecutionMeta } from '@helmx/plugins/contracts'
 import {
   createGitTemplate,
   createHubTestApp,
@@ -66,7 +66,7 @@ const PROCESS_SCAN_ON = process.platform === 'linux'
 /** non- Linux platform assertion cleanup explicit reject (do not fabricate 0 occupy). */
 async function assertCleanupPlatformRejected(fn: () => Promise<unknown>): Promise<void> {
   await assert.rejects(fn, (err: unknown) => {
-    assert.ok(err instanceof HelmError)
+    assert.ok(err instanceof HelmxError)
     assert.equal(err.code, 'worktree_process_check_failed', 'non- Linux platform: process occupy scan unsupported,cleanup must explicit reject')
     return true
   })
@@ -80,8 +80,8 @@ let rootDir: string
 let gitTemplate: GitTemplate
 
 before(() => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-worktree-runtime-'))
-  gitTemplate = createGitTemplate('helm-worktree-runtime-tpl-')
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-worktree-runtime-'))
+  gitTemplate = createGitTemplate('helmx-worktree-runtime-tpl-')
 })
 
 after(() => {
@@ -90,7 +90,7 @@ after(() => {
 })
 
 interface RuntimeEnv {
-  /** real createHelm should use (builtin:workflow by default enable). */
+  /** real createHelmx should use (builtin:workflow by default enable). */
   app: HubTestApp
   kernel: HubTestApp['kernel']
   faux: FauxProviderHandle
@@ -118,7 +118,7 @@ interface RuntimeEnv {
   close(): Promise<void>
 }
 
-/** real createHelm(contains builtin:workflow by default enable)+ faux provider + HTTP handler. */
+/** real createHelmx(contains builtin:workflow by default enable)+ faux provider + HTTP handler. */
 async function openRuntime(dataDir: string, cwd?: string): Promise<RuntimeEnv> {
   const { app, kernel, faux } = await createHubTestApp({
     dataDir,
@@ -139,7 +139,7 @@ async function openRuntime(dataDir: string, cwd?: string): Promise<RuntimeEnv> {
         kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as never,
     },
     pluginDoc: {
-      // plugin doc durable layer key:`${pluginId}:${name}`(helm_plugin_docs global naming empty between).
+      // plugin doc durable layer key:`${pluginId}:${name}`(helmx_plugin_docs global naming empty between).
       get: <T>(key: string, initial: T): T =>
         kernel.documentStore.get<T>(`builtin:workflow:worktree-state:${key}`, initial),
       set: <T>(key: string, value: T): void =>
@@ -183,7 +183,7 @@ function heldResponse(
   }
 }
 
-/** read conversation all helm.input entry  {origin, backgroundRunId}. */
+/** read conversation all helmx.input entry  {origin, backgroundRunId}. */
 async function agentReports(
   kernel: RuntimeEnv['kernel'],
   conversationId: number,
@@ -191,7 +191,7 @@ async function agentReports(
   const detail = await kernel.getConversationDetail(conversationId, { limit: 500 })
   const out: Array<{ origin: string; backgroundRunId?: string }> = []
   for (const entry of detail.entries) {
-    if (entry.kind !== 'helm.input') continue
+    if (entry.kind !== 'helmx.input') continue
     const data = entry.data as { origin?: unknown; meta?: { backgroundRunId?: unknown } } | undefined
     out.push({
       origin: String(data?.origin ?? ''),
@@ -213,14 +213,14 @@ describe('builtin:worktree isolated derive (agent_spawn continuation)', { timeou
     try {
       let resolved: AgentExecutionInfo | undefined
       env.faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'pwd > .helm-child-pwd.txt && git branch --show-current > .helm-child-branch.txt' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage([fauxToolCall('bash', { command: 'pwd > .helmx-child-pwd.txt && git branch --show-current > .helmx-child-branch.txt' })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('task complete:worktree inside execute done'),
       ])
       const result = await env.kernel.spawnAgent({
         parentConversationId: 1,
         prompt: 'in isolated worktree execute task',
         isolation: 'worktree',
-        gate: 'pwd > .helm-gate-pwd.txt && test -f README.md',
+        gate: 'pwd > .helmx-gate-pwd.txt && test -f README.md',
         onResolved: (info) => {
           resolved = info
         },
@@ -233,19 +233,19 @@ describe('builtin:worktree isolated derive (agent_spawn continuation)', { timeou
       assert.ok(resolved!.conversationId !== undefined && resolved!.conversationId > 1, 'should derive true sub-conversation')
       const worktree = worktreeOf(resolved)
       assert.ok(worktree, 'isolation:worktree must back pass worktree metadata')
-      assert.ok(worktree!.path.includes(join(dir, '.helm-worktrees')), `worktree should at same level .helm-worktrees:${worktree!.path}`)
-      assert.ok(worktree!.branch.startsWith('helm/spawn-'), `branch should be helm/spawn-*:${worktree!.branch}`)
+      assert.ok(worktree!.path.includes(join(dir, '.helmx-worktrees')), `worktree should at same level .helmx-worktrees:${worktree!.path}`)
+      assert.ok(worktree!.branch.startsWith('helmx/spawn-'), `branch should be helmx/spawn-*:${worktree!.branch}`)
       assert.ok(typeof worktree!.id === 'string' && worktree!.id.length > 0, 'must back pass managed register id(worktreeId)')
 
       // ---- real isolated tree: sub-conversation and gate artifact all in tree inside.----
       assert.ok(existsSync(worktree!.path), 'worktree directory should real store in')
       assert.ok(existsSync(join(worktree!.path, 'README.md')), 'worktree should checkout initial commit content')
-      assert.ok(existsSync(join(worktree!.path, '.helm-child-pwd.txt')), 'sub-conversation bash artifact should in worktree inside')
-      assert.equal(readFileSync(join(worktree!.path, '.helm-child-pwd.txt'), 'utf8').trim(), worktree!.path, 'sub-conversation pwd should be worktree directory')
-      assert.equal(readFileSync(join(worktree!.path, '.helm-child-branch.txt'), 'utf8').trim(), worktree!.branch, 'sub-conversation should in helm/spawn-* branch on')
-      assert.ok(existsSync(join(worktree!.path, '.helm-gate-pwd.txt')), 'gate artifact should in worktree inside')
-      assert.equal(readFileSync(join(worktree!.path, '.helm-gate-pwd.txt'), 'utf8').trim(), worktree!.path, 'gate pwd should be worktree directory (gate in tree inside execute)')
-      assert.ok(!existsSync(join(repo, '.helm-gate-pwd.txt')), 'source repository must not by gate/sub-conversation pollute')
+      assert.ok(existsSync(join(worktree!.path, '.helmx-child-pwd.txt')), 'sub-conversation bash artifact should in worktree inside')
+      assert.equal(readFileSync(join(worktree!.path, '.helmx-child-pwd.txt'), 'utf8').trim(), worktree!.path, 'sub-conversation pwd should be worktree directory')
+      assert.equal(readFileSync(join(worktree!.path, '.helmx-child-branch.txt'), 'utf8').trim(), worktree!.branch, 'sub-conversation should in helmx/spawn-* branch on')
+      assert.ok(existsSync(join(worktree!.path, '.helmx-gate-pwd.txt')), 'gate artifact should in worktree inside')
+      assert.equal(readFileSync(join(worktree!.path, '.helmx-gate-pwd.txt'), 'utf8').trim(), worktree!.path, 'gate pwd should be worktree directory (gate in tree inside execute)')
+      assert.ok(!existsSync(join(repo, '.helmx-gate-pwd.txt')), 'source repository must not by gate/sub-conversation pollute')
       const child = env.kernel.getConversation(resolved!.conversationId!)
       assert.equal(child.cwd, worktree!.path, 'sub-conversation mirror cwd should be worktree directory')
 
@@ -308,7 +308,7 @@ describe('builtin:worktree isolated derive (agent_spawn continuation)', { timeou
       // real sub-conversation create in real isolated tree inside (mirror cwd i.e. isolated tree path).
       const child = env.kernel.listConversations().find((c) => c.parentConversationId === 1)
       assert.ok(child, 'should derive true sub-conversation')
-      assert.ok(child.cwd.includes(join(dir, '.helm-worktrees')), 'sub-conversation should in same level .helm-worktrees under isolated tree inside execute')
+      assert.ok(child.cwd.includes(join(dir, '.helmx-worktrees')), 'sub-conversation should in same level .helmx-worktrees under isolated tree inside execute')
       assert.ok(existsSync(child.cwd), 'managed worktree should real store in')
       assert.ok((await env.kernel.getLastAssistantText(1)).includes('main turn complete'))
     } finally {
@@ -344,7 +344,7 @@ describe('failed path asset keep (guard against continuation converge mistakenly
             },
           } as AgentSpawnRequest),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError, `should throw HelmError, got ${err}`)
+          assert.ok(err instanceof HelmxError, `should throw HelmxError, got ${err}`)
           assert.equal(err.code, 'gate_failed')
           return true
         },
@@ -403,7 +403,7 @@ describe('failed path asset keep (guard against continuation converge mistakenly
             },
           } as AgentSpawnRequest),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError, `should throw HelmError, got ${err}`)
+          assert.ok(err instanceof HelmxError, `should throw HelmxError, got ${err}`)
           assert.equal(err.code, 'schema_validation_failed')
           return true
         },
@@ -457,7 +457,7 @@ describe('failed path asset keep (guard against continuation converge mistakenly
 
       controller.abort()
       held.release(fauxAssistantMessage('must not as result'))
-      await assert.rejects(() => pending, (err: unknown) => err instanceof HelmError && err.code === 'aborted')
+      await assert.rejects(() => pending, (err: unknown) => err instanceof HelmxError && err.code === 'aborted')
 
       const childId = resolved!.conversationId!
       await env.kernel.waitForIdle(childId)
@@ -511,8 +511,8 @@ describe('occupy in worktree clean up protect', { timeout: 60_000 }, () => {
       await assert.rejects(
         () => env.invoke.cleanupWorktree({ conversationId: childId, force: true }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
-          assert.equal(err.code, 'worktree_in_use', `force clean up run in worktree should reject, got ${(err as HelmError).code}`)
+          assert.ok(err instanceof HelmxError)
+          assert.equal(err.code, 'worktree_in_use', `force clean up run in worktree should reject, got ${(err as HelmxError).code}`)
           return true
         },
       )
@@ -522,7 +522,7 @@ describe('occupy in worktree clean up protect', { timeout: 60_000 }, () => {
       // real wrap-up: release model + abort, etc. spawn settle and sub-conversation idle.
       controller.abort()
       held.release(fauxAssistantMessage('(cancel)'))
-      await assert.rejects(() => pending, (e: unknown) => e instanceof HelmError && e.code === 'aborted')
+      await assert.rejects(() => pending, (e: unknown) => e instanceof HelmxError && e.code === 'aborted')
       await env.kernel.waitForIdle(childId)
 
       // settle after (abort path: original generate sub-conversation turn with failed field and already confirm stop):
@@ -660,8 +660,8 @@ describe('external plugin agent_spawn handled and worktree unify register', { ti
     const env = await openRuntime(join(dir, 'data'), repo)
     try {
       // plugin in real git worktree inside execute task (real git command, non- mock directory).
-      const wtPath = join(dir, '.helm-worktrees', 'external-task')
-      execFileSync('git', ['worktree', 'add', '-q', '-b', 'helm/wf-external-1', wtPath, 'HEAD'], { cwd: repo })
+      const wtPath = join(dir, '.helmx-worktrees', 'external-task')
+      execFileSync('git', ['worktree', 'add', '-q', '-b', 'helmx/wf-external-1', wtPath, 'HEAD'], { cwd: repo })
       writeFileSync(join(wtPath, 'external-result.txt'), 'done\n')
 
       await env.kernel.plugins.register({
@@ -677,7 +677,7 @@ describe('external plugin agent_spawn handled and worktree unify register', { ti
               nodeId: 'local',
               executionId: 'test-exec-1',
               effectiveCwd: wtPath,
-              meta: { 'builtin:workflow': { worktree: { path: wtPath, branch: 'helm/wf-external-1' } } },
+              meta: { 'builtin:workflow': { worktree: { path: wtPath, branch: 'helmx/wf-external-1' } } },
             })
             return { action: 'handled', result: 'external task complete (real worktree inside artifact already write)' }
           })
@@ -700,7 +700,7 @@ describe('external plugin agent_spawn handled and worktree unify register', { ti
       assert.ok(worktreeOf(resolved)?.id, 'external back pass worktree should by unify register and back fill stable id')
       assert.ok(worktreeOf(resolved)!.id!.startsWith('local:'), `managed id should be nodeId:path form:${worktreeOf(resolved)!.id}`)
 
-      // cleanup and original generate same mechanism: unify register record can locate clean up (helm/wf-* managed prefix).
+      // cleanup and original generate same mechanism: unify register record can locate clean up (helmx/wf-* managed prefix).
       //(external handled path succeeded complete: lease by contract release, can clean up.)
       // note: do not pass deleteBranch - - when before allocator updateRecord in deleteBranch
       // succeeded branch write branchDeleteError: undefined value,doc layer jsonClone reject
@@ -714,8 +714,8 @@ describe('external plugin agent_spawn handled and worktree unify register', { ti
         assert.equal(cleaned.removed, true)
         assert.equal(cleaned.branchDeleted, false, 'by default clean up keep branch')
         assert.ok(!existsSync(wtPath), 'clean up should actual remove external worktree')
-        const branchList = execFileSync('git', ['branch', '--list', 'helm/wf-external-1'], { cwd: repo, encoding: 'utf8' })
-        assert.ok(branchList.includes('helm/wf-external-1'), 'branch should by default keep')
+        const branchList = execFileSync('git', ['branch', '--list', 'helmx/wf-external-1'], { cwd: repo, encoding: 'utf8' })
+        assert.ok(branchList.includes('helmx/wf-external-1'), 'branch should by default keep')
       } else {
         await assertCleanupPlatformRejected(() => env.invoke.cleanupWorktree({ worktreeId: worktreeOf(resolved)!.id!, force: true }))
         assert.ok(existsSync(wtPath), 'non- Linux reject clean up when directory must not by remove')
@@ -738,7 +738,7 @@ describe('external plugin agent_spawn handled and worktree unify register', { ti
             const request = payload as AgentSpawnRequest
             if (request.agentType !== 'test:no-node') return next(request) as unknown as void
             // missing nodeId: must not assume local.
-            request.onResolved?.({ executionId: 'exec-no-node', meta: { 'builtin:workflow': { worktree: { path: '/srv/wt/x', branch: 'helm/wf-x' } } } })
+            request.onResolved?.({ executionId: 'exec-no-node', meta: { 'builtin:workflow': { worktree: { path: '/srv/wt/x', branch: 'helmx/wf-x' } } } })
             return { action: 'handled', result: 'false succeeded: without node' }
           })
         },
@@ -752,7 +752,7 @@ describe('external plugin agent_spawn handled and worktree unify register', { ti
             isolation: 'worktree',
           } as AgentSpawnRequest),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'execution_info_invalid')
           assert.ok(err.message.includes('nodeId'), `error should note missing nodeId:${err.message}`)
           return true
@@ -776,7 +776,7 @@ describe('external plugin agent_spawn handled and worktree unify register', { ti
             agentType: 'test:unclaimed',
           } as AgentSpawnRequest),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError, `should throw HelmError, got ${err}`)
+          assert.ok(err instanceof HelmxError, `should throw HelmxError, got ${err}`)
           assert.equal(err.code, 'unsupported_runtime')
           assert.ok(err.message.includes('test:unclaimed'), `error should refer external runtime identifier:${err.message}`)
           return true
@@ -850,7 +850,7 @@ describe('same sub-conversation concurrency resume mutual exclusion', { timeout:
             gate: 'true',
           } as AgentSpawnRequest),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'subagent_in_use')
           return true
         },
@@ -875,12 +875,12 @@ describe('same sub-conversation concurrency resume mutual exclusion', { timeout:
 // ---------------------------------------------------------------------------
 
 describe('background back report requestId idempotent (builtin:workflow delivery path same mechanism)', { timeout: 60_000 }, () => {
-  it('3 time concurrency + terminal state after duplicate invoke only produce a origin=agent and meta.backgroundRunId=runId  helm.input; after restart durable dedupe', { timeout: 60_000 }, async () => {
+  it('3 time concurrency + terminal state after duplicate invoke only produce a origin=agent and meta.backgroundRunId=runId  helmx.input; after restart durable dedupe', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't7')
     const repo = gitTemplate.cloneTo(join(dir, 'repo'))
     const env = await openRuntime(join(dir, 'data'), repo)
     const runId = 'wf_testreport0001'
-    const requestId = `helm:subagent-report:${runId}`
+    const requestId = `helmx:subagent-report:${runId}`
     const deliver = () =>
       env.kernel.submitInput(1, `background subagent task already compute. or fewer is run ${runId} result data:\n"background task complete content"`, {
         origin: 'agent',
@@ -918,7 +918,7 @@ describe('background back report requestId idempotent (builtin:workflow delivery
       })
       await reopened.kernel.waitForIdle(1)
       const reports = (await agentReports(reopened.kernel, 1)).filter((r) => r.backgroundRunId === runId)
-      assert.equal(reports.length, 1, `after restart duplicate back report must not produce second helm.input, got ${JSON.stringify(reports)}`)
+      assert.equal(reports.length, 1, `after restart duplicate back report must not produce second helmx.input, got ${JSON.stringify(reports)}`)
     } finally {
       await reopened.close()
     }
@@ -936,8 +936,8 @@ describe('durable lease unknown occupy protect (fail-closed)', { timeout: 60_000
     const env = await openRuntime(join(dir, 'data'), repo)
     try {
       // real worktree(external register form, simulated external runtime such as Herdr derive).
-      const wtPath = join(dir, '.helm-worktrees', 'lease-check')
-      execFileSync('git', ['worktree', 'add', '-q', '-b', 'helm/wf-lease-1', wtPath, 'HEAD'], { cwd: repo })
+      const wtPath = join(dir, '.helmx-worktrees', 'lease-check')
+      execFileSync('git', ['worktree', 'add', '-q', '-b', 'helmx/wf-lease-1', wtPath, 'HEAD'], { cwd: repo })
 
       // directly to plugin private durable doc write lease leftover + allocator register (simulated execute already
       // start, process death, after restart without in-flight execute: process death after disk on real store in content).
@@ -955,7 +955,7 @@ describe('durable lease unknown occupy protect (fail-closed)', { timeout: 60_000
               nodeId: 'local',
               repoRoot: repo,
               path: wtPath,
-              branch: 'helm/wf-lease-1',
+              branch: 'helmx/wf-lease-1',
               baseCommit: '0'.repeat(40),
               dirtySource: false,
               parentConversationId: 1,
@@ -973,7 +973,7 @@ describe('durable lease unknown occupy protect (fail-closed)', { timeout: 60_000
               nodeId: 'local',
               executionId: 'ext-pane-7',
               effectiveCwd: wtPath,
-              meta: { 'builtin:workflow': { worktree: { path: wtPath, branch: 'helm/wf-lease-1' } } },
+              meta: { 'builtin:workflow': { worktree: { path: wtPath, branch: 'helmx/wf-lease-1' } } },
             },
             worktreeId,
             createdAt: Date.now(),
@@ -986,7 +986,7 @@ describe('durable lease unknown occupy protect (fail-closed)', { timeout: 60_000
       await assert.rejects(
         () => env.invoke.cleanupWorktree({ worktreeId, force: true }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_execution_unknown')
           assert.ok(err.message.includes('不能清理'), `error should to out inspect view/manually clean up refer quote:${err.message}`)
           return true
@@ -1025,17 +1025,17 @@ describe('durable lease unknown occupy protect (fail-closed)', { timeout: 60_000
 })
 
 // ---------------------------------------------------------------------------
-// 9. createHelm real background combine:subagent(background:true, isolation:worktree, gate)
+// 9. createHelmx real background combine:subagent(background:true, isolation:worktree, gate)
 // ---------------------------------------------------------------------------
 
-describe('createHelm background subagent all chain (background + worktree + gate + parent turn first end)', { timeout: 60_000 }, () => {
+describe('createHelmx background subagent all chain (background + worktree + gate + parent turn first end)', { timeout: 60_000 }, () => {
   it('background run phase:run running, sub-conversation in gate, clean up reject; release gate after settle and to parent conversation idempotent gather report runId/worktree', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't9')
     const repo = gitTemplate.cloneTo(join(dir, 'repo'))
     const env = await openRuntime(join(dir, 'data'), repo)
     const kernel = env.kernel
     // release file at isolated tree outside (parent repo inside):gate in worktree inside wait for external signal.
-    const releaseFile = join(repo, '.helm-test-release.txt')
+    const releaseFile = join(repo, '.helmx-test-release.txt')
     try {
       // first response: parent conversation invoke subagent(background:true); its after to enough ordinary answer
       //(parent runId after end turn; subagent complete text and gather report round parent back should, who first consume all can).
@@ -1082,7 +1082,7 @@ describe('createHelm background subagent all chain (background + worktree + gate
       await assert.rejects(
         () => env.invoke.cleanupWorktree({ conversationId: child.id, force: true }),
         (err: unknown) =>
-          err instanceof HelmError && (err.code === 'worktree_in_use' || err.code === 'worktree_execution_unknown'),
+          err instanceof HelmxError && (err.code === 'worktree_in_use' || err.code === 'worktree_execution_unknown'),
       )
       assert.ok(existsSync(childCwd), 'run in reject clean up when directory must not passively')
 
@@ -1113,13 +1113,13 @@ describe('createHelm background subagent all chain (background + worktree + gate
       run = (await env.invoke.inspect(runId)).run
       assert.equal(run.status, 'completed', `release gate after run should completed, got ${run.status}${run.error ? `(error: ${run.error})` : ''}`)
 
-      // gather report input: exactly a origin=agent,meta.backgroundRunId=runId  helm.input.
+      // gather report input: exactly a origin=agent,meta.backgroundRunId=runId  helmx.input.
       const reports = (await agentReports(kernel, 1)).filter((r) => r.backgroundRunId === runId)
       assert.equal(reports.length, 1, `should exactly a background gather report, got ${JSON.stringify(reports)}`)
       assert.equal(reports[0]!.origin, 'agent')
       // gather report content contains runId and worktree managed id(person class can based on this resume/clean up).
       const reportTexts = (await kernel.getConversationDetail(1, { limit: 200 })).entries
-        .filter((e) => e.kind === 'helm.input')
+        .filter((e) => e.kind === 'helmx.input')
         .map((e) => String((e.data as { text?: unknown } | undefined)?.text ?? ''))
         .filter((t) => t.includes(runId))
       assert.ok(reportTexts.length >= 1, 'gather report text should contains runId')

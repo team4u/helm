@@ -2,8 +2,8 @@
  * Timeline normalization pure-function layer (plain .ts, zero React/DOM deps, unit-testable directly).
  *
  * Responsibility: convert backend `ConversationEntry[]` + live `ConversationLive` into structured render items:
- * - `helm.input` dedup normalization: input blocks come from helm.input (origin/meta/attachments),
- *   automatically skipping the duplicate `pi.user` they cover; bare `pi.user` (no preceding helm.input) is the fallback.
+ * - `helmx.input` dedup normalization: input blocks come from helmx.input (origin/meta/attachments),
+ *   automatically skipping the duplicate `pi.user` they cover; bare `pi.user` (no preceding helmx.input) is the fallback.
  * - Plugin `timeline.renderer` (kinds + matchMeta) and `tool.view` (toolNames) match resolution.
  * - assistant message thinking / text / toolCall extraction; `pi.tool-result` pairing by callId.
  * - Consecutive ordinary steps collapse into per-turn step groups: thinking and ordinary tool
@@ -22,7 +22,7 @@ import type {
   ToolViewSiblingCall,
   ToolViewSpec,
   WhenBusy,
-} from '@helm/protocol/browser'
+} from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 // ---------------------------------------------------------------------------
@@ -39,7 +39,7 @@ export interface QualifiedToolView {
   spec: ToolViewSpec
 }
 
-export interface HelmInputData {
+export interface HelmxInputData {
   id?: string
   text: string
   origin: InputOrigin
@@ -52,7 +52,7 @@ export interface HelmInputData {
 export type ToolTraceStatus = 'running' | 'done' | 'error' | 'unknown'
 
 /** Server-side timeline preview truncation markers reuse the cross-package contract in protocol. */
-export type { ToolResultTruncation } from '@helm/protocol/browser'
+export type { ToolResultTruncation } from '@helmx/protocol/browser'
 
 export interface ToolTrace {
   key: string
@@ -153,11 +153,11 @@ export interface HumanInputItem {
   origin: InputOrigin
   meta?: Record<string, unknown>
   attachments?: ConversationAttachmentRef[]
-  /** Stable identity of the helm.input; queued and persisted states share one React key. */
+  /** Stable identity of the helmx.input; queued and persisted states share one React key. */
   inputId?: string
   /** Non-null when the input is still queued in pi.inbox (not yet a formal entry). */
   queuedMode?: 'steer' | 'followUp'
-  /** true = bare pi.user without a preceding helm.input, shown as fallback. */
+  /** true = bare pi.user without a preceding helmx.input, shown as fallback. */
   fallback: boolean
   /** Message creation/send timestamp (ms); omitted when unknown. */
   createdAt?: number
@@ -200,7 +200,7 @@ export interface EditRequestTarget {
 // ---------------------------------------------------------------------------
 
 /**
- * Filter out entries covered by helm.rewind.
+ * Filter out entries covered by helmx.rewind.
  *
  * The backend commits atomically: the new input lands first, then the rewind marker, in one batch.
  * rewind.data = { fromEntryId, throughEntryId(old tail before the new input), ... }
@@ -215,7 +215,7 @@ export function filterRewoundEntries(entries: ReadonlyArray<ConversationEntry>):
   const rewindEntryIds = new Set<string>()
   const ranges: Array<[number, number]> = []
   for (const entry of entries) {
-    if (entry.kind !== 'helm.rewind') continue
+    if (entry.kind !== 'helmx.rewind') continue
     rewindEntryIds.add(entry.id)
     const data = isStringRecord(entry.data) ? entry.data : undefined
     const markerId = Number(entry.id)
@@ -249,15 +249,15 @@ function isSafePositiveInt(value: number): boolean {
  * Latest editable human input (Composer empty-box ↑ prefill):
  * - only origin === 'human' counts: agent reports / trigger injections are not human-editable, keep searching backwards;
  * - never edit in place across a pi.reset / pi.compaction boundary (the backend's authoritative context starts at the latest boundary);
- * - prefer helm.input (with attachments), fall back to bare pi.user.
+ * - prefer helmx.input (with attachments), fall back to bare pi.user.
  */
 export function lastEditableHumanInput(entries: ReadonlyArray<ConversationEntry>): EditRequestTarget | undefined {
   const active = filterRewoundEntries(entries)
   for (let i = active.length - 1; i >= 0; i--) {
     const entry = active[i]!
     if (entry.kind === 'pi.reset' || entry.kind === 'pi.compaction') return undefined
-    if (entry.kind === 'helm.input') {
-      const data = parseHelmInputData(entry.data)
+    if (entry.kind === 'helmx.input') {
+      const data = parseHelmxInputData(entry.data)
       const entryId = Number(entry.id)
       if (
         data !== undefined &&
@@ -302,8 +302,8 @@ const SUMMARY_MAX_CHARS = 60
 // Input extraction and dedup
 // ---------------------------------------------------------------------------
 
-/** Validate and parse helm.input entry.data; return undefined on invalid shapes (never fabricate). */
-export function parseHelmInputData(data: unknown): HelmInputData | undefined {
+/** Validate and parse helmx.input entry.data; return undefined on invalid shapes (never fabricate). */
+export function parseHelmxInputData(data: unknown): HelmxInputData | undefined {
   if (data === null || typeof data !== 'object' || Array.isArray(data)) return undefined
   const d = data as Record<string, unknown>
   if (typeof d.text !== 'string') return undefined
@@ -1015,14 +1015,14 @@ export function buildTimelineItems(
   entries: ReadonlyArray<ConversationEntry>,
   options: BuildTimelineOptions = {},
 ): TimelineItem[] {
-  // Drop entries covered by helm.rewind first: applies to both initial loads and SSE-increment rewinds.
+  // Drop entries covered by helmx.rewind first: applies to both initial loads and SSE-increment rewinds.
   const activeEntries = filterRewoundEntries(entries)
   const items: TimelineItem[] = []
   const seenInputIds = new Set<string>()
   let turn: TurnAcc | null = null
   let lastHumanInputText: string | undefined
 
-  const pushHuman = (entry: ConversationEntry, data: HelmInputData, fallback: boolean): void => {
+  const pushHuman = (entry: ConversationEntry, data: HelmxInputData, fallback: boolean): void => {
     flushTurn(turn, items, false)
     turn = null
     const createdAt =
@@ -1049,8 +1049,8 @@ export function buildTimelineItems(
     // Plugin timeline.renderer hit: any entry can be taken over (fold-exempt, renders a card directly).
     const renderer = matchTimelineRenderer(entry, options.timelineRenderers)
     if (renderer !== undefined) {
-      if (entry.kind === 'helm.input') {
-        const data = parseHelmInputData(entry.data)
+      if (entry.kind === 'helmx.input') {
+        const data = parseHelmxInputData(entry.data)
         if (data !== undefined) {
           lastHumanInputText = data.text
           if (data.id !== undefined) seenInputIds.add(data.id)
@@ -1063,8 +1063,8 @@ export function buildTimelineItems(
     }
 
     switch (entry.kind) {
-      case 'helm.input': {
-        const data = parseHelmInputData(entry.data)
+      case 'helmx.input': {
+        const data = parseHelmxInputData(entry.data)
         if (data === undefined) break
         lastHumanInputText = data.text
         if (data.id !== undefined) seenInputIds.add(data.id)
@@ -1074,7 +1074,7 @@ export function buildTimelineItems(
       case 'pi.user': {
         const text = extractUserMessageText(entry)
         if (text === '') break
-        // The helm.input already covers the same text input: skip the duplicate pi.user right after it.
+        // The helmx.input already covers the same text input: skip the duplicate pi.user right after it.
         if (lastHumanInputText !== undefined && lastHumanInputText === text) break
         lastHumanInputText = text
         pushHuman(entry, { text, origin: 'human' }, true)
@@ -1139,7 +1139,7 @@ export function buildTimelineItems(
         break
       }
       default: {
-        // Custom entries that hit no plugin renderer (helm.* bookkeeping etc.): no render contract, skip.
+        // Custom entries that hit no plugin renderer (helmx.* bookkeeping etc.): no render contract, skip.
         break
       }
     }
@@ -1234,9 +1234,9 @@ export function lastHumanTextOf(items: ReadonlyArray<TimelineItem>): string | un
 // timeline.entry.action micro-slot entry context
 // ---------------------------------------------------------------------------
 
-/** Source entry kind of a human input row: helm.input normalization first, pi.user fallback display. */
+/** Source entry kind of a human input row: helmx.input normalization first, pi.user fallback display. */
 export function humanItemEntryKind(item: HumanInputItem): string {
-  return item.fallback ? 'pi.user' : 'helm.input'
+  return item.fallback ? 'pi.user' : 'helmx.input'
 }
 
 // ---------------------------------------------------------------------------

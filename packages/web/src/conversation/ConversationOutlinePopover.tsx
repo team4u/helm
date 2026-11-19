@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { HelmIcon, Popover, PopoverContent, PopoverTrigger } from '@helm/plugin-client'
+import { HelmxIcon, Popover, PopoverContent, PopoverTrigger } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatMessageTime } from '../lib/format.js'
 import {
@@ -169,7 +169,7 @@ export function ConversationOutlinePopover({
           aria-label={t('conv.outline.nav', { label: effectiveAccessibilityLabel })}
           title={triggerTitle ?? t('conv.outline.triggerTitle', { count: turnCount })}
         >
-          <HelmIcon name="list-tree" size={12} />
+          <HelmxIcon name="list-tree" size={12} />
           <span className="pane-action-label">{effectiveTriggerLabel}</span>
           {displayCount > 0 ? (
             <span className="badge badge-neutral tabular-nums">{displayCount}</span>
@@ -191,7 +191,7 @@ export function ConversationOutlinePopover({
       >
           <div className="conversation-outline-header">
             <div className="search-box conversation-outline-search">
-              <HelmIcon name="search" size={13} />
+              <HelmxIcon name="search" size={13} />
               <input
                 ref={searchInputRef}
                 type="text"
@@ -211,7 +211,7 @@ export function ConversationOutlinePopover({
                     searchInputRef.current?.focus()
                   }}
                 >
-                  <HelmIcon name="x" size={11} />
+                  <HelmxIcon name="x" size={11} />
                 </button>
               ) : null}
             </div>
@@ -246,7 +246,7 @@ export function ConversationOutlinePopover({
                 disabled={loadingEarlierHistory}
                 onClick={() => onLoadEarlierHistory()}
               >
-                <HelmIcon name={loadingEarlierHistory ? 'loader' : 'arrow-up'} size={11} className={loadingEarlierHistory ? 'spin-slow' : undefined} />
+                <HelmxIcon name={loadingEarlierHistory ? 'loader' : 'arrow-up'} size={11} className={loadingEarlierHistory ? 'spin-slow' : undefined} />
                 {loadingEarlierHistory ? t('conv.outline.loadingEarlier') : t('conv.outline.loadEarlier')}
               </button>
             </div>
@@ -276,7 +276,7 @@ export function ConversationOutlinePopover({
                       onMouseEnter={() => setSelectedIdx(idx)}
                       onClick={() => triggerSelect(node)}
                     >
-                      <HelmIcon name={node.divider === 'reset' ? 'rotate-ccw' : 'archive'} size={11} />
+                      <HelmxIcon name={node.divider === 'reset' ? 'rotate-ccw' : 'archive'} size={11} />
                       <span className="conversation-outline-divider-label">{node.label}</span>
                     </button>
                   )
@@ -315,7 +315,7 @@ export function ConversationOutlinePopover({
                       onMouseEnter={() => setSelectedIdx(idx)}
                       onClick={() => triggerSelect(node)}
                     >
-                      <HelmIcon
+                      <HelmxIcon
                         name={node.live ? 'loader' : 'sparkles'}
                         size={11}
                         className={node.live ? 'spin-slow' : undefined}
@@ -347,7 +347,7 @@ export function ConversationOutlinePopover({
                       onMouseEnter={() => setSelectedIdx(idx)}
                       onClick={() => triggerSelect(node)}
                     >
-                      <HelmIcon
+                      <HelmxIcon
                         name={cardIcon}
                         size={11}
                         className={node.status === 'running' ? 'spin-slow' : undefined}
@@ -374,7 +374,7 @@ export function ConversationOutlinePopover({
                       #{node.turnIndex}
                     </span>
                     {node.origin !== 'human' ? (
-                      <HelmIcon
+                      <HelmxIcon
                         name={node.origin === 'trigger' ? 'webhook' : 'bot'}
                         size={11}
                         className="conversation-outline-origin-icon"

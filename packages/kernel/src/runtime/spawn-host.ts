@@ -8,11 +8,11 @@
  */
 import type { Harness } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
-import type { AgentSpawnRequest, ConversationAttachmentRef, ConversationPatch, ConversationSummary } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { AgentSpawnRequest, ConversationAttachmentRef, ConversationPatch, ConversationSummary } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type { Profile } from '../services/index.js'
 import { requireModelRef, type ModelRefParts } from './models.js'
-import type { HelmToolDeps } from './tool-deps.js'
+import type { HelmxToolDeps } from './tool-deps.js'
 import type { NativeSpawnDeps, ResolvedProfile } from './spawn.js'
 import type { StructuredOutputSession } from './structured-output.js'
 
@@ -33,7 +33,7 @@ interface ResolvedAttachmentRef {
 
 /** Host capability provider used to construct `SpawnHost` (implemented and injected by `KernelRuntime`). */
 interface SpawnHostSource {
-  readonly toolDeps: HelmToolDeps
+  readonly toolDeps: HelmxToolDeps
   readonly harness: Harness
   readonly tracker: {
     getLastAssistantText(conversationId: number): string | undefined
@@ -64,7 +64,7 @@ interface SpawnHostSource {
   /** Install a per-child SDK extension (re-installing under the same name replaces in place). */
   installExtension(extension: NativeSpawnDeps['installChildExtension'] extends (e: infer E) => void ? E : never): void
   /**
-   * Child conversation registration (snapshot upsert + helm ownership + observe + broadcast creation).
+   * Child conversation registration (snapshot upsert + helmx ownership + observe + broadcast creation).
    * `parentToolCallId` is passed through from the final request by `buildSpawnHost` (explicit parameter
    * to avoid implicitly capturing the post-transform request inside a closure).
    */
@@ -138,7 +138,7 @@ export function buildSpawnHost(options: SpawnHostOptions): SpawnHost {
     structuredOutputSessions: source.structuredOutputSessions,
     assertNodeAvailable: (nodeId) => {
       if (!source.isNodeOnline(nodeId)) {
-        throw new HelmError('node_offline', `Target node '${nodeId}' is offline; cannot start subagent`, 409, { nodeId })
+        throw new HelmxError('node_offline', `Target node '${nodeId}' is offline; cannot start subagent`, 409, { nodeId })
       }
     },
     resolveAttachmentsForPrompt:

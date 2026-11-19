@@ -1,5 +1,5 @@
 /**
- * HelmStoreProvider integration tests for foreground-visibility-gated
+ * HelmxStoreProvider integration tests for foreground-visibility-gated
  * automatic unread clearing (controlled SSE + fetch stubs, happy-dom):
  * - Foreground visible and focused (!document.hidden && document.hasFocus()):
  *   - a snapshot or conversation.upsert with unread=true on a currently
@@ -26,10 +26,10 @@ import { after, before, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { sseClientTimings } from '../src/lib/live-state.js'
-import type { HelmStoreValue } from '../src/lib/types.js'
+import type { HelmxStoreValue } from '../src/lib/types.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -138,8 +138,8 @@ interface Harness {
   patchCalls: PatchCall[]
   pendingPatches: DeferredPatch[]
   nextEvents: (factory: (url: string, signal: AbortSignal | null) => ControlledStream) => void
-  store: () => HelmStoreValue
-  waitFor: (predicate: (store: HelmStoreValue) => boolean, ms?: number) => Promise<void>
+  store: () => HelmxStoreValue
+  waitFor: (predicate: (store: HelmxStoreValue) => boolean, ms?: number) => Promise<void>
   flush: (ms?: number) => Promise<void>
   setPatchBehavior: (opts: { manualPatch?: boolean; patchStatus?: number }) => void
   close: () => Promise<void>
@@ -149,8 +149,8 @@ async function mountProvider(options: MountOptions = {}): Promise<Harness> {
   if (options.hash !== undefined) {
     window.history.replaceState(null, '', options.hash)
   }
-  const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
-  const { useHelmStore } = await import('../src/lib/store-context.js')
+  const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
+  const { useHelmxStore } = await import('../src/lib/store-context.js')
 
   const patchCalls: PatchCall[] = []
   const pendingPatches: DeferredPatch[] = []
@@ -175,9 +175,9 @@ async function mountProvider(options: MountOptions = {}): Promise<Harness> {
     factories.push(factory)
   }
 
-  let storeRef: HelmStoreValue | undefined
+  let storeRef: HelmxStoreValue | undefined
   const Probe = (): React.ReactNode => {
-    storeRef = useHelmStore()
+    storeRef = useHelmxStore()
     return null
   }
 
@@ -268,10 +268,10 @@ async function mountProvider(options: MountOptions = {}): Promise<Harness> {
   await act(async () => {
     const r = createRoot(host)
     root = r
-    r.render(React.createElement(HelmStoreProvider, null, React.createElement(Probe)))
+    r.render(React.createElement(HelmxStoreProvider, null, React.createElement(Probe)))
   })
 
-  const waitFor = async (predicate: (store: HelmStoreValue) => boolean, ms = 15_000): Promise<void> => {
+  const waitFor = async (predicate: (store: HelmxStoreValue) => boolean, ms = 15_000): Promise<void> => {
     const deadline = Date.now() + ms
     while (storeRef === undefined || !predicate(storeRef)) {
       if (Date.now() > deadline) {
@@ -310,7 +310,7 @@ async function mountProvider(options: MountOptions = {}): Promise<Harness> {
       if (r !== undefined) await act(async () => { r.unmount() })
       host.remove()
       globalThis.fetch = originalFetch
-      localStorage.removeItem('helm:token')
+      localStorage.removeItem('helmx:token')
       window.history.replaceState(null, '', '#/')
     },
   }

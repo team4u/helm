@@ -8,8 +8,8 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationSummary } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { ConversationDetailService } from '../src/runtime/conversation-detail.js'
 import { deferred } from './helpers.js'
 
@@ -89,7 +89,7 @@ test('async decoupling: suspended background contextUsage never blocks getConver
     summary: summaryOf(5, false),
     entries: [
       { id: 2, kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'answer proposal' }] }] },
-      { id: 1, kind: 'helm.input', data: { id: 'i1', text: 'question' } },
+      { id: 1, kind: 'helmx.input', data: { id: 'i1', text: 'question' } },
     ],
     refreshGate: gate,
     scheduleCalls: 0,
@@ -102,7 +102,7 @@ test('async decoupling: suspended background contextUsage never blocks getConver
   assert.equal(state.ensureCalls, 1, 'background contextUsage refresh should be triggered')
   assert.equal(detail.contextUsage, undefined, 'uncached usage is omitted on immediate return')
   assert.equal(detail.entries.length, 2)
-  assert.equal(detail.entries[0]!.kind, 'helm.input')
+  assert.equal(detail.entries[0]!.kind, 'helmx.input')
   assert.equal(detail.entries[1]!.kind, 'pi.assistant')
 
   // Once background calculation finishes, cached summary carries contextUsage for subsequent reads / upsert.
@@ -115,7 +115,7 @@ test('async decoupling: suspended background contextUsage never blocks getConver
 test('scheduleContextUsage host port is called fire-and-forget when provided', { timeout: 60_000 }, async () => {
   const state: HostState = {
     summary: summaryOf(7, true),
-    entries: [{ id: 1, kind: 'helm.input', data: { id: 'i1', text: 'q' } }],
+    entries: [{ id: 1, kind: 'helmx.input', data: { id: 'i1', text: 'q' } }],
     scheduleCalls: 0,
     ensureCalls: 0,
   }
@@ -136,7 +136,7 @@ test('background ensureContextUsage failure does not reject getConversationDetai
     const state: HostState = {
       summary: summaryOf(5, false),
       entries: [],
-      refreshError: new HelmError('runtime_closed', 'kernel is closing', 503),
+      refreshError: new HelmxError('runtime_closed', 'kernel is closing', 503),
       scheduleCalls: 0,
       ensureCalls: 0,
     }
@@ -161,7 +161,7 @@ test('detail read failure: rejects overall (404 conversation missing) without tr
   const service = makeService(state, { missingConversation: true })
   await assert.rejects(
     service.getConversationDetail(5, { limit: 10 }),
-    (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+    (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
   )
   assert.equal(state.ensureCalls, 0)
 })

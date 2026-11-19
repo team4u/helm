@@ -20,7 +20,7 @@
     "**/build/**",
     "packages/desktop/release/**",
     "packages/desktop/hub/**",
-    ".helm/**",
+    ".helmx/**",
     "tmp/**"
   ],
   "env": {

@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmError, type PluginSkillAsset } from '@helm/protocol'
+import { HelmxError, type PluginSkillAsset } from '@helmx/protocol'
 import { WORKFLOW_PLUGIN_ID, WORKFLOW_SKILL_ID } from '../contracts.js'
 
 export function resolveWorkflowSkillDir(): string {
@@ -14,7 +14,7 @@ export function resolveWorkflowSkillDir(): string {
   const source = join(pkgRoot, 'src', 'workflow', 'skill')
   if (existsSync(source)) return source
 
-  throw new HelmError(
+  throw new HelmxError(
     'workflow_skill_asset_missing',
     `Built-in plugin ${WORKFLOW_PLUGIN_ID} cannot find its skill asset directory (tried: "${local}", "${source}")`,
     500,

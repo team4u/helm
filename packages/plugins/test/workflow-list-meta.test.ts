@@ -50,7 +50,7 @@ const host: WorkflowServiceHost = {
 let root: string
 
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'helm-wf-listmeta-'))
+  root = mkdtempSync(join(tmpdir(), 'helmx-wf-listmeta-'))
 })
 
 after(async () => {

@@ -1,9 +1,9 @@
 /**
- * Isomorphic test helper foundations (`@helm/test-kit` main entry).
+ * Isomorphic test helper foundations (`@helmx/test-kit` main entry).
  * Never import any `node:*` module so browser / happy-dom / Node tests can reuse it safely.
  */
 
-import type { ConversationSummary, PluginSummary, Profile } from '@helm/protocol/browser'
+import type { ConversationSummary, PluginSummary, Profile } from '@helmx/protocol/browser'
 
 /** Build a ConversationSummary DTO for tests, providing every required field by default. */
 export function makeConversationSummary(

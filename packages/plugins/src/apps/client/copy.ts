@@ -7,8 +7,8 @@
  * against the active host locale; plugin names, screen labels and backend
  * error messages pass through unchanged.
  */
-import type { HelmLocale, LocalizedText } from '@helm/plugin-client'
-import { resolveLocalizedText } from '@helm/plugin-client'
+import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText } from '@helmx/plugin-client'
 import type { AppCategory } from './models.ts'
 
 /** Catalog category labels (keys mirror models.ts APP_CATEGORIES). */
@@ -22,7 +22,7 @@ const APP_CATEGORY_LABELS: Record<AppCategory, LocalizedText> = {
 }
 
 /** Resolve the display label for a normalized catalog category. */
-export function appCategoryLabel(category: AppCategory, locale: HelmLocale): string {
+export function appCategoryLabel(category: AppCategory, locale: HelmxLocale): string {
   return resolveLocalizedText(APP_CATEGORY_LABELS[category], locale)
 }
 
@@ -34,7 +34,7 @@ export const APP_CENTER_SUBTITLE: LocalizedText = {
 }
 
 /** Launchpad stats line (`N apps · M ready`). */
-export function appCenterStats(total: number, ready: number, locale: HelmLocale): string {
+export function appCenterStats(total: number, ready: number, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `${total} apps · ${ready} ready`, 'zh-CN': `共 ${total} 个应用 · ${ready} 个已就绪` },
     locale,
@@ -61,13 +61,13 @@ export const APP_STATUS_READY: LocalizedText = { en: 'Ready', 'zh-CN': '已就�
 export const APP_STATUS_STOPPED: LocalizedText = { en: 'Stopped', 'zh-CN': '已停用' }
 
 /** Counting pills (`N views`, `N actions`). */
-export function appViewsCount(count: number, locale: HelmLocale): string {
+export function appViewsCount(count: number, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `${count} ${count === 1 ? 'view' : 'views'}`, 'zh-CN': `${count} 视图` },
     locale,
   )
 }
-export function appActionsCount(count: number, locale: HelmLocale): string {
+export function appActionsCount(count: number, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `${count} ${count === 1 ? 'action' : 'actions'}`, 'zh-CN': `${count} 动作` },
     locale,
@@ -95,7 +95,7 @@ export const APP_ENABLE_LABEL: LocalizedText = { en: 'Enable in plugin center', 
 export const APP_DETAIL_TITLE: LocalizedText = { en: 'View app details', 'zh-CN': '查看应用详情' }
 
 /** Accessible name of the detail drawer dialog. */
-export function appDetailDialogLabel(name: string, locale: HelmLocale): string {
+export function appDetailDialogLabel(name: string, locale: HelmxLocale): string {
   return resolveLocalizedText({ en: `${name} app details`, 'zh-CN': `${name} 应用详情` }, locale)
 }
 
@@ -109,7 +109,7 @@ export const APP_KV_INSTALL_SOURCE: LocalizedText = { en: 'Install source', 'zh-
 export const APP_KV_ORIGIN_CONVERSATION: LocalizedText = { en: 'Origin conversation', 'zh-CN': '创建会话' }
 
 /** Version badge tooltip. */
-export function appVersionTitle(version: string, locale: HelmLocale): string {
+export function appVersionTitle(version: string, locale: HelmxLocale): string {
   return resolveLocalizedText({ en: `Version ${version}`, 'zh-CN': `版本 ${version}` }, locale)
 }
 
@@ -118,7 +118,7 @@ export const APP_PINNED_YES: LocalizedText = { en: 'Pinned', 'zh-CN': '已置顶
 export const APP_PINNED_NO: LocalizedText = { en: 'Not pinned', 'zh-CN': '未置顶' }
 
 /** Origin conversation jump button tooltip. */
-export function appOriginJumpTitle(conversationId: number, locale: HelmLocale): string {
+export function appOriginJumpTitle(conversationId: number, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Open conversation #${conversationId} that created this app`, 'zh-CN': `跳转到创建此应用的会话 #${conversationId}` },
     locale,
@@ -126,7 +126,7 @@ export function appOriginJumpTitle(conversationId: number, locale: HelmLocale): 
 }
 
 /** Views section of the detail drawer. */
-export function appViewsSectionTitle(count: number, locale: HelmLocale): string {
+export function appViewsSectionTitle(count: number, locale: HelmxLocale): string {
   return resolveLocalizedText({ en: `Views (${count})`, 'zh-CN': `应用视图 (${count})` }, locale)
 }
 export const APP_OPEN_VIEW_TITLE: LocalizedText = { en: 'Open this view in the main pane', 'zh-CN': '在主屏打开此视图' }
@@ -134,7 +134,7 @@ export const APP_OPEN_VIEW_LABEL: LocalizedText = { en: 'Open view', 'zh-CN': '�
 export const APP_OPEN_VIEW_SPLIT_LABEL: LocalizedText = { en: 'Open this view in split view', 'zh-CN': '分屏打开此视图' }
 
 /** Exposed actions section of the detail drawer. */
-export function appActionsSectionTitle(count: number, locale: HelmLocale): string {
+export function appActionsSectionTitle(count: number, locale: HelmxLocale): string {
   return resolveLocalizedText({ en: `Exposed actions (${count})`, 'zh-CN': `导出能力 (${count})` }, locale)
 }
 
@@ -179,7 +179,7 @@ export const APP_EMPTY_HINT_NO_MATCH: LocalizedText = {
 export const APP_RESET_FILTERS: LocalizedText = { en: 'Reset filters', 'zh-CN': '重置筛选条件' }
 
 /** Description fallbacks when the plugin summary carries no description. */
-export function appDescriptionFromViews(labels: readonly LocalizedText[], locale: HelmLocale): string {
+export function appDescriptionFromViews(labels: readonly LocalizedText[], locale: HelmxLocale): string {
   const resolved = labels.map((label) => resolveLocalizedText(label, locale))
   return resolveLocalizedText(
     {

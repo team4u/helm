@@ -3,7 +3,7 @@
  * rollback. Product policy lives here (cooldowns, stop-before-commit ordering, restart, blocked
  * bookkeeping); every generic mechanism — registry lookup, verified staging, immutable
  * `releases/`, `current.json`/`update-blocked.json` state, `upgrade.lock` — comes from
- * the shared update engine in `@helm/env-io`.
+ * the shared update engine in `@helmx/env-io`.
  *
  * Flow (engine `upgrade.lock` critical section; the stop→commit→start tail additionally holds
  *   `lifecycle.lock` so start/stop/update never interleave):
@@ -29,7 +29,7 @@
  * before the commit, and the start path itself refuses to double-start. The short stop→start
  * window is honest downtime, not a zero-downtime canary.
  */
-import { compareStrictSemver, isStrictSemver, type HubActivityCounts } from '@helm/protocol';
+import { compareStrictSemver, isStrictSemver, type HubActivityCounts } from '@helmx/protocol';
 import {
   clearBlockedRelease,
   deleteCurrentRelease,
@@ -39,7 +39,7 @@ import {
   writeBlockedRelease,
   writeCurrentRelease,
   type CurrentReleaseRecord,
-} from '@helm/env-io';
+} from '@helmx/env-io';
 import { defaultHubDataDir, pathsOf, resolveBlockedCooldownMs } from './layout.js';
 import {
   isBlockedActive,
@@ -198,7 +198,7 @@ export async function performHubUpdate(options: PerformUpdateOptions): Promise<U
       );
     }
 
-    // Program/data separation guard for staging: effective data dir (flags > env > launch.json > ~/.helm).
+    // Program/data separation guard for staging: effective data dir (flags > env > launch.json > ~/.helmx).
     const effectiveDataDir = resolveEffectiveLaunchConfig({
       ...(options.launchFlags !== undefined ? { flags: options.launchFlags } : {}),
       env: io.env,

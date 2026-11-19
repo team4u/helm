@@ -8,7 +8,7 @@
  * wake, raw channel names) stays available as auxiliary
  * facts, never as the primary control surface.
  */
-import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale, type LocalizedText } from '@helm/plugin-client'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/plugin-client'
 import type { BoardPostKind, MemberLiveState } from './board-model.ts'
 
 const L = (en: string, zh: string): LocalizedText => ({ en, 'zh-CN': zh })
@@ -27,7 +27,7 @@ export const POST_KIND_LABELS: Readonly<Record<BoardPostKind, LocalizedText>> = 
   stall: L('Stalled', '停滞'),
 }
 
-export function postKindLabel(kind: BoardPostKind, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function postKindLabel(kind: BoardPostKind, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(POST_KIND_LABELS[kind], locale)
 }
 
@@ -40,7 +40,7 @@ export const MEMBER_LIVE_STATE_LABELS: Readonly<Record<MemberLiveState, Localize
   missing: L('Missing', '会话缺失'),
 }
 
-export function memberLiveStateLabel(state: MemberLiveState, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function memberLiveStateLabel(state: MemberLiveState, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(MEMBER_LIVE_STATE_LABELS[state], locale)
 }
 
@@ -52,7 +52,7 @@ export const PANEL_STATUS_LABELS = {
 
 export type PanelStatusKey = keyof typeof PANEL_STATUS_LABELS
 
-export function panelStatusLabel(status: PanelStatusKey, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function panelStatusLabel(status: PanelStatusKey, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(PANEL_STATUS_LABELS[status], locale)
 }
 
@@ -61,7 +61,7 @@ export const MEMBER_ACCESS_LABELS = {
   readonly: L('Read-only review', '只读审阅'),
 } as const
 
-export function memberAccessLabel(access: 'readwrite' | 'readonly', locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function memberAccessLabel(access: 'readwrite' | 'readonly', locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(MEMBER_ACCESS_LABELS[access], locale)
 }
 
@@ -87,38 +87,38 @@ export const TRACE_DETAILS_SUMMARY = L('Raw tool data', '原始工具数据')
 export const TRACE_DETAILS_INPUT = L('Input', '输入')
 export const TRACE_DETAILS_OUTPUT = L('Output', '输出')
 
-export function traceOpenMemberLabel(name: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function traceOpenMemberLabel(name: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L(`Open @${name} conversation drawer`, `打开 @${name} 会话抽屉`), locale)
 }
 
-export function traceOpenWorkbenchLabel(locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function traceOpenWorkbenchLabel(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L('Open swarm workbench panel', '打开协同工作台面板'), locale)
 }
 
-export function traceStatusDone(locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function traceStatusDone(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L('Done', '完成'), locale)
 }
 
-export function traceStatusRunning(locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function traceStatusRunning(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L('Running', '执行中'), locale)
 }
 
-export function traceStatusError(locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function traceStatusError(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L('Failed', '失败'), locale)
 }
 
-export function traceRetainedCount(count: number, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function traceRetainedCount(count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(
     L(`${count} branch${count === 1 ? '' : 'es'} kept for merge`, `保留 ${count} 个分支待合入`),
     locale,
   )
 }
 
-export function tracePostCount(count: number, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function tracePostCount(count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L(`${count} post${count === 1 ? '' : 's'}`, `${count} 条记录`), locale)
 }
 
-export function traceAbortedNoop(locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function traceAbortedNoop(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L('not running', '未在运行'), locale)
 }
 
@@ -137,11 +137,11 @@ export const TRAY_OUTPUT_TAG = L('Output', '输出')
 export const TRAY_THINKING_TAG = L('Thinking', '思考')
 export const TRAY_LOAD_FAILED_TAG = L('Load failed', '加载失败')
 
-export function trayParallelToolsTag(count: number, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function trayParallelToolsTag(count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L(`${count} tools running`, `并行 ${count} 个工具`), locale)
 }
 
-export function trayCount(blocked: number, working: number, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function trayCount(blocked: number, working: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   if (blocked > 0) {
     return working > 0
       ? resolveLocalizedText(L(`${blocked} blocked · ${working} working`, `${blocked} 项受阻 · ${working} 项执行中`), locale)
@@ -153,7 +153,7 @@ export function trayCount(blocked: number, working: number, locale: HelmLocale =
 export function trayToggleLabel(
   expanded: boolean,
   countText: string,
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   return resolveLocalizedText(
     L(`${expanded ? 'Collapse' : 'Expand'} swarm activity — ${countText}`, `${expanded ? '收起' : '展开'}协同任务 — ${countText}`),
@@ -161,17 +161,17 @@ export function trayToggleLabel(
   )
 }
 
-export function trayRowOpenLabel(name: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function trayRowOpenLabel(name: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L(`Open @${name} conversation drawer`, `打开 @${name} 会话抽屉`), locale)
 }
 
-export function trayAbortFailed(err: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function trayAbortFailed(err: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L(`Abort failed: ${err}`, `中止失败：${err}`), locale)
 }
 
 export function trayFrontline(
   frontline: { from: string; to: string; kind: BoardPostKind | string; digest: string },
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   const kindText =
     typeof frontline.kind === 'string' && frontline.kind in POST_KIND_LABELS
@@ -181,7 +181,7 @@ export function trayFrontline(
   return `${frontline.from}${arrow} ${kindText}: ${frontline.digest}`
 }
 
-export function trayProgress(done: number, total: number, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function trayProgress(done: number, total: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L(`${done}/${total} delivered`, `已交付 ${done}/${total}`), locale)
 }
 
@@ -209,19 +209,19 @@ export const SW_BODY_COLLAPSE: LocalizedText = { en: 'Collapse', 'zh-CN': '收�
 export const PANEL_POSTS_EMPTY = L('No board posts yet.', '暂无协同记录。')
 export const PANEL_MEMBER_ARCHIVED = L('Archived', '已归档')
 export const PANEL_STATUS_LOAD_FAILED = L('Failed to load swarm group status', '协同编组状态读取失败')
-export function panelStatusInvalid(locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function panelStatusInvalid(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L('Swarm status payload is structurally invalid', '协同状态返回结构无效'), locale)
 }
 export const PANEL_ACTIVITY_RECEIVED = L('received', '收到')
 export const PANEL_ACTIVITY_AUTHORED = L('latest', '最新')
 
-export function panelRowOpenLabel(name: string, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function panelRowOpenLabel(name: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(L(`Open @${name} conversation drawer`, `打开 @${name} 会话抽屉`), locale)
 }
 
 export function panelWorktreeSummary(
   snap: { branch?: string; commitsAhead?: number; dirtyCount: number },
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   const parts: string[] = []
   if (snap.branch !== undefined && snap.branch !== '') parts.push(snap.branch)
@@ -234,7 +234,7 @@ export function panelWorktreeSummary(
 
 export function panelRetainedSummary(
   item: { memberName: string; branch: string; commitsAhead: number },
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   return resolveLocalizedText(
     L(`@${item.memberName} · ${item.branch} · +${item.commitsAhead} commits`, `@${item.memberName} · ${item.branch} · 领先 ${item.commitsAhead} 提交`),
@@ -254,7 +254,7 @@ export const SW_BOARD_REPORT_PILL = L('Swarm report', '协同汇总')
 export const SW_BOARD_WAKEUP_PILL = L('Swarm wakeup', '协同唤醒')
 export const SW_PILL_OPEN_WORKBENCH = L('Open swarm workbench', '打开协同工作台')
 
-export function swReceiptCountLabel(count: number, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function swReceiptCountLabel(count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(
     L(`${count} post${count === 1 ? '' : 's'}`, `${count} 条流转`),
     locale,

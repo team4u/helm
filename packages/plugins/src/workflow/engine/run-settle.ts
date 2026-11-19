@@ -13,7 +13,7 @@
  * - workflow.updated 增量事件广播、done 门与前台同步等待者唤醒。
  */
 
-import { HelmError, redactJsonValue, type AgentExecutionInfo } from '@helm/protocol'
+import { HelmxError, redactJsonValue, type AgentExecutionInfo } from '@helmx/protocol'
 import type { WorkflowNodeState } from '../../contracts.js'
 import { resolveForegroundWaiters, type ActiveRun } from './active-run.js'
 import { classifyRunFailureCode } from './run-resumability.js'
@@ -261,7 +261,7 @@ export function createSubagentSettler(params: {
           !outcome.ok &&
           (hostClosing ||
             run.abort.signal.aborted ||
-            (outcome.error instanceof HelmError && outcome.error.code === 'aborted'))
+            (outcome.error instanceof HelmxError && outcome.error.code === 'aborted'))
 
         if (suspending) {
           record.status = 'running'
@@ -282,7 +282,7 @@ export function createSubagentSettler(params: {
           node.durationMs = settledAt - startedAt
           const message = outcome.ok
             ? '宿主正在关停，后台子代理执行已中止'
-            : outcome.error instanceof HelmError
+            : outcome.error instanceof HelmxError
               ? `[${outcome.error.code}] ${outcome.error.message}`
               : outcome.error instanceof Error
                 ? outcome.error.message

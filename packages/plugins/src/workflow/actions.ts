@@ -8,7 +8,7 @@
  * - 受管 Worktree（cleanup_worktree/list_worktrees/inspect_worktree）在
  *   actions-worktree.ts。
  */
-import { HelmError, type HelmPluginContext } from '@helm/protocol'
+import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import type { WorktreeIsolation } from './isolation.js'
 import type { WorkflowService } from './engine/index.js'
 import { registerWorkflowRunActions } from './actions-run.js'
@@ -23,7 +23,7 @@ export interface WorkflowActionDeps {
   syncRunsDoc(): void
 }
 
-export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowActionDeps): void {
+export function registerWorkflowActions(ctx: HelmxPluginContext, deps: WorkflowActionDeps): void {
   const { workflows, syncRunsDoc } = deps
 
   ctx.action({
@@ -67,8 +67,8 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
       try {
         return { workflow: workflows.get(name) }
       } catch (error) {
-        if (error instanceof HelmError && error.code === 'not_found') {
-          throw new HelmError('not_found', `工作流 ${name} 不存在`, 404, { name })
+        if (error instanceof HelmxError && error.code === 'not_found') {
+          throw new HelmxError('not_found', `工作流 ${name} 不存在`, 404, { name })
         }
         throw error
       }
@@ -194,8 +194,8 @@ export function registerWorkflowActions(ctx: HelmPluginContext, deps: WorkflowAc
       try {
         return { run: workflows.getRun(runId) }
       } catch (error) {
-        if (error instanceof HelmError && error.code === 'not_found') {
-          throw new HelmError('not_found', `工作流运行不存在: ${runId}`, 404, { runId })
+        if (error instanceof HelmxError && error.code === 'not_found') {
+          throw new HelmxError('not_found', `工作流运行不存在: ${runId}`, 404, { runId })
         }
         throw error
       }

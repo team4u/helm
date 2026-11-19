@@ -10,8 +10,8 @@ import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { PluginClientContext as PluginClientContextType, ScreenProps } from '@helm/protocol'
-import { PluginClientContext, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
+import type { PluginClientContext as PluginClientContextType, ScreenProps } from '@helmx/protocol'
+import { PluginClientContext, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
 import { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClientStub } from './helpers/builtin-clients.js'
 
 const e = React.createElement
@@ -41,7 +41,7 @@ interface SpyCtx extends PluginClientContextType {
   actionCalls: Array<{ actionId: string; input: unknown }>
 }
 
-function makeSpyCtx(locale: HelmLocale = 'en'): SpyCtx {
+function makeSpyCtx(locale: HelmxLocale = 'en'): SpyCtx {
   const screenCalls: string[] = []
   const actionCalls: Array<{ actionId: string; input: unknown }> = []
   const base: PluginClientContextType = {
@@ -315,7 +315,7 @@ test('静态规范契约：triggers/client/index.tsx 零 Emoji、无原生 <sele
   assert.doesNotMatch(src, emojiRegex, 'triggers/client/index.tsx 严禁包含 Emoji')
   assert.ok(!/<select[\s>]/i.test(src), 'triggers/client/index.tsx 严禁使用原生 <select>')
   assert.ok(!src.includes('callout--'), 'triggers/client/index.tsx 不得残留 callout--* 旧类')
-  assert.ok(!src.includes("from 'lucide-react'"), '应统一使用 @helm/plugin-client HelmIcon')
+  assert.ok(!src.includes("from 'lucide-react'"), '应统一使用 @helmx/plugin-client HelmxIcon')
   const exports = src.match(/^export (?!interface|type)\s+(\w+)\s+([A-Za-z0-9_]+)/gm) ?? []
   assert.ok(
     exports.every((exp) => exp.includes('function TriggersManagerScreen') || exp.includes('function TriggersSettingsPanel')),
@@ -330,7 +330,7 @@ test('settingsPanel：计数、CLI 引导与打开管理入口', { timeout: 60_0
     assert.match(host.textContent ?? '', /Triggers/, '标题')
     assert.match(host.textContent ?? '', /Cron jobs/, 'KV 键')
     assert.match(host.textContent ?? '', /Webhook endpoints/, 'KV 键')
-    assert.match(host.textContent ?? '', /helm CLI/, 'CLI 引导文案')
+    assert.match(host.textContent ?? '', /helmx CLI/, 'CLI 引导文案')
     const open = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Open trigger manager'))
     assert.ok(open, '管理入口按钮')
     await act(async () => {

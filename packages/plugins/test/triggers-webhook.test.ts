@@ -15,10 +15,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
 import process from 'node:process'
-import { HelmError, type ConversationSummary, type MaybePromise, type PluginDefinition, type ExternalTriggerEnvelope } from '@helm/protocol'
+import { HelmxError, type ConversationSummary, type MaybePromise, type PluginDefinition, type ExternalTriggerEnvelope } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { CredentialService, credentialsPath } from '../../kernel/src/services/index.js'
 import { SecretStash } from '../../kernel/src/services/secret-stash.js'
 import { createTriggersPlugin } from '../src/triggers.js'
@@ -79,7 +79,7 @@ class FakeBackend implements PluginHostBackend {
   }
   forkConversation(id: number, opts?: { entryId?: number; title?: string }): Promise<ConversationSummary> {
     const source = this.conversations.get(id)
-    if (source === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+    if (source === undefined) throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
     const created = makeConversation(this.nextId++, {
       profileId: source.profileId,
       title: opts?.title ?? `${source.title} (分叉)`,
@@ -94,7 +94,7 @@ class FakeBackend implements PluginHostBackend {
   }
   getConversation(id: number): ConversationSummary {
     const found = this.conversations.get(id)
-    if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+    if (found === undefined) throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
     return found
   }
   updateConversation(id: number): Promise<ConversationSummary> {
@@ -120,7 +120,7 @@ class FakeBackend implements PluginHostBackend {
   getConversationActivity(): { consecutiveErrors: number } {
     return { consecutiveErrors: 0 }
   }
-  getConversationOwnership(): 'helm' | 'bot' | 'human' {
+  getConversationOwnership(): 'helmx' | 'bot' | 'human' {
     return 'human'
   }
   async spawnAgent(): Promise<unknown> {
@@ -135,8 +135,8 @@ class FakeBackend implements PluginHostBackend {
   prepareAction(): { idempotent: boolean } {
     return { idempotent: false }
   }
-  async execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
-    throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
+  async execEnv(): Promise<import('@helmx/protocol').EnvExecResponse> {
+    throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501)
   }
   withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
   listActions(): [] {
@@ -152,26 +152,26 @@ class FakeBackend implements PluginHostBackend {
   }
   skills = {
     list: async () => [],
-    readFile: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+    readFile: async () => { throw new HelmxError('unsupported', '本 fixture 无技能', 501) },
     directory: async (id: string) => `/tmp/triggers-fixture-skills/${id}`,
-    ensureSkill: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+    ensureSkill: async () => { throw new HelmxError('unsupported', '本 fixture 无技能', 501) },
   }
   setPluginConfig(): Promise<void> { return Promise.resolve() }
-  async getConversationDetail(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无详情', 501) }
+  async getConversationDetail(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 无详情', 501) }
   async listArtifacts(): Promise<never[]> { return [] }
-  async createArtifact(): Promise<never> { throw new HelmError('unsupported', 'fixture does not create artifacts', 501) }
-  async getArtifact(): Promise<never> { throw new HelmError('not_found', '无产物', 404) }
+  async createArtifact(): Promise<never> { throw new HelmxError('unsupported', 'fixture does not create artifacts', 501) }
+  async getArtifact(): Promise<never> { throw new HelmxError('not_found', '无产物', 404) }
   redact(text: string): string { return text }
   redactText(text: string): string { return text }
-  async completeText(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型', 501) }
-  executionEnv(): never { throw new HelmError('unsupported', '本 fixture 无执行环境', 501) }
+  async completeText(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 无模型', 501) }
+  executionEnv(): never { throw new HelmxError('unsupported', '本 fixture 无执行环境', 501) }
   withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() }
-  async atomicWriteFile(): Promise<void> { throw new HelmError('unsupported', '本 fixture 无原子写', 501) }
+  async atomicWriteFile(): Promise<void> { throw new HelmxError('unsupported', '本 fixture 无原子写', 501) }
   buildSpawnEnv(): Record<string, string> { return {} }
-  async refreshModels(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
-  async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
+  async refreshModels(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 无模型刷新', 501) }
+  async resolveSpawnTarget(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
   listActiveSpawnExecutions(): [] { return [] }
-  async inspectNodePathUsage(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不扫描进程占用', 501) }
+  async inspectNodePathUsage(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 不扫描进程占用', 501) }
   secrets = {
     get: async (pluginId: string, key: string) => this.secretsStore.get(`${pluginId}:${key}`),
     set: async (pluginId: string, key: string, value: string) => {
@@ -191,13 +191,13 @@ class FakeBackend implements PluginHostBackend {
     list: async () => [...this.profileIds].map((id) => ({ id })),
     get: async (id: string) => (this.profileIds.has(id) ? { id } : undefined),
     getSystem: async () => {
-      throw new HelmError('unsupported', '本 fixture 不提供 profiles.getSystem', 501)
+      throw new HelmxError('unsupported', '本 fixture 不提供 profiles.getSystem', 501)
     },
     save: async () => {
-      throw new HelmError('unsupported', '本 fixture 不提供 profiles.save', 501)
+      throw new HelmxError('unsupported', '本 fixture 不提供 profiles.save', 501)
     },
     directory: async () => {
-      throw new HelmError('unsupported', '本 fixture 不提供 profiles.directory', 501)
+      throw new HelmxError('unsupported', '本 fixture 不提供 profiles.directory', 501)
     },
   }
 }
@@ -212,7 +212,7 @@ interface Harness {
 }
 
 async function makeHarness(over: Partial<{ closing: boolean }> = {}): Promise<Harness> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-triggers-test-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-triggers-test-'))
   const backend = new FakeBackend()
   backend.closing = over.closing ?? false
   const docs = new MemoryDocStore()
@@ -247,7 +247,7 @@ async function makeHarness(over: Partial<{ closing: boolean }> = {}): Promise<Ha
 
 async function rejectsCode(promise: Promise<unknown>, code: string, status?: number): Promise<void> {
   await assert.rejects(promise, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `期望 HelmError，实际：${String(err)}`)
+    assert.ok(err instanceof HelmxError, `期望 HelmxError，实际：${String(err)}`)
     assert.equal(err.code, code)
     if (status !== undefined) assert.equal(err.status, status)
     return true
@@ -272,7 +272,7 @@ async function callWebhookRoute(
   const rawBytes = over.rawBytes
   if (secret !== null) {
     const signed = rawBytes ?? new TextEncoder().encode(body)
-    headers['x-helm-signature'] = `sha256=${createHmac('sha256', secret).update(signed).digest('hex')}`
+    headers['x-helmx-signature'] = `sha256=${createHmac('sha256', secret).update(signed).digest('hex')}`
   }
   const method = over.method ?? 'POST'
   const request = new Request(`http://hub${WEBHOOK_URL(id)}`, {
@@ -443,7 +443,7 @@ test('公开路由：无签名 401 / 错签名 401 / 不存在 404 / 正确签�
   const route = routes.find((r) => r.path.endsWith('/webhook/:id'))!
   const bad = new Request(`http://hub${WEBHOOK_URL('hook')}`, {
     method: 'POST',
-    headers: { 'x-helm-signature': 'sha256=' + '0'.repeat(64) },
+    headers: { 'x-helmx-signature': 'sha256=' + '0'.repeat(64) },
     body: 'hello',
   })
   assert.equal((await (route.handler(bad) as Promise<Response>)).status, 401)
@@ -480,7 +480,7 @@ test('公开路由：签名覆盖原始字节（utf8 多字节）+ body 超限 4
   const overflowGate = new Promise<void>(() => {}) // 永不 resolve：验证 cancel 语义
   const streamed = new Request(`http://hub${WEBHOOK_URL('hook')}`, {
     method: 'POST',
-    headers: { 'x-helm-signature': 'sha256=' + '0'.repeat(64) },
+    headers: { 'x-helmx-signature': 'sha256=' + '0'.repeat(64) },
     body: new ReadableStream<Uint8Array>({
       start(controller) {
         controller.enqueue(firstChunk)
@@ -496,7 +496,7 @@ test('公开路由：签名覆盖原始字节（utf8 多字节）+ body 超限 4
   // 声明超长 content-length 的请求：头部预检直接 413
   const huge = new Request(`http://hub${WEBHOOK_URL('hook')}`, {
     method: 'POST',
-    headers: { 'x-helm-signature': 'sha256=' + '0'.repeat(64), 'content-length': String(300 * 1024) },
+    headers: { 'x-helmx-signature': 'sha256=' + '0'.repeat(64), 'content-length': String(300 * 1024) },
     body: 'x',
   })
   assert.equal((await (route.handler(huge) as Promise<Response>)).status, 413)
@@ -647,7 +647,7 @@ test('doc 与 secret 不一致：入口存在但 secret 缺失 → 显式 500（
 // ---------------------------------------------------------------------------
 
 test('credentials.deletePluginSecret：精确删单键、空桶回收、幂等、其他键不受影响、恒 0600', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-credentials-del-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-credentials-del-'))
   const svc = new CredentialService(dataDir)
   await svc.setPluginSecret('builtin:triggers', 'webhook:a', 'sa')
   await svc.setPluginSecret('builtin:triggers', 'webhook:b', 'sb')
@@ -767,7 +767,7 @@ test('读取请求体期间删除或重建端点，旧请求不再投递', { tim
     const handler = h.host.listRoutes().find((route) => route.path.endsWith('/webhook/:id'))!.handler
     const pending = Promise.resolve(handler(new Request(`http://hub${WEBHOOK_URL('hook')}`, {
       method: 'POST',
-      headers: { 'x-helm-signature': `sha256=${createHmac('sha256', 'old-secret').update(bytes).digest('hex')}` },
+      headers: { 'x-helmx-signature': `sha256=${createHmac('sha256', 'old-secret').update(bytes).digest('hex')}` },
       body,
       duplex: 'half',
     } as RequestInit)))
@@ -816,7 +816,7 @@ test('停用门禁：dispatch 挂起时 disable 得 409 plugin_has_live_tasks；
   const staleSig = `sha256=${createHmac('sha256', 'topsecret').update('after-disable').digest('hex')}`
   const stale = (await staleHandler(new Request(`http://hub${WEBHOOK_URL('hook')}`, {
     method: 'POST',
-    headers: { 'x-helm-signature': staleSig },
+    headers: { 'x-helmx-signature': staleSig },
     body: 'after-disable',
     duplex: 'half',
   } as RequestInit))) as Response
@@ -840,7 +840,7 @@ test('stop 有界等待：在途请求永不收敛时超时放行并如实记录
   void (handler(
     new Request(`http://hub${WEBHOOK_URL('hook')}`, {
       method: 'POST',
-      headers: { 'x-helm-signature': 'sha256=' + '0'.repeat(64) },
+      headers: { 'x-helmx-signature': 'sha256=' + '0'.repeat(64) },
       body: new ReadableStream<Uint8Array>({
         start(controller) {
           controller.enqueue(new TextEncoder().encode('partial'))
@@ -856,7 +856,7 @@ test('stop 有界等待：在途请求永不收敛时超时放行并如实记录
       await h.host.disable(TRIGGERS_PLUGIN_ID)
       break
     } catch (err) {
-      if (err instanceof HelmError && err.code === 'plugin_has_live_tasks') blocked = true
+      if (err instanceof HelmxError && err.code === 'plugin_has_live_tasks') blocked = true
       else throw err
     }
   }
@@ -896,7 +896,7 @@ test('停用门禁：body 读取阶段（凭据已查、body 未读完）disable
   })
   const pending = new Request(`http://hub${WEBHOOK_URL('hook')}`, {
     method: 'POST',
-    headers: { 'x-helm-signature': 'sha256=' + '0'.repeat(64) },
+    headers: { 'x-helmx-signature': 'sha256=' + '0'.repeat(64) },
     body: new ReadableStream<Uint8Array>({
       async start(controller) {
         controller.enqueue(new TextEncoder().encode('partial'))
@@ -915,7 +915,7 @@ test('停用门禁：body 读取阶段（凭据已查、body 未读完）disable
       await h.host.disable(TRIGGERS_PLUGIN_ID)
       break
     } catch (err) {
-      if (err instanceof HelmError && err.code === 'plugin_has_live_tasks') {
+      if (err instanceof HelmxError && err.code === 'plugin_has_live_tasks') {
         blockedAtBody = true
         break
       }
@@ -931,7 +931,7 @@ test('停用门禁：body 读取阶段（凭据已查、body 未读完）disable
   const staleSig = `sha256=${createHmac('sha256', 'topsecret').update('after').digest('hex')}`
   const stale = (await staleHandler(new Request(`http://hub${WEBHOOK_URL('hook')}`, {
     method: 'POST',
-    headers: { 'x-helm-signature': staleSig },
+    headers: { 'x-helmx-signature': staleSig },
     body: 'after',
     duplex: 'half',
   } as RequestInit))) as Response

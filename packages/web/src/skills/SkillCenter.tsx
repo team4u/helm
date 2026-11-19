@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react'
-import { HelmIcon } from '@helm/plugin-client'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { useLocationTargets, useSkills, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
@@ -93,7 +93,7 @@ export function SkillCenter({
       <div className="primary-center-topbar pane-topbar">
         <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
-            <HelmIcon name="sparkles" size={14} />
+            <HelmxIcon name="sparkles" size={14} />
             <span>{t('skills.center.title')}</span>
           </div>
         </div>
@@ -105,7 +105,7 @@ export function SkillCenter({
             onClick={() => void refreshAssets?.()}
             title={t('skills.center.refreshTitle')}
           >
-            <HelmIcon name="refresh-cw" size={12} />
+            <HelmxIcon name="refresh-cw" size={12} />
             <span className="pane-action-label">{t('common.refresh')}</span>
           </button>
           {isSplit ? (
@@ -122,7 +122,7 @@ export function SkillCenter({
       {/* Search bar and category filter pills */}
       <div className="primary-center-toolbar">
         <div className="primary-search-box">
-          <HelmIcon name="search" size={14} />
+          <HelmxIcon name="search" size={14} />
           <input
             type="text"
             placeholder={t('skills.center.searchPlaceholder')}
@@ -138,7 +138,7 @@ export function SkillCenter({
               aria-label={t('skills.center.clearSearch')}
               onClick={() => setQuery('')}
             >
-              <HelmIcon name="x" size={12} />
+              <HelmxIcon name="x" size={12} />
             </button>
           )}
         </div>
@@ -180,7 +180,7 @@ export function SkillCenter({
         ) : (
           <div className="primary-center-empty">
             <div className="primary-center-empty-icon">
-              <HelmIcon name="search" size={28} />
+              <HelmxIcon name="search" size={28} />
             </div>
             <div className="primary-center-empty-text">{t('skills.center.emptyTitle')}</div>
             <div className="primary-center-empty-hint">{t('skills.center.emptyHint')}</div>
@@ -193,7 +193,7 @@ export function SkillCenter({
                   setActiveTab('all')
                 }}
               >
-                <HelmIcon name="rotate-ccw" size={12} />
+                <HelmxIcon name="rotate-ccw" size={12} />
                 <span>{t('skills.center.resetFilters')}</span>
               </button>
             )}

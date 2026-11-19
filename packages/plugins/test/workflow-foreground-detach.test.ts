@@ -21,7 +21,7 @@ import { after, before, describe, it } from 'node:test'
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HelmError, type AgentExecutionInfo } from '@helm/protocol'
+import { HelmxError, type AgentExecutionInfo } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'
 import { detachForegroundSyncRun, type DetachEnginePorts, type DetachHostPorts } from '../src/workflow/detach.js'
@@ -112,12 +112,12 @@ function makeHost(options: { immediatePrompts?: string[] } = {}): ProgrammableHo
       const cancelled = new Promise<never>((_, reject) => {
         if (request.signal === undefined) return
         if (request.signal.aborted) {
-          reject(new HelmError('aborted', '子代理执行被取消', 409))
+          reject(new HelmxError('aborted', '子代理执行被取消', 409))
           return
         }
         request.signal.addEventListener(
           'abort',
-          () => reject(new HelmError('aborted', '子代理执行被取消', 409)),
+          () => reject(new HelmxError('aborted', '子代理执行被取消', 409)),
           { once: true },
         )
       })
@@ -125,13 +125,13 @@ function makeHost(options: { immediatePrompts?: string[] } = {}): ProgrammableHo
       return 'slow-result'
     },
     async invokeAction() {
-      throw new HelmError('unknown_action', '测试不调用动作', 404)
+      throw new HelmxError('unknown_action', '测试不调用动作', 404)
     },
     listActions() {
       return []
     },
     getConversation(id: number) {
-      if (id >= 900) throw new HelmError('not_found', `会话 ${id} 不存在`, 404)
+      if (id >= 900) throw new HelmxError('not_found', `会话 ${id} 不存在`, 404)
       return {
         id,
         title: `conv-${id}`,
@@ -239,7 +239,7 @@ describe('前台同步 subagent detach（startBackgroundAgent foreground 模式�
     assert.equal(host.settledCalls.length, 0, '自然完成的前台 run 不通知')
     await assert.rejects(
       () => service.detachForegroundRun(run.id),
-      (err: unknown) => err instanceof HelmError && err.code === 'detach_not_running' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'detach_not_running' && err.status === 409,
     )
     await service.close()
   })
@@ -255,7 +255,7 @@ describe('前台同步 subagent detach（startBackgroundAgent foreground 模式�
     await assert.rejects(
       () => service.detachForegroundRun(run.id),
       (err: unknown) =>
-        err instanceof HelmError && err.code === 'detach_not_foreground' && err.status === 409 && /已在后台/.test(err.message),
+        err instanceof HelmxError && err.code === 'detach_not_foreground' && err.status === 409 && /已在后台/.test(err.message),
     )
     await service.abort(run.id)
     await service.close()
@@ -269,15 +269,15 @@ describe('前台同步 subagent detach（startBackgroundAgent foreground 模式�
     await assert.rejects(
       () => service.detachForegroundRun(run.id),
       (err: unknown) =>
-        err instanceof HelmError && err.code === 'detach_not_foreground' && /已在后台/.test(err.message),
+        err instanceof HelmxError && err.code === 'detach_not_foreground' && /已在后台/.test(err.message),
     )
     await assert.rejects(
       () => service.detachForegroundRun('wf_nonexistent'),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found' && err.status === 404,
     )
     assert.rejects(
       () => service.waitForeground('wf_nonexistent'),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
     )
     await service.abort(run.id)
     await service.close()
@@ -483,10 +483,10 @@ describe('前台同步 workflow detach（service.run foreground 上下文）', (
       () => assert.fail('flush 失败必须显式报错'),
       (error: unknown) => error,
     )
-    assert.ok(failure instanceof HelmError)
-    assert.equal((failure as HelmError).code, 'detach_flush_failed')
-    assert.equal((failure as HelmError).status, 500)
-    assert.ok(/已转入后台/.test((failure as HelmError).message), '错误须如实说明 detach 已生效')
+    assert.ok(failure instanceof HelmxError)
+    assert.equal((failure as HelmxError).code, 'detach_flush_failed')
+    assert.equal((failure as HelmxError).status, 500)
+    assert.ok(/已转入后台/.test((failure as HelmxError).message), '错误须如实说明 detach 已生效')
     // 语义锁定：record file已持久 detachedAt/notifyParentOnSettle；等待者已被
     // 唤醒为 detached（工具返回后台句柄，不悬挂）；run 不被取消。
     assert.equal(await waitPromise, 'detached', 'flush 失败不得误取消/悬挂等待中的工具调用')
@@ -497,7 +497,7 @@ describe('前台同步 workflow detach（service.run foreground 上下文）', (
     // 重复 detach：已是后台（幂等拒绝），不得因 flush 失败重放转后台。
     await assert.rejects(
       () => service.detachForegroundRun(run.id),
-      (err: unknown) => err instanceof HelmError && err.code === 'detach_not_foreground',
+      (err: unknown) => err instanceof HelmxError && err.code === 'detach_not_foreground',
     )
     // 终态：notify 已翻转 → 恰一次结算汇报（重启恢复以 record 文件为权威）。
     host.release()
@@ -649,20 +649,20 @@ describe('detachForegroundSyncRun 纯逻辑授权（动作入口）', () => {
 
   function ports(
     run: WorkflowRunSummary | undefined,
-    options: { ownership?: (id: number) => 'helm' | 'bot' | 'human' } = {},
+    options: { ownership?: (id: number) => 'helmx' | 'bot' | 'human' } = {},
   ): DetachHostPorts & DetachEnginePorts {
-    const ownership = options.ownership ?? ((id: number) => (id === 1 ? 'human' : id === 2 ? 'helm' : 'human'))
+    const ownership = options.ownership ?? ((id: number) => (id === 1 ? 'human' : id === 2 ? 'helmx' : 'human'))
     return {
       getRun: (id: string): WorkflowRunSummary => {
-        if (run === undefined || run.id !== id) throw new HelmError('not_found', `工作流运行 ${id} 不存在`, 404, { runId: id })
+        if (run === undefined || run.id !== id) throw new HelmxError('not_found', `工作流运行 ${id} 不存在`, 404, { runId: id })
         return run
       },
       detach: async (id: string): Promise<WorkflowRunSummary> => {
-        if (run === undefined || run.id !== id) throw new HelmError('not_found', '不存在', 404)
+        if (run === undefined || run.id !== id) throw new HelmxError('not_found', '不存在', 404)
         return { ...run, detachedAt: 123 }
       },
       getConversation: (id: number) => {
-        if (id >= 900) throw new HelmError('not_found', `会话 ${id} 不存在`, 404)
+        if (id >= 900) throw new HelmxError('not_found', `会话 ${id} 不存在`, 404)
         return {
           id,
           title: `conv-${id}`,
@@ -712,16 +712,16 @@ describe('detachForegroundSyncRun 纯逻辑授权（动作入口）', () => {
   })
 
   it('automation 归属会话的前台 run 拒绝（防早结算）', timeout, async () => {
-    const helmRun = { ...fgRun, conversationId: 2 }
+    const helmxRun = { ...fgRun, conversationId: 2 }
     await assert.rejects(
-      () => detachForegroundSyncRun(ports(helmRun), { runId: 'wf_fg1' }, { conversationId: 2 }),
+      () => detachForegroundSyncRun(ports(helmxRun), { runId: 'wf_fg1' }, { conversationId: 2 }),
       (err: unknown) =>
-        err instanceof HelmError && err.code === 'detach_forbidden' && err.status === 403 && /归属 helm/.test(err.message),
+        err instanceof HelmxError && err.code === 'detach_forbidden' && err.status === 403 && /归属 helmx/.test(err.message),
     )
     // 无会话上下文的人工通道同样拒绝 automation run。
     await assert.rejects(
-      () => detachForegroundSyncRun(ports(helmRun), { runId: 'wf_fg1' }, {}),
-      (err: unknown) => err instanceof HelmError && err.code === 'detach_forbidden',
+      () => detachForegroundSyncRun(ports(helmxRun), { runId: 'wf_fg1' }, {}),
+      (err: unknown) => err instanceof HelmxError && err.code === 'detach_forbidden',
     )
   })
 
@@ -731,26 +731,26 @@ describe('detachForegroundSyncRun 纯逻辑授权（动作入口）', () => {
     await assert.rejects(
       () => detachForegroundSyncRun(ports(otherRun), { runId: 'wf_fg1' }, { conversationId: 1 }),
       (err: unknown) =>
-        err instanceof HelmError && err.code === 'detach_out_of_scope' && err.status === 403 && /自身或祖先/.test(err.message),
+        err instanceof HelmxError && err.code === 'detach_out_of_scope' && err.status === 403 && /自身或祖先/.test(err.message),
     )
     await assert.rejects(
       () => detachForegroundSyncRun(ports(undefined), { runId: 'wf_none' }, {}),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found' && err.status === 404,
     )
     await assert.rejects(
       () => detachForegroundSyncRun(ports(fgRun), { runId: '   ' }, {}),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
     )
   })
 
   it('引擎状态拒绝原样透传（终态 run：detach_not_running）', timeout, async () => {
     const engineRejecting = ports(fgRun)
     engineRejecting.detach = async () => {
-      throw new HelmError('detach_not_running', '运行 wf_fg1 已终态', 409, { runId: 'wf_fg1' })
+      throw new HelmxError('detach_not_running', '运行 wf_fg1 已终态', 409, { runId: 'wf_fg1' })
     }
     await assert.rejects(
       () => detachForegroundSyncRun(engineRejecting, { runId: 'wf_fg1' }, { conversationId: 1 }),
-      (err: unknown) => err instanceof HelmError && err.code === 'detach_not_running' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'detach_not_running' && err.status === 409,
     )
   })
 })

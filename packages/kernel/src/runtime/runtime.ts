@@ -1,5 +1,5 @@
 /**
- * Minimal `@helm/kernel` runtime facade (microkernel base).
+ * Minimal `@helmx/kernel` runtime facade (microkernel base).
  *
  * Responsibilities:
  * - Assemble and wire all kernel mechanisms (`pi-durable` / SQLite / FTS5 / `EnvFabric` / `PluginHost` / `Models`);
@@ -11,7 +11,7 @@
  */
 
 import {
-  HelmError,
+  HelmxError,
   type AgentSpawnRequest,
   type AskCreateSpec,
   type AskResult,
@@ -40,7 +40,7 @@ import {
   type NodeUpgradeResult,
   type PluginSkillAsset,
   type HubActivityCounts,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import type { Harness, Registry, ToolRegistration } from '@earendil-works/pi-durable'
 import type { JsonValue } from '@earendil-works/chord/json'
@@ -59,10 +59,10 @@ import { PluginPackageManagerStore } from '../plugins/package-store.js'
 import type { EnvFabric } from '../env/index.js'
 import { NodeForwardService, type NodeForwardEvent, type NodeForwardInput, type NodeForwardSession } from '../env/forward.js'
 import type { EventHub, SessionDocEventHub } from './events.js'
-import type { HelmDatabase } from './sqlite.js'
-import type { HelmStore } from './store.js'
+import type { HelmxDatabase } from './sqlite.js'
+import type { HelmxStore } from './store.js'
 import { THINKING_LEVELS } from './spawn.js'
-import type { HelmPluginConfigStore } from './plugin-config-store.js'
+import type { HelmxPluginConfigStore } from './plugin-config-store.js'
 import type { ConversationService } from './conversation-service.js'
 import type { RuntimeAgentSpawn } from './runtime-agent-spawn.js'
 import type { NodeManager } from './node-manager.js'
@@ -100,10 +100,10 @@ export type KernelRuntimeOptions = KernelBootOptions
 
 export class KernelRuntime {
   readonly dataDir: string
-  private readonly database: HelmDatabase
+  private readonly database: HelmxDatabase
   private readonly harness: Harness
   readonly registry: Registry<ToolRegistration<object, JsonValue>>
-  private readonly store: HelmStore
+  private readonly store: HelmxStore
   readonly events: EventHub
   /** Dedicated event surface for conversation session docs (HTTP `sessionDocEvents` port; single instance wired in constructor). */
   readonly sessionDocEvents: SessionDocEventHub
@@ -119,7 +119,7 @@ export class KernelRuntime {
   #started = false
   private startPromise: Promise<void> | undefined
   private closed = false
-  #fatalError: HelmError | undefined
+  #fatalError: HelmxError | undefined
   private fatalStorageNotified = false
   private readonly handledToolCalls = new Map<
     string,
@@ -146,7 +146,7 @@ export class KernelRuntime {
 
   static async open(options: KernelRuntimeOptions = {}): Promise<KernelRuntime> {
     if (options.models !== undefined && options.providers !== undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         'KernelRuntimeOptions.models and KernelRuntimeOptions.providers are mutually exclusive',
         400,
@@ -156,7 +156,7 @@ export class KernelRuntime {
     const runtime = new KernelRuntime({
       ...boot,
       hubPlatform: options.hubPlatform,
-      defaultModel: options.model || process.env['HELM_MODEL'] || undefined,
+      defaultModel: options.model || process.env['HELMX_MODEL'] || undefined,
       cwd: options.cwd ?? process.cwd(),
       hubUrl: options.hubUrl,
       seedKeyCache: boot.apiKeyCache,
@@ -182,7 +182,7 @@ export class KernelRuntime {
     this.harness = init.harness
     this.registry = init.registry
     this.store = init.store
-    this.hubUrlValue = init.hubUrl ?? `http://127.0.0.1:${process.env['HELM_PORT'] ?? '3202'}`
+    this.hubUrlValue = init.hubUrl ?? `http://127.0.0.1:${process.env['HELMX_PORT'] ?? '3202'}`
     this.documentStore = createGlobalDocumentStore(this.store)
 
     // Assemble and wire all internal kernel services
@@ -226,7 +226,7 @@ export class KernelRuntime {
     this.agentSpawn = this.svc.agentSpawn
 
     // Single delivery boundary for internal host events: after each SSE broadcast, `EventHub.publish` delivers
-    // once to `ctx.host.onEvent` listeners (validated + redacted HelmEvent envelope). Kernel automatic events
+    // once to `ctx.host.onEvent` listeners (validated + redacted HelmxEvent envelope). Kernel automatic events
     // (tracker/asks publishing directly via `events.publish`) are fire-and-forget so synchronous observation paths
     // like SDK advance never block; public `emitHostEvent` awaits delivery per contract without double-dispatching.
     this.events.setHostDispatcher((event) => this.dispatchInternalEvent(event.type, event))
@@ -240,8 +240,8 @@ export class KernelRuntime {
       dispose: () => managed.dispose(),
     }
     this.stashService.addRedaction(managed.token)
-    if (process.env['HELM_TOKEN']) {
-      this.stashService.addRedaction(process.env['HELM_TOKEN'])
+    if (process.env['HELMX_TOKEN']) {
+      this.stashService.addRedaction(process.env['HELMX_TOKEN'])
     }
     this.init.redactReport((t) => this.stashService.redact(t))
     this.svc.tracker.setDiagnosticSink(this.init.onDiagnostic)
@@ -264,7 +264,7 @@ export class KernelRuntime {
     await this.svc.profilesSvc.ensureDefault()
     this.modelsRegistry.setThinkingLevelValidator(async (level) => {
       if (!THINKING_LEVELS.has(level)) {
-        throw new HelmError('config_corrupt', `Invalid config.json.thinkingLevel (valid values: ${[...THINKING_LEVELS].join(' | ')})`, 500)
+        throw new HelmxError('config_corrupt', `Invalid config.json.thinkingLevel (valid values: ${[...THINKING_LEVELS].join(' | ')})`, 500)
       }
     })
     await this.modelsRegistry.loadDefaultsFromConfig()
@@ -328,7 +328,7 @@ export class KernelRuntime {
   async ensurePluginSkill(asset: PluginSkillAsset, pluginId: string): Promise<void> {
     const managed = /^managedByPlugin:[ \t]*['\"]?([^'\"\n]+)['\"]?[ \t]*$/m.exec(asset.skillMd)
     if (managed?.[1]?.trim() !== pluginId) {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_plugin_skill',
         `Managed skill '${asset.id}' for plugin '${pluginId}' must declare 'managedByPlugin: ${pluginId}' in SKILL.md frontmatter (got: ${managed?.[1] ?? 'missing'})`,
         400,
@@ -341,7 +341,7 @@ export class KernelRuntime {
   emitHostEvent(type: string, payload: unknown, options?: { broadcast?: boolean }): MaybePromise<void> {
     if (options?.broadcast === false) {
       if (type === 'plugin.changed' || type === 'plugin.session_doc.updated' || type.trim() === '') {
-        throw new HelmError('invalid_event', 'Host lifecycle events cannot be overridden for private dispatch', 400)
+        throw new HelmxError('invalid_event', 'Host lifecycle events cannot be overridden for private dispatch', 400)
       }
       return this.dispatchInternalEvent(type, payload)
     }
@@ -409,8 +409,8 @@ export class KernelRuntime {
     return run
   }
 
-  /** Fatal storage fault state (read-only): set after a Harness Storage fault or `HelmStore` persistence failure. */
-  get fatalError(): HelmError | undefined {
+  /** Fatal storage fault state (read-only): set after a Harness Storage fault or `HelmxStore` persistence failure. */
+  get fatalError(): HelmxError | undefined {
     return this.#fatalError
   }
 
@@ -428,12 +428,12 @@ export class KernelRuntime {
     if (this.closed) return
     const safeDetail = this.stashService.redact(formatDiagnosticError(error))
     const recorded =
-      error instanceof HelmError
-        ? new HelmError(error.code, this.stashService.redact(error.message), error.status, {
+      error instanceof HelmxError
+        ? new HelmxError(error.code, this.stashService.redact(error.message), error.status, {
             source,
             cause: safeDetail,
           })
-        : new HelmError(
+        : new HelmxError(
             source === 'store' ? 'store_flush_failed' : 'storage_failed',
             `Fatal storage fault (${source}): ${safeDetail}`,
             500,
@@ -445,7 +445,7 @@ export class KernelRuntime {
     this.emitDiagnostic({
       level: 'error',
       source,
-      message: source === 'store' ? 'HelmStore persistence failed; kernel entered fatal fault state' : 'Harness closed due to fatal storage fault',
+      message: source === 'store' ? 'HelmxStore persistence failed; kernel entered fatal fault state' : 'Harness closed due to fatal storage fault',
       error,
     })
     if (!this.fatalStorageNotified) {
@@ -494,7 +494,7 @@ export class KernelRuntime {
 
   setHubUrl(url: string): void {
     if (typeof url !== 'string' || url === '') {
-      throw new HelmError('validation_error', `Hub URL must be a non-empty string: ${String(url)}`, 400)
+      throw new HelmxError('validation_error', `Hub URL must be a non-empty string: ${String(url)}`, 400)
     }
     this.hubUrlValue = url
   }
@@ -598,7 +598,7 @@ export class KernelRuntime {
 
   get plugins(): PluginHost {
     if (this.pluginHost === undefined) {
-      throw new HelmError('internal_error', 'PluginHost is not attached to KernelRuntime yet (initialize not called)', 500)
+      throw new HelmxError('internal_error', 'PluginHost is not attached to KernelRuntime yet (initialize not called)', 500)
     }
     return this.pluginHost
   }
@@ -933,7 +933,7 @@ export class KernelRuntime {
   ): Promise<void> {
     const validateLevel = (level: string) => {
       if (!THINKING_LEVELS.has(level)) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `Invalid thinkingLevel '${level}'; valid values: ${[...THINKING_LEVELS].join(' | ')}`,
           400,
@@ -955,7 +955,7 @@ export class KernelRuntime {
   async setModelThinkingDefault(model: string, level: string): Promise<void> {
     const validateLevel = (value: string) => {
       if (!THINKING_LEVELS.has(value)) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `Invalid thinking level '${value}'; valid values: ${[...THINKING_LEVELS].join(' | ')}`,
           400,
@@ -1007,7 +1007,7 @@ export class KernelRuntime {
 
   get hubUrl(): string { return this.hubUrlValue }
   get processToken(): string | undefined { return this.processTokenHandle?.tokenOf() }
-  get pluginConfigStore(): HelmPluginConfigStore { return this.svc.pluginConfig }
+  get pluginConfigStore(): HelmxPluginConfigStore { return this.svc.pluginConfig }
   get profiles(): ProfileService { return this.svc.profilesSvc }
   get skills(): SkillService { return this.svc.skillsSvc }
   get artifacts(): SvcArtifactService { return this.svc.artifactsSvc }

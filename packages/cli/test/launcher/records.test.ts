@@ -7,8 +7,8 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { test } from 'node:test';
-import { useTempDir } from '@helm/test-kit/node';
-import { readCurrentRelease, writeCurrentRelease } from '@helm/env-io';
+import { useTempDir } from '@helmx/test-kit/node';
+import { readCurrentRelease, writeCurrentRelease } from '@helmx/env-io';
 import {
   isBlockedActive,
   parseLinuxStartTime,
@@ -35,16 +35,16 @@ import {
 import { UsageError } from '../../src/launcher/io.js';
 
 test('hub.pid round-trips and rejects invalid shapes explicitly', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-pid-');
+  const root = useTempDir(t, 'helmx-launcher-pid-');
   assert.equal(await readPidRecord(root), null);
 
   const record = {
     pid: 12345,
     version: '1.2.3',
-    entryPath: '/opt/releases/1.2.3/uuid/node_modules/@team4u/helm-hub/start.mjs',
+    entryPath: '/opt/releases/1.2.3/uuid/node_modules/@helmx/hub/start.mjs',
     port: 3202,
     host: '127.0.0.1',
-    dataDir: '/home/u/.helm',
+    dataDir: '/home/u/.helmx',
     startedAt: '2026-01-01T00:00:00.000Z',
   };
   await writePidRecord(root, record);
@@ -83,7 +83,7 @@ test('Linux /proc start time parsing counts fields after the comm segment only',
 });
 
 test('removePidFileIfMatch only removes an unchanged record (compare-and-swap)', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-pidcas-');
+  const root = useTempDir(t, 'helmx-launcher-pidcas-');
   const record = {
     pid: 4711,
     version: '1.0.0',
@@ -112,24 +112,24 @@ test('launch configuration precedence: flags > env > saved > defaults; web-dist 
   assert.deepEqual(
     resolveEffectiveLaunchConfig({
       flags: { port: 4001, host: '0.0.0.0', dataDir: '/d/flags' },
-      env: { HELM_PORT: '4002', HELM_HOST: '127.0.0.2', HELM_DATA_DIR: '/d/env' },
+      env: { HELMX_PORT: '4002', HELMX_HOST: '127.0.0.2', HELMX_DATA_DIR: '/d/env' },
       saved: { port: 4003, host: '127.0.0.3', dataDir: '/d/saved', model: 'm-saved' },
     }),
     { port: 4001, host: '0.0.0.0', dataDir: '/d/flags', model: 'm-saved' },
   );
   assert.deepEqual(
-    resolveEffectiveLaunchConfig({ env: { HELM_PORT: '4002', HELM_DATA_DIR: '/d/env' }, saved: null }),
+    resolveEffectiveLaunchConfig({ env: { HELMX_PORT: '4002', HELMX_DATA_DIR: '/d/env' }, saved: null }),
     { port: 4002, host: '127.0.0.1', dataDir: '/d/env' },
   );
   assert.deepEqual(resolveEffectiveLaunchConfig({ env: {} }), { port: 3202, host: '127.0.0.1' });
-  assert.throws(() => resolveEffectiveLaunchConfig({ env: { HELM_PORT: 'abc' } }), /HELM_PORT/);
-  // HELM_WEB_DIST_DIR=false explicitly disables static hosting; a path passes through.
+  assert.throws(() => resolveEffectiveLaunchConfig({ env: { HELMX_PORT: 'abc' } }), /HELMX_PORT/);
+  // HELMX_WEB_DIST_DIR=false explicitly disables static hosting; a path passes through.
   assert.deepEqual(
-    resolveEffectiveLaunchConfig({ env: { HELM_WEB_DIST_DIR: 'false' } }),
+    resolveEffectiveLaunchConfig({ env: { HELMX_WEB_DIST_DIR: 'false' } }),
     { port: 3202, host: '127.0.0.1', webDistDir: 'false' },
   );
   assert.deepEqual(
-    resolveEffectiveLaunchConfig({ env: { HELM_WEB_DIST_DIR: '/w/dist' } }),
+    resolveEffectiveLaunchConfig({ env: { HELMX_WEB_DIST_DIR: '/w/dist' } }),
     { port: 3202, host: '127.0.0.1', webDistDir: '/w/dist' },
   );
   assert.deepEqual(persistableLaunchConfig({ port: 5, host: 'h', dataDir: '/d' }), {
@@ -140,7 +140,7 @@ test('launch configuration precedence: flags > env > saved > defaults; web-dist 
 });
 
 test('current entry access: engine record shape, entryPath extraction, explicit failures', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-current-');
+  const root = useTempDir(t, 'helmx-launcher-current-');
   await assert.rejects(readCurrentEntry(root), (error: unknown) => {
     assert.ok(error instanceof UsageError);
     assert.equal(error.code, 'no_release_installed');
@@ -172,46 +172,46 @@ test('current entry access: engine record shape, entryPath extraction, explicit 
 
 test('layout helpers: update interval, dist-tag channels, and their invalid forms', { timeout: 60_000 }, () => {
   assert.equal(resolveUpdateIntervalMs({}), 15 * 60 * 1000);
-  assert.equal(resolveUpdateIntervalMs({ HELM_HUB_UPDATE_INTERVAL_MS: '5000' }), 5000);
-  assert.throws(() => resolveUpdateIntervalMs({ HELM_HUB_UPDATE_INTERVAL_MS: '0' }), /invalid HELM_HUB_UPDATE_INTERVAL_MS/);
-  assert.throws(() => resolveUpdateIntervalMs({ HELM_HUB_UPDATE_INTERVAL_MS: 'abc' }), /invalid HELM_HUB_UPDATE_INTERVAL_MS/);
+  assert.equal(resolveUpdateIntervalMs({ HELMX_HUB_UPDATE_INTERVAL_MS: '5000' }), 5000);
+  assert.throws(() => resolveUpdateIntervalMs({ HELMX_HUB_UPDATE_INTERVAL_MS: '0' }), /invalid HELMX_HUB_UPDATE_INTERVAL_MS/);
+  assert.throws(() => resolveUpdateIntervalMs({ HELMX_HUB_UPDATE_INTERVAL_MS: 'abc' }), /invalid HELMX_HUB_UPDATE_INTERVAL_MS/);
 
   assert.equal(resolveUpdateTag({}), 'latest');
-  assert.equal(resolveUpdateTag({ HELM_HUB_UPDATE_TAG: 'beta' }), 'beta');
-  assert.throws(() => resolveUpdateTag({ HELM_HUB_UPDATE_TAG: '../evil' }), /invalid dist-tag/);
+  assert.equal(resolveUpdateTag({ HELMX_HUB_UPDATE_TAG: 'beta' }), 'beta');
+  assert.throws(() => resolveUpdateTag({ HELMX_HUB_UPDATE_TAG: '../evil' }), /invalid dist-tag/);
   assert.throws(() => assertDistTag('1.2.3'), /looks like a version, not a dist-tag/);
   assert.throws(() => assertDistTag('foo bar'), /invalid dist-tag/);
   assert.equal(assertDistTag('beta-1.0'), 'beta-1.0');
 });
 
 test('layout helpers: install root, registry, package name, cooldown env', { timeout: 60_000 }, () => {
-  assert.equal(resolveInstallRoot({ HELM_HUB_INSTALL_ROOT: '/opt/hub' }), '/opt/hub');
-  assert.equal(resolveInstallRoot({ HELM_HUB_INSTALL_ROOT: '/opt/hub/' }), '/opt/hub');
-  assert.match(resolveInstallRoot({}), /\/\.helm-hub$/);
+  assert.equal(resolveInstallRoot({ HELMX_HUB_INSTALL_ROOT: '/opt/hub' }), '/opt/hub');
+  assert.equal(resolveInstallRoot({ HELMX_HUB_INSTALL_ROOT: '/opt/hub/' }), '/opt/hub');
+  assert.match(resolveInstallRoot({}), /\/\.helmx-hub$/);
   assert.equal(resolveRegistryUrl({}, 'https://registry.example.com/'), 'https://registry.example.com');
-  assert.equal(resolveRegistryUrl({ HELM_NPM_REGISTRY: 'https://mirror.example.com' }), 'https://mirror.example.com');
+  assert.equal(resolveRegistryUrl({ HELMX_NPM_REGISTRY: 'https://mirror.example.com' }), 'https://mirror.example.com');
   assert.throws(() => resolveRegistryUrl({}, 'ftp://bad'), /invalid npm registry URL/);
-  assert.equal(resolvePayloadPackageName({}), '@team4u/helm-hub');
-  assert.equal(resolvePayloadPackageName({ HELM_PAYLOAD_PACKAGE: '@acme/payload' }), '@acme/payload');
-  assert.throws(() => resolvePayloadPackageName({ HELM_PAYLOAD_PACKAGE: 'not a name' }), /invalid payload package name/);
+  assert.equal(resolvePayloadPackageName({}), '@helmx/hub');
+  assert.equal(resolvePayloadPackageName({ HELMX_PAYLOAD_PACKAGE: '@acme/payload' }), '@acme/payload');
+  assert.throws(() => resolvePayloadPackageName({ HELMX_PAYLOAD_PACKAGE: 'not a name' }), /invalid payload package name/);
   assert.equal(resolveBlockedCooldownMs({}), 30 * 60_000);
-  assert.equal(resolveBlockedCooldownMs({ HELM_UPGRADE_BLOCK_COOLDOWN_MS: '5000' }), 5000);
-  assert.throws(() => resolveBlockedCooldownMs({ HELM_UPGRADE_BLOCK_COOLDOWN_MS: '-1' }), /invalid HELM_UPGRADE_BLOCK_COOLDOWN_MS/);
-  assert.match(defaultHubDataDir({}), /\/\.helm$/);
-  assert.equal(defaultHubDataDir({ HELM_DATA_DIR: '/data/helm' }), '/data/helm');
+  assert.equal(resolveBlockedCooldownMs({ HELMX_UPGRADE_BLOCK_COOLDOWN_MS: '5000' }), 5000);
+  assert.throws(() => resolveBlockedCooldownMs({ HELMX_UPGRADE_BLOCK_COOLDOWN_MS: '-1' }), /invalid HELMX_UPGRADE_BLOCK_COOLDOWN_MS/);
+  assert.match(defaultHubDataDir({}), /\/\.helmx$/);
+  assert.equal(defaultHubDataDir({ HELMX_DATA_DIR: '/data/helmx' }), '/data/helmx');
 });
 
 test('install/data isolation guard rejects nesting in both directions', { timeout: 60_000 }, (t) => {
-  const root = useTempDir(t, 'helm-launcher-isol-');
+  const root = useTempDir(t, 'helmx-launcher-isol-');
   const dataInside = path.join(root, 'data');
   assert.throws(() => assertInstallIsolation(root, dataInside, {}), /must not overlap/);
-  const outsideData = path.join(path.dirname(root), 'helm-data-elsewhere');
+  const outsideData = path.join(path.dirname(root), 'helmx-data-elsewhere');
   assert.ok(assertInstallIsolation(root, outsideData, {}) === undefined);
   // Implicit default from env.
-  assert.throws(() => assertInstallIsolation(root, undefined, { HELM_DATA_DIR: path.join(root, 'nested') }), /must not overlap/);
+  assert.throws(() => assertInstallIsolation(root, undefined, { HELMX_DATA_DIR: path.join(root, 'nested') }), /must not overlap/);
   // Install root inside the data directory is equally rejected.
   const dataDir = path.join(root, 'userdata');
-  const installInside = path.join(dataDir, 'programs', 'helm-hub');
+  const installInside = path.join(dataDir, 'programs', 'helmx-hub');
   mkdirSync(installInside, { recursive: true });
   assert.throws(() => assertInstallIsolation(installInside, dataDir, {}), /must not overlap/);
 });

@@ -7,7 +7,7 @@
  * - Structural corruption rejects explicitly with `config_corrupt` (never silently discarded or rebuilt as `{}`);
  * - `getRecord` reads the in-memory mirror synchronized on write/load for `PluginSummary.managed` decoration.
  */
-import { HelmError, isJsonObject, type PluginPackageRecord, type PluginPackageSource } from '@helm/protocol';
+import { HelmxError, isJsonObject, type PluginPackageRecord, type PluginPackageSource } from '@helmx/protocol';
 import type { ConfigService } from '../services/config.js';
 
 /** Validates `source` shape in a stored record (non-empty strings matching discriminated union fields). */
@@ -35,16 +35,16 @@ function assertSourceShape(pluginId: string, v: unknown): PluginPackageSource {
   throw corruptSource(pluginId, `unknown kind: ${String(kind)}`);
 }
 
-function corruptSource(pluginId: string, detail: string): HelmError {
-  return new HelmError(
+function corruptSource(pluginId: string, detail: string): HelmxError {
+  return new HelmxError(
     'config_corrupt',
     `Invalid config.json pluginPackages.${pluginId}.source (${detail})`,
     500,
   );
 }
 
-function corrupt(detail: string): HelmError {
-  return new HelmError('config_corrupt', `Invalid config.json pluginPackages structure (${detail})`, 500);
+function corrupt(detail: string): HelmxError {
+  return new HelmxError('config_corrupt', `Invalid config.json pluginPackages structure (${detail})`, 500);
 }
 
 /** Validates a single stored package record (rejects rather than fabricating defaults). */
@@ -145,7 +145,7 @@ export class PluginPackageManagerStore {
       return { ...current, pluginPackages: next };
     });
     if (removed === undefined) {
-      throw new HelmError('unknown_plugin_package', `Plugin ${pluginId} has no managed install record`, 404, { pluginId });
+      throw new HelmxError('unknown_plugin_package', `Plugin ${pluginId} has no managed install record`, 404, { pluginId });
     }
     this.mirror.delete(pluginId);
     return removed;

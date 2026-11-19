@@ -22,7 +22,7 @@ import { after, before, describe, it } from 'node:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import type { AgentExecutionInfo, AgentSpawnRequest } from '@helm/protocol'
+import type { AgentExecutionInfo, AgentSpawnRequest } from '@helmx/protocol'
 import { parseWorkflowSpawnMeta, type WorkflowRunSummary } from '../src/contracts.js'
 import { runWorkflow, type WorkflowHost } from '../src/workflow/engine/runtime.js'
 import {

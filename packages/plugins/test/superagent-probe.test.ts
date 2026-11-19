@@ -26,9 +26,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import {
-  HelmError,
+  HelmxError,
   type ConversationSummary,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import {
   appendProbes,
   collectionViolation,
@@ -40,8 +40,8 @@ import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/ind
 import { createHerdrPlugin } from '../src/herdr.js'
 import { ipcLineCall, serveTransport } from './helpers/herdr-unit-fixture.js'
 import type { HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
-import type { HelmHostNodeIpcPort, RpcResult } from '@helm/protocol'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import type { HelmxHostNodeIpcPort, RpcResult } from '@helmx/protocol'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   MemoryConfigStore,
   MemoryDocStore,
@@ -65,7 +65,7 @@ async function openRuntime(dir: string): Promise<KernelRuntime & { __faux: FauxP
 }
 
 test('关闭内核后拒绝新输入，结算回调不能重新启动模型回合', { timeout: 60_000 }, async () => {
-  const root = mkdtempSync(join(tmpdir(), 'helm-shutdown-input-'))
+  const root = mkdtempSync(join(tmpdir(), 'helmx-shutdown-input-'))
   const kernel = await openRuntime(root)
   try {
     assert.equal(kernel.isClosing, false)
@@ -73,7 +73,7 @@ test('关闭内核后拒绝新输入，结算回调不能重新启动模型回�
     assert.equal(kernel.isClosing, true)
     await assert.rejects(
       kernel.submitInput(1, '关停期间的后台汇报', { origin: 'agent' }),
-      (error: unknown) => error instanceof HelmError && error.code === 'runtime_closed',
+      (error: unknown) => error instanceof HelmxError && error.code === 'runtime_closed',
     )
   } finally {
     try { await kernel.close() } finally { rmSync(root, { recursive: true, force: true }) }
@@ -85,10 +85,10 @@ test('关闭内核后拒绝新输入，结算回调不能重新启动模型回�
 // ---------------------------------------------------------------------------
 
 test('原生事实端口：getConversationOwnership 现读真实事实（探针构造同源）', { timeout: 60_000 }, async () => {
-  const root = mkdtempSync(join(tmpdir(), 'helm-probe-native-'))
+  const root = mkdtempSync(join(tmpdir(), 'helmx-probe-native-'))
   const kernel = await openRuntime(join(root, 'k1'))
   try {
-    // 用户直连会话（未登记）：human；spawn 子会话：自动 helm 归属。
+    // 用户直连会话（未登记）：human；spawn 子会话：自动 helmx 归属。
     const manual = await kernel.createConversation({})
     kernel.__faux.setResponses([fauxAssistantMessage('worker 完成')])
     let childId: number | undefined
@@ -104,7 +104,7 @@ test('原生事实端口：getConversationOwnership 现读真实事实（探针�
     // 归属权事实由 getConversationOwnership 现读（superagent 探针构造同源端口）。
     assert.equal(kernel.getConversationOwnership(1), 'human', 'root 恒 human')
     assert.equal(kernel.getConversationOwnership(manual.id), 'human', '用户直连默认 human')
-    assert.equal(kernel.getConversationOwnership(childId), 'helm', 'spawn 子会话自动 helm')
+    assert.equal(kernel.getConversationOwnership(childId), 'helmx', 'spawn 子会话自动 helmx')
 
     // 即时更改：manual 标记 bot 后端口现读立即生效。
     kernel.markConversationOwnership(manual.id, 'bot')
@@ -116,7 +116,7 @@ test('原生事实端口：getConversationOwnership 现读真实事实（探针�
 })
 
 test('getConversationOwnership：root human / 未登记 human / 现读持久登记 / 不存在与已删除显式 not_found / 删除清残留', { timeout: 60_000 }, async () => {
-  const root = mkdtempSync(join(tmpdir(), 'helm-probe-own-'))
+  const root = mkdtempSync(join(tmpdir(), 'helmx-probe-own-'))
   const kernel = await openRuntime(join(root, 'k1'))
   try {
     assert.equal(kernel.getConversationOwnership(1), 'human', 'root 恒 human')
@@ -130,15 +130,15 @@ test('getConversationOwnership：root human / 未登记 human / 现读持久登�
     // 不存在：显式 not_found（不猜造，不把未知目标当授权对象）。
     await assert.throws(
       () => kernel.getConversationOwnership(999_999),
-      (err: unknown) => err instanceof HelmError && (err as HelmError).status === 404,
+      (err: unknown) => err instanceof HelmxError && (err as HelmxError).status === 404,
     )
 
     // 已删除：登记必须清零，绝不能把残留登记当可执行授权。
-    kernel.markConversationOwnership(conv.id, 'helm')
+    kernel.markConversationOwnership(conv.id, 'helmx')
     await kernel.deleteConversation(conv.id)
     await assert.throws(
       () => kernel.getConversationOwnership(conv.id),
-      (err: unknown) => err instanceof HelmError && (err as HelmError).status === 404,
+      (err: unknown) => err instanceof HelmxError && (err as HelmxError).status === 404,
       '已删除会话归属读取必须显式 not_found',
     )
   } finally {
@@ -179,7 +179,7 @@ const validProbe: WatchdogProbe = {
   targetId: '7',
   targetKind: 'conversation',
   conversationId: 7,
-  ownedBy: 'helm',
+  ownedBy: 'helmx',
   status: 'working',
   stateChangeSeq: 3,
   stalledMs: 1_000,
@@ -209,7 +209,7 @@ test('非法探针在采集边界即拒绝（invalid_diagnostics_probe），不�
         appendProbes(collection, [probe])
         appended = true
       },
-      (err: unknown) => err instanceof HelmError && err.code === 'invalid_diagnostics_probe',
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_diagnostics_probe',
       `探针 ${JSON.stringify(probe)} 必须被采集边界拒绝`,
     )
     assert.equal(appended, false, '非法探针绝不进入 collection')
@@ -225,7 +225,7 @@ test('合法探针（含可选字段缺省与全部新字段）通过采集边�
     targetId: 'w:p1',
     targetKind: 'external',
     nodeId: 'build-01',
-    ownedBy: 'helm',
+    ownedBy: 'helmx',
     status: 'blocked',
     stateChangeSeq: 9,
     stalledMs: 0,
@@ -304,9 +304,9 @@ class ProbeFakeTransport implements HerdrTransport {
     this.calls.push({ target, method })
     const bucket = this.bucketOf(target)
     if (method === 'agent.get') {
-      if (this.failAgentGet) throw new HelmError('herdr_unavailable', 'socket down', 503)
+      if (this.failAgentGet) throw new HelmxError('herdr_unavailable', 'socket down', 503)
       const pane = bucket.get(String(params['target']))
-      if (!pane) throw new HelmError('agent_not_found', 'no pane', 404)
+      if (!pane) throw new HelmxError('agent_not_found', 'no pane', 404)
       return { type: 'agent_info', agent: this.agentInfoOf(pane) }
     }
     if (method === 'session.snapshot') {
@@ -333,7 +333,7 @@ class ProbeFakeTransport implements HerdrTransport {
     return { type: 'ok' }
   }
   async readOutput(): Promise<string> {
-    throw new HelmError('unsupported', 'probe test', 400)
+    throw new HelmxError('unsupported', 'probe test', 400)
   }
   async removeOutput(): Promise<void> {}
   async runGate() {
@@ -356,39 +356,39 @@ class ProbeBackend implements PluginHostBackend {
   profiles = {
     list: async () => [],
     get: async () => undefined,
-    getSystem: async () => { throw new HelmError('not_found', '无 SYSTEM.md', 404) },
-    save: async () => { throw new HelmError('unsupported', 'fixture 只读', 501) },
+    getSystem: async () => { throw new HelmxError('not_found', '无 SYSTEM.md', 404) },
+    save: async () => { throw new HelmxError('unsupported', 'fixture 只读', 501) },
     directory: async (id: string) => `/tmp/probe-fixture-profiles/${id}`,
   }
   skills = {
     list: async () => [],
-    readFile: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+    readFile: async () => { throw new HelmxError('unsupported', '本 fixture 无技能', 501) },
     directory: async (id: string) => `/tmp/probe-fixture-skills/${id}`,
-    ensureSkill: async () => { throw new HelmError('unsupported', '本 fixture 无技能', 501) },
+    ensureSkill: async () => { throw new HelmxError('unsupported', '本 fixture 无技能', 501) },
   }
   secrets = {
     get: async () => undefined,
-    set: async () => { throw new HelmError('unsupported', 'fixture 只读 secrets', 501) },
-    delete: async () => { throw new HelmError('unsupported', 'fixture 只读 secrets', 501) },
+    set: async () => { throw new HelmxError('unsupported', 'fixture 只读 secrets', 501) },
+    delete: async () => { throw new HelmxError('unsupported', 'fixture 只读 secrets', 501) },
     addRedaction: () => () => {},
   }
   setPluginConfig(): Promise<void> { return Promise.resolve() }
-  nodeIpc: HelmHostNodeIpcPort | undefined = undefined
+  nodeIpc: HelmxHostNodeIpcPort | undefined = undefined
   redact(text: string): string { return text }
   redactText(text: string): string { return text }
   buildSpawnEnv(): Record<string, string> { return {} }
-  async getConversationDetail(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无详情', 501) }
+  async getConversationDetail(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 无详情', 501) }
   async listArtifacts(): Promise<never[]> { return [] }
-  async createArtifact(): Promise<never> { throw new HelmError('unsupported', 'fixture does not create artifacts', 501) }
-  async getArtifact(): Promise<never> { throw new HelmError('not_found', '无产物', 404) }
-  async completeText(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型', 501) }
-  executionEnv(): never { throw new HelmError('unsupported', '本 fixture 无执行环境', 501) }
+  async createArtifact(): Promise<never> { throw new HelmxError('unsupported', 'fixture does not create artifacts', 501) }
+  async getArtifact(): Promise<never> { throw new HelmxError('not_found', '无产物', 404) }
+  async completeText(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 无模型', 501) }
+  executionEnv(): never { throw new HelmxError('unsupported', '本 fixture 无执行环境', 501) }
   withFileLock<T>(_path: string, fn: () => Promise<T>): Promise<T> { return fn() }
-  async atomicWriteFile(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无原子写', 501) }
-  async refreshModels(): Promise<never> { throw new HelmError('unsupported', '本 fixture 无模型刷新', 501) }
-  async resolveSpawnTarget(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
+  async atomicWriteFile(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 无原子写', 501) }
+  async refreshModels(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 无模型刷新', 501) }
+  async resolveSpawnTarget(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 不解析 spawn 靶点', 501) }
   listActiveSpawnExecutions(): [] { return [] }
-  async inspectNodePathUsage(): Promise<never> { throw new HelmError('unsupported', '本 fixture 不扫描进程占用', 501) }
+  async inspectNodePathUsage(): Promise<never> { throw new HelmxError('unsupported', '本 fixture 不扫描进程占用', 501) }
   constructor() {
     this.conversations.set(1, makeSummary(1))
     this.conversations.set(3, makeSummary(3))
@@ -410,7 +410,7 @@ class ProbeBackend implements PluginHostBackend {
   }
   getConversation(id: number): ConversationSummary {
     const found = this.conversations.get(id)
-    if (!found) throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+    if (!found) throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
     return found
   }
   updateConversation(id: number): Promise<ConversationSummary> {
@@ -421,7 +421,7 @@ class ProbeBackend implements PluginHostBackend {
   }
   markConversationOwnership(): void {}
   async createAsk(): Promise<never> {
-    throw new HelmError('unsupported', 'probe test', 400)
+    throw new HelmxError('unsupported', 'probe test', 400)
   }
   async cancelAsk(): Promise<void> {}
   registerAskSeqResolver(): () => void {
@@ -438,7 +438,7 @@ class ProbeBackend implements PluginHostBackend {
     }
   }
   async abortConversation(): Promise<void> {}
-  getConversationOwnership(): 'helm' | 'bot' | 'human' {
+  getConversationOwnership(): 'helmx' | 'bot' | 'human' {
     return 'human'
   }
   isClosing(): boolean {
@@ -456,8 +456,8 @@ class ProbeBackend implements PluginHostBackend {
   prepareAction(): { idempotent: boolean } {
     return { idempotent: false }
   }
-  async execEnv(): Promise<import('@helm/protocol').EnvExecResponse> {
-    throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501)
+  async execEnv(): Promise<import('@helmx/protocol').EnvExecResponse> {
+    throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501)
   }
   withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') }
   listActions(): [] {
@@ -493,7 +493,7 @@ async function makeProbeEnv(
     seq?: number
   }>,
 ): Promise<ProbeEnv> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-probe-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-herdr-probe-'))
   const backend = new ProbeBackend()
   const docs = new MemoryDocStore()
   docs.set('builtin:herdr:managed', {
@@ -553,7 +553,7 @@ async function makeProbeEnv(
       }
     },
     subscribe: async () => {
-      throw new HelmError('unsupported', '本 fixture 不承载远端 IPC 订阅', 501)
+      throw new HelmxError('unsupported', '本 fixture 不承载远端 IPC 订阅', 501)
     },
   }
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
@@ -594,7 +594,7 @@ async function runHerdrTick(env: ProbeEnv): Promise<WatchdogProbe[]> {
 
 test('Herdr tick：targetKind external + nodeId 归一 local + 权威 seq + facts 齐全', { timeout: 60_000 }, async () => {
   const env = await makeProbeEnv([
-    { paneId: 'w:p1', agentName: 'helm-wf-a', cwd: '/tmp/a', status: 'working', seq: 5 },
+    { paneId: 'w:p1', agentName: 'helmx-wf-a', cwd: '/tmp/a', status: 'working', seq: 5 },
   ])
   try {
     const probes = await runHerdrTick(env)
@@ -603,7 +603,7 @@ test('Herdr tick：targetKind external + nodeId 归一 local + 权威 seq + fact
     assert.equal(probe.targetKind, 'external')
     assert.equal(probe.nodeId, 'local', '本机 pane nodeId 归一为 local')
     assert.equal(probe.targetId, 'w:p1')
-    assert.equal(probe.ownedBy, 'helm')
+    assert.equal(probe.ownedBy, 'helmx')
     assert.equal(probe.status, 'working')
     assert.equal(probe.stateChangeSeq, 5, '成功 agent.get 输出真实权威 seq')
     assert.equal(probe.stalledMs, 0, '首次观测从 0 起')
@@ -611,7 +611,7 @@ test('Herdr tick：targetKind external + nodeId 归一 local + 权威 seq + fact
     assert.equal(facts['kind'], 'herdr')
     assert.equal(facts['parentConversationId'], 3)
     assert.equal(facts['pendingAskCount'], 0)
-    assert.equal(facts['agentName'], 'helm-wf-a')
+    assert.equal(facts['agentName'], 'helmx-wf-a')
   } finally {
     await env.close()
   }
@@ -619,7 +619,7 @@ test('Herdr tick：targetKind external + nodeId 归一 local + 权威 seq + fact
 
 test('Herdr tick：同名 Agent 换至其他 tab 后不再投射自动化归属', { timeout: 60_000 }, async () => {
   const env = await makeProbeEnv([
-    { paneId: 'w:p1', agentName: 'helm-wf-a', cwd: '/tmp/a', status: 'working', seq: 5 },
+    { paneId: 'w:p1', agentName: 'helmx-wf-a', cwd: '/tmp/a', status: 'working', seq: 5 },
   ])
   try {
     env.transport.panes.get('w:p1')!.tabId = 'human-tab'
@@ -636,15 +636,15 @@ test('Herdr tick：两个节点同 paneId 仍可区分（nodeId + targetId 复�
   // 同 paneId 两个节点：受控 transport 按 target.nodeId 分桶提供权威
   //（本机分桶不可达、远端分桶正常），验证探针凭 nodeId + targetId 复合区分。
   const env = await makeProbeEnv([
-    { paneId: 'w:p9', agentName: 'helm-wf-local', cwd: '/tmp/l', status: 'working', seq: 1 },
-    { nodeId: 'build-01', paneId: 'w:p9', agentName: 'helm-wf-remote', cwd: '/tmp/r', status: 'working', seq: 2 },
+    { paneId: 'w:p9', agentName: 'helmx-wf-local', cwd: '/tmp/l', status: 'working', seq: 1 },
+    { nodeId: 'build-01', paneId: 'w:p9', agentName: 'helmx-wf-remote', cwd: '/tmp/r', status: 'working', seq: 2 },
   ])
   try {
     const origCall = env.transport.call.bind(env.transport)
     env.transport.call = async (target, method, params) => {
       // 本机分桶模拟 socket 分区（不可达）；远端分桶正常返回。
       if (method === 'agent.get' && target.nodeId === undefined) {
-        throw new HelmError('herdr_unavailable', 'local down', 503)
+        throw new HelmxError('herdr_unavailable', 'local down', 503)
       }
       return origCall(target, method, params)
     }
@@ -658,14 +658,14 @@ test('Herdr tick：两个节点同 paneId 仍可区分（nodeId + targetId 复�
     assert.equal(local.consecutiveErrors, 1)
     assert.equal(remote.status, 'working')
     assert.equal(remote.stateChangeSeq, 2)
-    assert.equal((remote.facts as Record<string, unknown>)['agentName'], 'helm-wf-remote')
+    assert.equal((remote.facts as Record<string, unknown>)['agentName'], 'helmx-wf-remote')
   } finally {
     await env.close()
   }
 })
 
 test('Herdr tick：同水位停滞递增、变水位重置、unreachable 保持水位累计不伪造 seq', { timeout: 60_000 }, async () => {
-  const env = await makeProbeEnv([{ paneId: 'w:p1', agentName: 'helm-wf-a', cwd: '/tmp/a', status: 'working', seq: 4 }])
+  const env = await makeProbeEnv([{ paneId: 'w:p1', agentName: 'helmx-wf-a', cwd: '/tmp/a', status: 'working', seq: 4 }])
   try {
     // 首次观测：0。
     const first = (await runHerdrTick(env))[0]!
@@ -724,7 +724,7 @@ test('Herdr tick：同水位停滞递增、变水位重置、unreachable 保持�
 class UiBackend extends ProbeBackend {}
 
 async function makeUiHost(): Promise<{ host: PluginHost; dataDir: string }> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-ui-docs-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-ui-docs-'))
   // 真实 clientRoot 夹具：声明 client 组件引用的插件必须提供 clientRoot
   //（注册边界强制），module 需为真实存在的相对 .ts/.tsx 源文件。
   const clientRoot = join(dataDir, 'fixture-client')

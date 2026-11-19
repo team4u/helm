@@ -1,18 +1,18 @@
 /**
- * helm 核心组合端到端验收测试（真实 createHelm 组合根 + pi-durable SQLite + PluginHost + startHub + CLI）：
+ * helmx 核心组合端到端验收测试（真实 createHelmx 组合根 + pi-durable SQLite + PluginHost + startHub + CLI）：
  * - 共享主 Hub 实例覆盖：profile/memory 默认协同与跨回合记忆落库、load_skill 目录与白名单/托管技能启停同步、
  *   SecretStash 全链路零泄漏、ctx.action/ctx.tool Schema 校验与在途 409、subagent parentToolCallId 广播、
- *   受管 bash HELM_TOKEN 直连、CLI --meta -> turn_settled 增量 SSE 与分页、ctx.doc 公私边界/manageConversation/scope、
+ *   受管 bash HELMX_TOKEN 直连、CLI --meta -> turn_settled 增量 SSE 与分页、ctx.doc 公私边界/manageConversation/scope、
  *   agent_spawn 外部后端 onResolved/onGateResult/journal 重放与缺报拒绝；
  * - 独立 HTTP/CLI 鉴权闭环：匿名 401、scrypt setup/login、初始会话可删除、?wait=1、出站脱敏、公开路由与真实子进程 CLI；
- * - 独立跨重启闭环：helm-cli/generative-ui 受管技能防篡改覆盖补齐、对话历史与 SSE seq/completionSeq 保持、双 Profile 隔离与 PATCH 切换。
+ * - 独立跨重启闭环：helmx-cli/generative-ui 受管技能防篡改覆盖补齐、对话历史与 SSE seq/completionSeq 保持、双 Profile 隔离与 PATCH 切换。
  */
 import {
   fauxAssistantMessage,
   fauxToolCall,
   type FauxResponseStep,
 } from '@earendil-works/pi-ai/providers/faux'
-import { HelmError, type PluginDefinition } from '@helm/protocol'
+import { HelmxError, type PluginDefinition } from '@helmx/protocol'
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -26,7 +26,7 @@ import { startHub } from '../../kernel/src/http/index.js'
 import { redactJsonValue } from '../../kernel/src/redact.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { MemoryStore } from '../../plugins/src/memory/store.js'
-import { HELM_CLI_SKILL_ASSET } from '../../plugins/src/profile.js'
+import { HELMX_CLI_SKILL_ASSET } from '../../plugins/src/profile.js'
 import {
   createHubTestApp,
   openHubHttpEnv,
@@ -185,7 +185,7 @@ function sqliteTablesContaining(dbPath: string, needle: string): string[] {
 async function rejectsExplicitly(fn: () => Promise<unknown>, expected: { code?: string; message: RegExp }): Promise<void> {
   await assert.rejects(fn, (err: unknown) => {
     if (expected.code !== undefined) {
-      assert.ok(err instanceof HelmError)
+      assert.ok(err instanceof HelmxError)
       assert.equal(err.code, expected.code)
     }
     assert.match(err instanceof Error ? err.message : String(err), expected.message)
@@ -226,7 +226,7 @@ function captureStep(): FauxResponseStep {
 
 before(async () => {
   mainEnv = await openHubHttpEnv({
-    prefix: 'helm-core-main-',
+    prefix: 'helmx-core-main-',
     swallowCloseError: true,
   })
   dbPath = join(mainEnv.dataDir, 'state.sqlite')
@@ -316,7 +316,7 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
     dataDir,
     'deploy-playbook',
     '---\nname: deploy manual\ndescription: publish stream process\n---\n# deploy\nsee references/.',
-    { 'rollback.md': 'rollback: execute helm rollback --canary', 'db-migrate.md': 'migration before backup state.sqlite' },
+    { 'rollback.md': 'rollback: execute helmx rollback --canary', 'db-migrate.md': 'migration before backup state.sqlite' },
   )
   writeSkill(dataDir, 'alpha-guide', '---\nname: Alpha manual\ndescription: A\n---\n# Alpha', { 'intro.md': 'Alpha quote say: only blank name single.' })
   writeSkill(dataDir, 'beta-guide', '---\nname: Beta manual\ndescription: B\n---\n# Beta', {})
@@ -324,7 +324,7 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
 
   const defaultConv = await kernel.createConversation({ title: 'skill-default' })
   assert.ok(((await host.executeTool('load_skill', { skillId: 'deploy-playbook' }, { conversationId: defaultConv.id })) as { text: string }).text.includes('deploy'))
-  assert.ok(((await host.executeTool('load_skill', { skillId: 'deploy-playbook', path: 'references/rollback.md' }, { conversationId: defaultConv.id })) as { text: string }).text.includes('helm rollback'))
+  assert.ok(((await host.executeTool('load_skill', { skillId: 'deploy-playbook', path: 'references/rollback.md' }, { conversationId: defaultConv.id })) as { text: string }).text.includes('helmx rollback'))
 
   await rejectsExplicitly(
     () => host.executeTool('load_skill', { skillId: 'deploy-playbook', path: '../profiles/assistant/MEMORY.md' }, { conversationId: defaultConv.id }),
@@ -344,7 +344,7 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
   await kernel.submitInput(defaultConv.id, 'check default catalog')
   await kernel.waitForIdle(defaultConv.id)
   const defaultCatalog = capturedRequests[0]!.systemSections.find((s) => s.includes('<available_skills>'))!
-  for (const item of ['deploy-playbook', 'references/db-migrate.md', 'helm-cli', 'alpha-guide', 'beta-guide', 'generative-ui']) {
+  for (const item of ['deploy-playbook', 'references/db-migrate.md', 'helmx-cli', 'alpha-guide', 'beta-guide', 'generative-ui']) {
     assert.ok(defaultCatalog.includes(item))
   }
   assert.ok(!capturedRequests[0]!.systemSections.join('\n').includes('MetricGrid'))
@@ -364,7 +364,7 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
   await kernel.submitInput(convNone.id, 'none turn')
   await kernel.waitForIdle(convNone.id)
   assert.equal(capturedRequests[0]!.systemSections.find((s) => s.includes('<available_skills>')), undefined)
-  await rejectsExplicitly(() => host.executeTool('load_skill', { skillId: 'helm-cli' }, { conversationId: convNone.id }), { code: 'skill_not_available', message: /is unavailable for profile/ })
+  await rejectsExplicitly(() => host.executeTool('load_skill', { skillId: 'helmx-cli' }, { conversationId: convNone.id }), { code: 'skill_not_available', message: /is unavailable for profile/ })
 
   capturedRequests.length = 0
   faux.setResponses([captureStep()])
@@ -372,7 +372,7 @@ test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名�
   await kernel.waitForIdle(convWhite.id)
   const catW = capturedRequests[0]!.systemSections.find((s) => s.includes('<available_skills>'))!
   assert.ok(catW.includes('id="alpha-guide"'))
-  for (const absent of ['beta-guide', 'helm-cli', 'managed-guide']) assert.ok(!catW.includes(`id="${absent}"`))
+  for (const absent of ['beta-guide', 'helmx-cli', 'managed-guide']) assert.ok(!catW.includes(`id="${absent}"`))
 
   await host.enable('builtin:superagent')
   try {
@@ -477,25 +477,25 @@ test('核心协同 3：SecretStash 跨层零泄漏（SQLite/模型请求/SSE/JSO
   await rejectsExplicitly(() => host.executeTool('nope', {}, { conversationId: 1 }), { code: 'unknown_tool', message: /not registered/ })
 
   const slowPromise = host.invokeAction('test:core-probe', 'slow', {})
-  await assert.rejects(host.disable('test:core-probe'), (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks')
+  await assert.rejects(host.disable('test:core-probe'), (err: unknown) => err instanceof HelmxError && err.code === 'plugin_has_live_tasks')
   releaseSlow()
   assert.deepEqual(await slowPromise, { done: true })
   await host.disable('test:core-probe')
 })
 
-test('核心闭环 1 & 2：受管 bash HELM_TOKEN 免磁盘登录直连 CLI 且全链路（CLI/模型/SSE/SQLite/工具回传）脱敏不回显', { timeout: 60_000 }, async (t) => {
+test('核心闭环 1 & 2：受管 bash HELMX_TOKEN 免磁盘登录直连 CLI 且全链路（CLI/模型/SSE/SQLite/工具回传）脱敏不回显', { timeout: 60_000 }, async (t) => {
   const { kernel, faux, hubUrl, token: userToken } = mainEnv
   const managedToken = (kernel as unknown as { toolDeps?: { processToken?: () => string } }).toolDeps!.processToken!()
   assert.notEqual(kernel.services.stash.redact(managedToken), managedToken)
 
-  // 1. 无磁盘 cli-token 下 HELM_TOKEN 直连 CLI --current
-  const cliDataDir = useTempDir(t, 'helm-align-cli-')
+  // 1. 无磁盘 cli-token 下 HELMX_TOKEN 直连 CLI --current
+  const cliDataDir = useTempDir(t, 'helmx-align-cli-')
   assert.equal(existsSync(join(cliDataDir, 'cli-token')), false)
   const got = await runCliInProcess(['conversations', 'get', '--current', '--json'], {
-    HELM_HUB_URL: hubUrl,
-    HELM_DATA_DIR: cliDataDir,
-    HELM_TOKEN: managedToken,
-    HELM_CONVERSATION_ID: String(ROOT_CONVERSATION_ID),
+    HELMX_HUB_URL: hubUrl,
+    HELMX_DATA_DIR: cliDataDir,
+    HELMX_TOKEN: managedToken,
+    HELMX_CONVERSATION_ID: String(ROOT_CONVERSATION_ID),
   })
   assert.equal(got.code, 0, got.err)
   assert.equal((JSON.parse(got.out) as { id: number }).id, ROOT_CONVERSATION_ID)
@@ -516,11 +516,11 @@ test('核心闭环 1 & 2：受管 bash HELM_TOKEN 免磁盘登录直连 CLI 且�
   assert.ok(!(await sub.frames).join('\n').includes(managedToken))
   assert.deepEqual(sqliteTablesContaining(dbPath, managedToken), [])
 
-  // 2. 真实 bash 工具子进程执行 helm conversations get --current --json
+  // 2. 真实 bash 工具子进程执行 helmx conversations get --current --json
   const bashCliDir = join(mainEnv.dataDir, 'cli-isolated')
   const cmd = [
-    `export HELM_DATA_DIR="${bashCliDir}"`,
-    `export HELM_CONVERSATION_ID=${ROOT_CONVERSATION_ID}`,
+    `export HELMX_DATA_DIR="${bashCliDir}"`,
+    `export HELMX_CONVERSATION_ID=${ROOT_CONVERSATION_ID}`,
     `"${process.execPath}" "${tsxCli}" "${cliEntry}" conversations get --current --json`,
     'echo CLI_OK',
   ].join(' && ')
@@ -533,7 +533,7 @@ test('核心闭环 1 & 2：受管 bash HELM_TOKEN 免磁盘登录直连 CLI 且�
   await kernel.waitForIdle(ROOT_CONVERSATION_ID)
   const toolCtx = toolResults[0]!
   assert.ok(!toolCtx.includes(managedToken))
-  assert.ok(toolCtx.includes('CLI_OK') && toolCtx.includes('helm.input') && toolCtx.includes('person assist') && toolCtx.includes('entries'))
+  assert.ok(toolCtx.includes('CLI_OK') && toolCtx.includes('helmx.input') && toolCtx.includes('person assist') && toolCtx.includes('entries'))
   assert.ok(/id\\?"?\s*:\s*1\b/.test(toolCtx))
 })
 
@@ -563,11 +563,11 @@ test('核心闭环 3 & 4：CLI --meta -> turn_settled、游标分页、SSE 增�
   await Promise.all([subA.ready, subB.ready, subC.ready])
 
   const meta = { renderer: 'test.render', ticket: 7, nested: { ok: true } }
-  const cliDir = useTempDir(t, 'helm-meta-cli-')
+  const cliDir = useTempDir(t, 'helmx-meta-cli-')
   faux.setResponses([fauxAssistantMessage('meta turn complete')])
   const sent = await runCliInProcess(
     ['send', String(metaConv.id), 'carries metadata input', '--meta', JSON.stringify(meta), '--wait', '--json'],
-    { HELM_HUB_URL: hubUrl, HELM_DATA_DIR: cliDir, HELM_TOKEN: token },
+    { HELMX_HUB_URL: hubUrl, HELMX_DATA_DIR: cliDir, HELMX_TOKEN: token },
   )
   assert.equal(sent.code, 0, sent.err)
   assert.equal((JSON.parse(sent.out) as { text: string }).text, 'meta turn complete')
@@ -609,7 +609,7 @@ test('核心闭环 3 & 4：CLI --meta -> turn_settled、游标分页、SSE 增�
   writeFileSync(wfPath, 'export const meta = { name: "align-wait", description: "t" }\nreturn args.x * 2\n')
   const wfRes = await runCliInProcess(
     ['workflows', 'run', wfPath, '--args', JSON.stringify({ x: 21 }), '--conversation-id', String(metaConv.id), '--wait', '--json'],
-    { HELM_HUB_URL: hubUrl, HELM_DATA_DIR: cliDir, HELM_TOKEN: token },
+    { HELMX_HUB_URL: hubUrl, HELMX_DATA_DIR: cliDir, HELMX_TOKEN: token },
   )
   assert.equal(wfRes.code, 0, wfRes.err)
   const wfRun = (JSON.parse(wfRes.out) as { run: { id: string; result?: unknown } }).run
@@ -672,7 +672,7 @@ test('核心闭环 3 & 4：CLI --meta -> turn_settled、游标分页、SSE 增�
     assert.deepEqual(await host.invokeAction('test:guard', 'blocked_out', {}, { conversationId: managedConv.id }), { ok: true })
     await assert.rejects(
       () => host.invokeAction('test:guard', 'blocked_out', {}, { conversationId: metaConv.id }),
-      (err: unknown) => err instanceof HelmError && /scope|effect domain/.test(err.message),
+      (err: unknown) => err instanceof HelmxError && /scope|effect domain/.test(err.message),
     )
     assert.equal((await mainEnv.call('POST', '/api/actions/test:guard/blocked_out', { input: {} })).status, 200)
 
@@ -693,9 +693,9 @@ test('核心闭环 3 & 4：CLI --meta -> turn_settled、游标分页、SSE 增�
 test('核心闭环 5：agent_spawn 外部后端 handled 接管（onResolved / onGateResult 真实元数据、Gate 恰好一次、journal 重放与缺报 gate_result_missing 拒绝）', { timeout: 60_000 }, async () => {
   const { kernel, dataDir } = mainEnv
   const runWorkflow = (req: Record<string, unknown>) =>
-    kernel.plugins.invokeAction('builtin:workflow', 'run', req) as Promise<{ run: import('@helm/plugins/contracts').WorkflowRunSummary }>
+    kernel.plugins.invokeAction('builtin:workflow', 'run', req) as Promise<{ run: import('@helmx/plugins/contracts').WorkflowRunSummary }>
   const inspectRun = (runId: string) =>
-    kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as Promise<{ run: import('@helm/plugins/contracts').WorkflowRunSummary }>
+    kernel.plugins.invokeAction('builtin:workflow', 'inspect', { runId }) as Promise<{ run: import('@helmx/plugins/contracts').WorkflowRunSummary }>
 
   const execDir = join(dataDir, 'external-exec')
   mkdirSync(execDir, { recursive: true })
@@ -711,7 +711,7 @@ test('核心闭环 5：agent_spawn 外部后端 handled 接管（onResolved / on
     id: 'test:ext-backend',
     definePlugin(ctx) {
       ctx.hook.onAgentSpawn(async (request) => {
-        if (!request.onResolved || !request.onGateResult) throw new HelmError('test_backend_contract', 'missing callbacks', 500)
+        if (!request.onResolved || !request.onGateResult) throw new HelmxError('test_backend_contract', 'missing callbacks', 500)
         request.onResolved({
           nodeId: 'local',
           executionId: execId,
@@ -783,7 +783,7 @@ test('核心闭环 5：agent_spawn 外部后端 handled 接管（onResolved / on
       () => runWorkflow({ script: badScript, conversationId: ROOT_CONVERSATION_ID, wait: true }),
       (err: unknown) => {
         badId = String((err as { details?: { runId?: string } }).details?.runId ?? '')
-        return err instanceof HelmError && err.code === 'workflow_failed'
+        return err instanceof HelmxError && err.code === 'workflow_failed'
       },
     )
     const badNode = (await inspectRun(badId)).run.nodes?.find((n) => n.kind === 'agent')!
@@ -799,7 +799,7 @@ test('核心闭环 5：agent_spawn 外部后端 handled 接管（onResolved / on
 // ---------------------------------------------------------------------------
 
 test('HTTP 与 CLI 真实鉴权往返闭环：setup/login、cli-token、?wait=1、出站脱敏、公开路由、真实子进程 CLI 与删除初始会话后工作流路由', { timeout: 60_000 }, async (t) => {
-  const dataDir = join(useTempDir(t, 'helm-core-http-cli-'), 'hub')
+  const dataDir = join(useTempDir(t, 'helmx-core-http-cli-'), 'hub')
   const { app, kernel, faux } = await createHubTestApp({ dataDir, cwd: dataDir })
   const SECRET_TRICKY = ['quote"', 'line'].join('\n')
   const probeState = { secret: SECRET_TRICKY, placeholder: '' }
@@ -834,7 +834,7 @@ test('HTTP 与 CLI 真实鉴权往返闭环：setup/login、cli-token、?wait=1�
 
   const hub = await startHub({ kernel: kernel as never, port: 0 })
   const rootPassword = 'integration testRootpassword eight'
-  const cliEnv = { HELM_HUB_URL: hub.url, HELM_DATA_DIR: dataDir }
+  const cliEnv = { HELMX_HUB_URL: hub.url, HELMX_DATA_DIR: dataDir }
   const run = (argv: string[], extra: NodeJS.ProcessEnv = {}) => runCliInProcess(argv, { ...cliEnv, ...extra })
 
   try {
@@ -901,7 +901,7 @@ test('HTTP 与 CLI 真实鉴权往返闭环：setup/login、cli-token、?wait=1�
     // 4. CLI memory --current、动态命令、真实 OS 子进程 CLI 与删除初始会话后 workflow 目标约束
     await kernel.services.profiles.save({ id: 'coder', name: 'Coder', tags: [] })
     const coderConv = await kernel.createConversation({ profileId: 'coder' })
-    const curEnv = { HELM_CONVERSATION_ID: String(coderConv.id) }
+    const curEnv = { HELMX_CONVERSATION_ID: String(coderConv.id) }
     assert.equal((await run(['memory', 'set', '--current', '--text', '# Coder memory', '--json'], curEnv)).code, 0)
     assert.equal(JSON.parse((await run(['memory', 'get', '--current', '--json'], curEnv)).out).content, '# Coder memory')
     assert.equal(JSON.parse((await run(['memory', 'configure', '--current', '--enabled=false', '--json'], curEnv)).out).enabled, false)
@@ -913,9 +913,9 @@ test('HTTP 与 CLI 真实鉴权往返闭环：setup/login、cli-token、?wait=1�
     assert.notEqual((await run(['probe', 'double', '--input', '{"n":"bad"}', '--json'])).code, 0)
 
     const [childStatus, childGet, childAuth] = await Promise.all([
-      runCliChild(['status', '--json'], { ...process.env, ...cliEnv, HELM_TOKEN: '' }),
-      runCliChild(['conversations', 'get', String(convId), '--json'], { ...process.env, ...cliEnv, HELM_TOKEN: '' }),
-      runCliChild(['conversations', 'list', '--json'], { ...process.env, ...cliEnv, HELM_TOKEN: '' }),
+      runCliChild(['status', '--json'], { ...process.env, ...cliEnv, HELMX_TOKEN: '' }),
+      runCliChild(['conversations', 'get', String(convId), '--json'], { ...process.env, ...cliEnv, HELMX_TOKEN: '' }),
+      runCliChild(['conversations', 'list', '--json'], { ...process.env, ...cliEnv, HELMX_TOKEN: '' }),
     ])
     assert.equal(childStatus.code, 0, childStatus.err)
     assert.equal(childGet.code, 0, childGet.err)
@@ -926,7 +926,7 @@ test('HTTP 与 CLI 真实鉴权往返闭环：setup/login、cli-token、?wait=1�
 
     const wfScript = (name: string) => `export const meta = { name: "${name}", description: "t" }\nreturn 42`
     assert.notEqual((await run(['workflows', 'run', '--script', wfScript('no-target'), '--wait', '--json'])).code, 0)
-    assert.equal(JSON.parse((await run(['workflows', 'run', '--script', wfScript('cur'), '--wait', '--current', '--json'], { HELM_CONVERSATION_ID: String(convId) })).out).run.conversationId, convId)
+    assert.equal(JSON.parse((await run(['workflows', 'run', '--script', wfScript('cur'), '--wait', '--current', '--json'], { HELMX_CONVERSATION_ID: String(convId) })).out).run.conversationId, convId)
     assert.equal(JSON.parse((await run(['workflows', 'run', '--script', wfScript('exp'), '--wait', '--conversation-id', String(convId), '--json'])).out).run.conversationId, convId)
 
     const toolRun = await kernel.plugins.executeTool(
@@ -945,8 +945,8 @@ test('HTTP 与 CLI 真实鉴权往返闭环：setup/login、cli-token、?wait=1�
 // 独立跨重启持久闭环（受管技能防篡改覆盖、会话历史与 SSE seq 保持、双 Profile 隔离与 PATCH 切换）
 // ---------------------------------------------------------------------------
 
-test('跨重启持久闭环：helm-cli 受管技能篡改恢复与只读门禁、会话历史与 SSE seq 保持、双 Profile 隔离与 PATCH 切换', { timeout: 60_000 }, async (t) => {
-  const dataDir = join(useTempDir(t, 'helm-core-restart-'), 'hub')
+test('跨重启持久闭环：helmx-cli 受管技能篡改恢复与只读门禁、会话历史与 SSE seq 保持、双 Profile 隔离与 PATCH 切换', { timeout: 60_000 }, async (t) => {
+  const dataDir = join(useTempDir(t, 'helmx-core-restart-'), 'hub')
   writeProfile(dataDir, 'researcher', {
     system: '# Researcher System\nyou is research member. unique mark record ALIGN-SYS-RESEARCHER.',
     memory: 'RESEARCHER-MEM: bias well quote text',
@@ -962,16 +962,16 @@ test('跨重启持久闭环：helm-cli 受管技能篡改恢复与只读门禁�
 
   const first = await createHubTestApp({ dataDir, cwd: dataDir })
   try {
-    // 校验 helm-cli 与 generative-ui 受管技能内容后模拟磁盘篡改/误删 + 用户自建技能
+    // 校验 helmx-cli 与 generative-ui 受管技能内容后模拟磁盘篡改/误删 + 用户自建技能
     const skills = await first.kernel.skills.list()
-    const helmCli = skills.find((s) => s.id === 'helm-cli')!
-    assert.equal(helmCli.managedByPlugin, 'builtin:profile')
-    assert.ok(helmCli.references.includes('references/plugin-client-code-splitting.md'))
+    const helmxCli = skills.find((s) => s.id === 'helmx-cli')!
+    assert.equal(helmxCli.managedByPlugin, 'builtin:profile')
+    assert.ok(helmxCli.references.includes('references/plugin-client-code-splitting.md'))
     assert.equal(skills.find((s) => s.id === 'generative-ui')?.managedByPlugin, 'builtin:json-render')
 
-    writeFileSync(join(dataDir, 'skills', 'helm-cli', 'SKILL.md'), '---\nname: helm-cli\ndescription: tampered\n---\ntampered\n')
-    rmSync(join(dataDir, 'skills', 'helm-cli', 'references', 'skill-and-plugin-dev.md'))
-    rmSync(join(dataDir, 'skills', 'helm-cli', 'references', 'plugin-client-code-splitting.md'))
+    writeFileSync(join(dataDir, 'skills', 'helmx-cli', 'SKILL.md'), '---\nname: helmx-cli\ndescription: tampered\n---\ntampered\n')
+    rmSync(join(dataDir, 'skills', 'helmx-cli', 'references', 'skill-and-plugin-dev.md'))
+    rmSync(join(dataDir, 'skills', 'helmx-cli', 'references', 'plugin-client-code-splitting.md'))
     writeSkill(dataDir, 'user-skill', '---\nname: user-skill\ndescription: user self create\n---\nbody\n', { 'notes.md': '# user\n' })
 
     // 初始会话历史落库 + 双 Profile 独立 SYSTEM/MEMORY 校验
@@ -1001,18 +1001,18 @@ test('跨重启持久闭环：helm-cli 受管技能篡改恢复与只读门禁�
   const second = await openHubHttpEnv({ dataDir, cwd: dataDir })
   try {
     // 1. 受管技能覆盖回源码且写接口 403，用户自建技能完好可写
-    assert.equal(readFileSync(join(dataDir, 'skills', 'helm-cli', 'SKILL.md'), 'utf8'), HELM_CLI_SKILL_ASSET.skillMd)
+    assert.equal(readFileSync(join(dataDir, 'skills', 'helmx-cli', 'SKILL.md'), 'utf8'), HELMX_CLI_SKILL_ASSET.skillMd)
     assert.equal(
-      readFileSync(join(dataDir, 'skills', 'helm-cli', 'references', 'skill-and-plugin-dev.md'), 'utf8'),
-      HELM_CLI_SKILL_ASSET.references['skill-and-plugin-dev.md'],
+      readFileSync(join(dataDir, 'skills', 'helmx-cli', 'references', 'skill-and-plugin-dev.md'), 'utf8'),
+      HELMX_CLI_SKILL_ASSET.references['skill-and-plugin-dev.md'],
     )
     assert.equal(
-      readFileSync(join(dataDir, 'skills', 'helm-cli', 'references', 'plugin-client-code-splitting.md'), 'utf8'),
-      HELM_CLI_SKILL_ASSET.references['plugin-client-code-splitting.md'],
+      readFileSync(join(dataDir, 'skills', 'helmx-cli', 'references', 'plugin-client-code-splitting.md'), 'utf8'),
+      HELMX_CLI_SKILL_ASSET.references['plugin-client-code-splitting.md'],
     )
     await assert.rejects(
-      () => second.kernel.skills.writeFile('helm-cli', 'SKILL.md', 'tamper'),
-      (err: unknown) => err instanceof HelmError && err.code === 'managed_skill_readonly' && err.status === 403,
+      () => second.kernel.skills.writeFile('helmx-cli', 'SKILL.md', 'tamper'),
+      (err: unknown) => err instanceof HelmxError && err.code === 'managed_skill_readonly' && err.status === 403,
     )
     assert.ok(readFileSync(join(dataDir, 'skills', 'user-skill', 'SKILL.md'), 'utf8').includes('user self create'))
     await second.kernel.skills.writeFile('user-skill', 'references/extra.md', '# user extra\n')

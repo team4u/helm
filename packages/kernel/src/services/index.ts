@@ -1,5 +1,5 @@
 /**
- * @helm/kernel service layer unified exports: file assets, authentication, secrets, credentials, and artifacts.
+ * @helmx/kernel service layer unified exports: file assets, authentication, secrets, credentials, and artifacts.
  * Consumers (PluginHost / HTTP / CLI) must import from here instead of deep submodule paths.
  */
 export {

@@ -9,8 +9,8 @@
  * only required/optional and top-level types, guiding the model to inspect nested/complex schemas on demand
  * via `run_action describe`.
  */
-import type { ActionManifest, JsonSchema } from '@helm/protocol'
-import { escapeXml } from '@helm/protocol'
+import type { ActionManifest, JsonSchema } from '@helmx/protocol'
+import { escapeXml } from '@helmx/protocol'
 
 /** Host-managed section ID (set-or-clear; removed immediately when catalog is empty, leaving no phantom text). */
 export const ACTIONS_PROMPT_SECTION_ID = 'prompt.actions'
@@ -29,7 +29,7 @@ export interface ActionDirectoryEntry {
 export function actionCliCommand(manifest: ActionManifest): string | undefined {
   if (manifest.cli?.hidden === true) return undefined
   const command = manifest.cli?.command ?? [manifest.pluginId.replace(/^builtin:/, ''), manifest.id]
-  return `helm ${command.join(' ')}`
+  return `helmx ${command.join(' ')}`
 }
 
 /** Collapse multi-line / excess whitespace descriptions onto a single line (one line per catalog action). */
@@ -109,7 +109,7 @@ export function renderAvailableActionsSection(entries: readonly ActionDirectoryE
   const header = [
     '<available_actions>',
     'Actions below can be invoked in this conversation via run_action({ actionId: "pluginId.actionId", input }); directly exposed actions are already listed in the model tools.',
-    'Parameters show a compact signature (required/optional and top-level types), leaving nested and complex structures collapsed: call run_action({ actionId, describe: true }) first to retrieve full input/outputSchema (read-only description; does not execute), or inspect via bash with helm actions list --json. CLI shows the equivalent human command (even without bash in this conversation, run_action remains available).',
+    'Parameters show a compact signature (required/optional and top-level types), leaving nested and complex structures collapsed: call run_action({ actionId, describe: true }) first to retrieve full input/outputSchema (read-only description; does not execute), or inspect via bash with helmx actions list --json. CLI shows the equivalent human command (even without bash in this conversation, run_action remains available).',
   ]
   const groups = new Map<string, ActionDirectoryEntry[]>()
   for (const entry of entries) {

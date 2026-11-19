@@ -4,8 +4,8 @@
  * (only id/configured key, never plaintext). Hot-reloads the model catalog after
  * providers/credentials changes (persisting without reloading leaves hot config stale).
  */
-import type { JsonSchema, ProviderConfig } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { JsonSchema, ProviderConfig } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { errorResponse, jsonOk, readJsonBody, readJsonValue, type JsonRedactor } from './http-utils.js'
 import type { KernelRuntimeLike } from './contracts.js'
 import { assertBodySchema, parseCredentialBody, parseProvidersBody, requireIdParam, ValidationError } from './validate.js'
@@ -96,7 +96,7 @@ export async function handleModelsDomain(
     }
     if (hasRegularFields || hasModelThinkingLevels || hasModelThinking) {
       if (kernel.setDefaultModel === undefined && (hasRegularFields || hasModelThinkingLevels)) {
-        throw new HelmError('not_implemented', 'current runtime does not support setting the default model', 501)
+        throw new HelmxError('not_implemented', 'current runtime does not support setting the default model', 501)
       }
       const modelArg = 'model' in body ? (body.model as string) : undefined
       const levelArg = 'thinkingLevel' in body ? (body.thinkingLevel as string) : undefined
@@ -118,7 +118,7 @@ export async function handleModelsDomain(
       } else if (modelThinkingUpdate !== undefined && kernel.setModelThinkingDefault !== undefined) {
         await kernel.setModelThinkingDefault(modelThinkingUpdate.model, modelThinkingUpdate.level)
       } else {
-        throw new HelmError('not_implemented', 'current runtime does not support setting model defaults', 501)
+        throw new HelmxError('not_implemented', 'current runtime does not support setting model defaults', 501)
       }
     }
     const catalog = await kernel.listModels()
@@ -133,7 +133,7 @@ export async function handleModelsDomain(
   }
   if (second === 'filter' && third === undefined && method === 'PUT') {
     if (kernel.setDisabledModels === undefined) {
-      throw new HelmError('not_implemented', 'current runtime does not support configuring disabled models', 501)
+      throw new HelmxError('not_implemented', 'current runtime does not support configuring disabled models', 501)
     }
     // Both empty body and {} validate against `{ provider?: string; disabledModels: string[] }`.
     const raw = await readOptionalJsonBody(ctx.request)
@@ -150,7 +150,7 @@ export async function handleModelsDomain(
     const raw = await readOptionalJsonBody(ctx.request)
     const options = parseModelsRefreshBody(raw)
     if (kernel.refreshModels === undefined) {
-      throw new HelmError('not_implemented', 'current runtime does not support refreshing dynamic model catalogs', 501)
+      throw new HelmxError('not_implemented', 'current runtime does not support refreshing dynamic model catalogs', 501)
     }
     const result = await kernel.refreshModels(options)
     return jsonOk(redactor, result)

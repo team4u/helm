@@ -35,7 +35,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HelmError, type ConversationSummary } from '@helm/protocol'
+import { HelmxError, type ConversationSummary } from '@helmx/protocol'
 import {
   FileError,
   type BinaryReader,
@@ -55,7 +55,7 @@ import {
   computeAgentsMdSection,
   type AgentsMdHostPort,
 } from '../src/profile/agents-md.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
@@ -90,10 +90,10 @@ function makeBackend(opts: BackendOptions = {}): ControlledBackend {
     nodeIpc: {
       isOnline: opts.online ?? (() => true),
       call: () => {
-        throw new HelmError('node_ipc_unavailable', '测试桩不提供 nodeIpc.call', 501)
+        throw new HelmxError('node_ipc_unavailable', '测试桩不提供 nodeIpc.call', 501)
       },
       subscribe: () => {
-        throw new HelmError('node_ipc_unavailable', '测试桩不提供 nodeIpc.subscribe', 501)
+        throw new HelmxError('node_ipc_unavailable', '测试桩不提供 nodeIpc.subscribe', 501)
       },
     },
     executionEnv(nodeId: string, cwd: string) {
@@ -114,7 +114,7 @@ interface Env {
 }
 
 async function makeEnv(workspace: string, opts: BackendOptions = {}): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-profile-agents-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-profile-agents-'))
   const profiles = new ProfileService(dataDir)
   await profiles.ensureDefault()
   const backend = Object.assign(makeBackend(opts), createProfileFileHost(dataDir, profiles))
@@ -315,7 +315,7 @@ function hostOf(env: ExecutionEnv, over: Partial<AgentsMdHostPort> = {}): Agents
 }
 
 async function freshWorkspace(): Promise<string> {
-  return mkdtempSync(join(tmpdir(), 'helm-agents-ws-'))
+  return mkdtempSync(join(tmpdir(), 'helmx-agents-ws-'))
 }
 
 // ---------------------------------------------------------------------------
@@ -416,7 +416,7 @@ test(`before_turn：AGENTS.md 超过 ${MAX_AGENTS_MD_CHARS} 字符 → 截断并
   try {
     const sections = await runBeforeTurn(env, makeTurn(workspace))
     const agents = sections.find((s) => s.id === 'profile.agents')!
-    const note = `[ helm 提示：AGENTS.md 超过 ${MAX_AGENTS_MD_CHARS} 字符上限，以上为前 ${MAX_AGENTS_MD_CHARS} 字符 ]`
+    const note = `[ helmx 提示：AGENTS.md 超过 ${MAX_AGENTS_MD_CHARS} 字符上限，以上为前 ${MAX_AGENTS_MD_CHARS} 字符 ]`
     assert.ok(agents.text.includes(note), '显式截断说明')
     // 标签头 + 截断正文 + 说明 + 标签尾；正文恰好为前 64k 字符
     const body = agents.text.slice(
@@ -449,13 +449,13 @@ test(`before_turn：本地真实文件超过 ${MAX_AGENTS_MD_BYTES} 字节 → �
 test('before_turn：测试桩未接线 executionEnv（unsupported）→ 显式注入 agents-unavailable，绝不静默跳过', { timeout: 60_000 }, async () => {
   const workspace = await freshWorkspace()
   writeFileSync(join(workspace, AGENTS_MD_FILENAME), '# 约定\n')
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-profile-agents-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-profile-agents-'))
   const profiles = new ProfileService(dataDir)
   await profiles.ensureDefault()
   const host = new PluginHost({
     buildProvider: createPluginBuildProvider(),
     dataDir,
-    // 未覆写 executionEnv：标准夹具抛 HelmError('unsupported', 501)
+    // 未覆写 executionEnv：标准夹具抛 HelmxError('unsupported', 501)
     host: Object.assign(createPluginHostBackendFixture(), createProfileFileHost(dataDir, profiles), {
       async emitEvent() {},
     }),
@@ -546,11 +546,11 @@ test('before_turn：远端节点离线（isOnline=false）→ 显式注入 agent
   }
 })
 
-test('before_turn：isOnline 抛未接线 HelmError（node_ipc_unavailable）→ 显式注入 agents-unavailable，不进入 executionEnv', { timeout: 60_000 }, async () => {
+test('before_turn：isOnline 抛未接线 HelmxError（node_ipc_unavailable）→ 显式注入 agents-unavailable，不进入 executionEnv', { timeout: 60_000 }, async () => {
   const workspace = '/srv/app'
   const env = await makeEnv(workspace, {
     online: () => {
-      throw new HelmError('node_ipc_unavailable', '宿主未提供节点 IPC 通道（EnvFabric 未接线）', 501)
+      throw new HelmxError('node_ipc_unavailable', '宿主未提供节点 IPC 通道（EnvFabric 未接线）', 501)
     },
     envFor: () => {
       throw new Error('在线探测失败后不应触达 executionEnv')
@@ -601,7 +601,7 @@ test('before_turn：远端 read 抛异常（node_offline）→ 同样显式注�
       ok: true,
       value: {
         read: () => {
-          throw new HelmError('node_offline', '节点 remote-1 连接中断', 409)
+          throw new HelmxError('node_offline', '节点 remote-1 连接中断', 409)
         },
       },
     }),
@@ -979,7 +979,7 @@ test('computeAgentsMdSection：cwd 为空串直接跳过，不触达 executionEn
 test('computeAgentsMdSection：executionEnv 未接线（unsupported）→ 显式注入不可用段', { timeout: 60_000 }, async () => {
   const host: AgentsMdHostPort = {
     executionEnv() {
-      throw new HelmError('unsupported', '测试夹具未实现宿主能力：host.executionEnv（需在具体 fixture 覆写）', 501)
+      throw new HelmxError('unsupported', '测试夹具未实现宿主能力：host.executionEnv（需在具体 fixture 覆写）', 501)
     },
     redact: (t) => t,
     nodeIpc: { isOnline: () => true },

@@ -2,11 +2,11 @@
  * Herdr RPC result boundary validation: converge the unknown result unpacked by transport.call into
  * strongly-typed shapes. The official protocol is a snake_case enum with tag = "type" (herdr 0.9.5 /
  * protocol 22, verified against server source); any missing field / type mismatch throws explicitly at
- * this boundary as HelmError('herdr_protocol_violation'), never silently degrading (no fabricated 0 / unknown /
+ * this boundary as HelmxError('herdr_protocol_violation'), never silently degrading (no fabricated 0 / unknown /
  * empty strings); bad data must never become the authority for CAS or terminal-state decisions.
  */
 
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 
 export type HerdrAgentStatus = 'idle' | 'working' | 'blocked' | 'done' | 'unknown'
 
@@ -73,7 +73,7 @@ function isObj(v: unknown): v is Record<string, unknown> {
 
 function asObject(result: unknown, method: string): Record<string, unknown> {
   if (!isObj(result)) {
-    throw new HelmError(
+    throw new HelmxError(
       'herdr_protocol_violation',
       `${method} returned a result that is not an object: ${JSON.stringify(result)?.slice(0, 200)}`,
       502,
@@ -86,7 +86,7 @@ function asObject(result: unknown, method: string): Record<string, unknown> {
 function expectType(result: unknown, method: string, expected: string): Record<string, unknown> {
   const obj = asObject(result, method)
   if (obj['type'] !== expected) {
-    throw new HelmError(
+    throw new HelmxError(
       'herdr_protocol_violation',
       `${method} returned result.type '${expected}' expected, got: ${JSON.stringify(obj['type'])}`,
       502,
@@ -99,7 +99,7 @@ function expectType(result: unknown, method: string, expected: string): Record<s
 function reqString(obj: Record<string, unknown>, method: string, key: string): string {
   const v = obj[key]
   if (typeof v !== 'string' || v.length === 0) {
-    throw new HelmError(
+    throw new HelmxError(
       'herdr_protocol_violation',
       `${method} result field ${key} is missing or not a non-empty string`,
       502,
@@ -122,7 +122,7 @@ function optBool(obj: Record<string, unknown>, key: string): boolean | undefined
 function parseStatus(v: unknown, method: string): HerdrAgentStatus {
   const status = AGENT_STATUSES.find((s) => s === v)
   if (status === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'herdr_protocol_violation',
       `${method} has invalid agent_status: ${JSON.stringify(v)}`,
       502,
@@ -135,7 +135,7 @@ function parseStatus(v: unknown, method: string): HerdrAgentStatus {
 /** seq is a strict non-negative integer (server u64): missing/decimal/negative/string are all violations; never fabricate 0. */
 function parseSeq(v: unknown, method: string, field = 'state_change_seq'): number {
   if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0) {
-    throw new HelmError(
+    throw new HelmxError(
       'herdr_protocol_violation',
       `${method} ${field} is missing or not a non-negative safe integer: ${String(v)}`,
       502,
@@ -148,7 +148,7 @@ function parseSeq(v: unknown, method: string, field = 'state_change_seq'): numbe
 function parseTab(obj: Record<string, unknown>, method: string): HerdrTabInfo {
   const tab = obj['tab']
   if (!isObj(tab)) {
-    throw new HelmError('herdr_protocol_violation', `${method} result is missing the tab object`, 502, { method })
+    throw new HelmxError('herdr_protocol_violation', `${method} result is missing the tab object`, 502, { method })
   }
   return { tabId: reqString(tab, method, 'tab_id'), workspaceId: reqString(tab, method, 'workspace_id') }
 }
@@ -156,7 +156,7 @@ function parseTab(obj: Record<string, unknown>, method: string): HerdrTabInfo {
 function parsePane(obj: Record<string, unknown>, method: string, key = 'root_pane'): HerdrPaneInfo {
   const pane = obj[key]
   if (!isObj(pane)) {
-    throw new HelmError('herdr_protocol_violation', `${method} result is missing the ${key} object`, 502, { method, key })
+    throw new HelmxError('herdr_protocol_violation', `${method} result is missing the ${key} object`, 502, { method, key })
   }
   return {
     paneId: reqString(pane, method, 'pane_id'),
@@ -177,7 +177,7 @@ export function parseWorktreeCreated(result: unknown): WorktreeCreated {
   const obj = expectType(result, 'worktree.create', 'worktree_created')
   const worktree = obj['worktree']
   if (!isObj(worktree)) {
-    throw new HelmError('herdr_protocol_violation', 'worktree.create result is missing the worktree object', 502, {})
+    throw new HelmxError('herdr_protocol_violation', 'worktree.create result is missing the worktree object', 502, {})
   }
   return {
     workspaceId: reqString(asObject(obj['workspace'], 'worktree.create'), 'worktree.create', 'workspace_id'),
@@ -192,7 +192,7 @@ export function parseWorktreeCreated(result: unknown): WorktreeCreated {
 
 function parseAgentInfo(agent: unknown, method: string): HerdrAgentInfo {
   if (!isObj(agent)) {
-    throw new HelmError('herdr_protocol_violation', `${method} result is missing the agent object`, 502, { method })
+    throw new HelmxError('herdr_protocol_violation', `${method} result is missing the agent object`, 502, { method })
   }
   return {
     paneId: reqString(agent, method, 'pane_id'),
@@ -222,10 +222,10 @@ export function parsePaneRead(result: unknown): PaneRead {
   const obj = expectType(result, 'agent.read', 'pane_read')
   const read = obj['read']
   if (!isObj(read)) {
-    throw new HelmError('herdr_protocol_violation', 'agent.read result is missing the read object', 502, {})
+    throw new HelmxError('herdr_protocol_violation', 'agent.read result is missing the read object', 502, {})
   }
   const text = read['text']
-  if (typeof text !== 'string') throw new HelmError('herdr_protocol_violation', 'agent.read text must be a string', 502)
+  if (typeof text !== 'string') throw new HelmxError('herdr_protocol_violation', 'agent.read text must be a string', 502)
   return { paneId: reqString(read, 'agent.read', 'pane_id'), text }
 }
 
@@ -262,15 +262,15 @@ export function parseSessionSnapshot(result: unknown): SessionSnapshotData {
   const obj = expectType(result, 'session.snapshot', 'session_snapshot')
   const snapshot = obj['snapshot']
   if (!isObj(snapshot)) {
-    throw new HelmError('herdr_protocol_violation', 'session.snapshot result is missing the snapshot object', 502, {})
+    throw new HelmxError('herdr_protocol_violation', 'session.snapshot result is missing the snapshot object', 502, {})
   }
   const agents = snapshot['agents']
   if (!Array.isArray(agents)) {
-    throw new HelmError('herdr_protocol_violation', 'session.snapshot.agents must be an array', 502, {})
+    throw new HelmxError('herdr_protocol_violation', 'session.snapshot.agents must be an array', 502, {})
   }
   const panes = snapshot['panes']
   if (!Array.isArray(panes)) {
-    throw new HelmError('herdr_protocol_violation', 'session.snapshot.panes must be an array', 502, {})
+    throw new HelmxError('herdr_protocol_violation', 'session.snapshot.panes must be an array', 502, {})
   }
   const parsedAgents = agents.map((a) => parseAgentInfo(a, 'session.snapshot'))
   const parsedPanes = panes.map((p) => parsePaneSnapshotInfo(p, 'session.snapshot'))
@@ -278,7 +278,7 @@ export function parseSessionSnapshot(result: unknown): SessionSnapshotData {
     const ids = new Set<string>()
     for (const row of rows) {
       if (ids.has(row.paneId)) {
-        throw new HelmError('herdr_protocol_violation', `session.snapshot.${name} contains duplicate pane_id`, 502)
+        throw new HelmxError('herdr_protocol_violation', `session.snapshot.${name} contains duplicate pane_id`, 502)
       }
       ids.add(row.paneId)
     }
@@ -290,18 +290,18 @@ function snapshotString(pane: Record<string, unknown>, key: string): string | un
   const value = pane[key]
   if (value === undefined) return undefined
   if (typeof value !== 'string') {
-    throw new HelmError('herdr_protocol_violation', `session.snapshot.panes.${key} must be a string`, 502)
+    throw new HelmxError('herdr_protocol_violation', `session.snapshot.panes.${key} must be a string`, 502)
   }
   return value
 }
 
 function parsePaneSnapshotInfo(pane: unknown, method: string): HerdrPaneSnapshotInfo {
   if (!isObj(pane)) {
-    throw new HelmError('herdr_protocol_violation', `${method}.panes items must be objects`, 502, {})
+    throw new HelmxError('herdr_protocol_violation', `${method}.panes items must be objects`, 502, {})
   }
   const focused = pane['focused']
   if (typeof focused !== 'boolean') {
-    throw new HelmError('herdr_protocol_violation', `${method}.panes item ${String(pane['pane_id'])} is missing the boolean focused field`, 502, {})
+    throw new HelmxError('herdr_protocol_violation', `${method}.panes item ${String(pane['pane_id'])} is missing the boolean focused field`, 502, {})
   }
   return {
     paneId: reqString(pane, method, 'pane_id'),
@@ -323,7 +323,7 @@ function parsePaneSnapshotInfo(pane: unknown, method: string): HerdrPaneSnapshot
  */
 export function assertOkResult(result: unknown, method: string): void {
   if (!isOkResult(result)) {
-    throw new HelmError(
+    throw new HelmxError(
       'herdr_protocol_violation',
       `${method} should return {type:'ok'}, got: ${JSON.stringify(result)?.slice(0, 200)}`,
       502,
@@ -333,7 +333,7 @@ export function assertOkResult(result: unknown, method: string): void {
 }
 
 // ---------------------------------------------------------------
-// Protocol-level CAS for agent.send_keys (helm-side contract; awaiting Herdr server support)
+// Protocol-level CAS for agent.send_keys (helmx-side contract; awaiting Herdr server support)
 //
 // Current evidence (/root/code/herdr server source, herdr 0.9.5 / protocol 22, read-only verification):
 // - `AgentSendKeysParams` is only `{target, keys}` (src/api/schema/agents.rs:18-22),
@@ -342,7 +342,7 @@ export function assertOkResult(result: unknown, method: string): void {
 // - `ping` -> `{type:'pong', version, protocol, capabilities}` (src/api/server.rs:337-347 and
 //   src/api/schema/server.rs:17-24) is the official capability channel, extensible forward-compatibly via serde(default) fields.
 //
-// Hence the helm-side contract (a proposal; end-to-end effective once the Herdr server ships support):
+// Hence the helmx-side contract (a proposal; end-to-end effective once the Herdr server ships support):
 // - Capability advertisement: pong.capabilities.`send_keys_expected_state_seq` === true;
 // - Request field: agent.send_keys params add `expected_state_seq: u64` (same root as AgentInfo's
 //   existing `state_change_seq`, following the protocol's snake_case convention);
@@ -357,7 +357,7 @@ export const SEND_KEYS_CAS_CAPABILITY = 'send_keys_expected_state_seq'
 /** Server CAS rejection error code (wire error.code; semantics = keys not sent). */
 const STALE_STATE_ERROR_CODE = 'stale_state'
 
-/** agent.send_keys request (helm-internal camelCase; the wire form is converted by buildSendKeysParams). */
+/** agent.send_keys request (helmx-internal camelCase; the wire form is converted by buildSendKeysParams). */
 interface SendKeysRequest {
   target: string
   keys: string[]
@@ -368,17 +368,17 @@ interface SendKeysRequest {
 /** Build agent.send_keys wire params (boundary validation: invalid target/keys/seq rejected explicitly). */
 export function buildSendKeysParams(request: SendKeysRequest): Record<string, unknown> {
   if (typeof request.target !== 'string' || request.target.length === 0) {
-    throw new HelmError('validation_error', 'agent.send_keys target must be a non-empty string', 400, { target: request.target })
+    throw new HelmxError('validation_error', 'agent.send_keys target must be a non-empty string', 400, { target: request.target })
   }
   if (
     !Array.isArray(request.keys) ||
     request.keys.length === 0 ||
     request.keys.some((key) => typeof key !== 'string' || key.length === 0)
   ) {
-    throw new HelmError('validation_error', 'agent.send_keys keys must be a non-empty string array', 400, { keys: request.keys })
+    throw new HelmxError('validation_error', 'agent.send_keys keys must be a non-empty string array', 400, { keys: request.keys })
   }
   if (typeof request.expectedStateSeq !== 'number' || !Number.isSafeInteger(request.expectedStateSeq) || request.expectedStateSeq < 0) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `agent.send_keys expectedStateSeq must be a non-negative safe integer: ${String(request.expectedStateSeq)}`,
       400,
@@ -393,14 +393,14 @@ export function buildSendKeysParams(request: SendKeysRequest): Record<string, un
 //
 // Current evidence (/root/code/herdr server source, herdr 0.9.5 / protocol 22, read-only verification):
 // - `AgentPromptParams` is only `{target, text, wait}` (src/api/schema/agents.rs:176-181),
-//   with no guard fields; serde has no deny_unknown_fields -- helm never blindly sends proposed extension fields
+//   with no guard fields; serde has no deny_unknown_fields -- helmx never blindly sends proposed extension fields
 //   (old servers would silently ignore them, making verification pointless);
 // - Server admission rejects blocked / launch_pending / no known_agent / non-foreground CLI before
 //   writing any PTY bytes (wire errors agent_blocked / agent_not_ready /
 //   agent_not_found etc., zero writes); a submission that just turned idle after a working precheck is continued as
 //   a new turn;
 // - Admission is not a commit-point atomic recheck (lifecycle may still change between paste and Enter) --
-//   helm honestly reports preflight semantics (guardLevel 'preflight'); never claim CAS.
+//   helmx honestly reports preflight semantics (guardLevel 'preflight'); never claim CAS.
 //
 // Steer delivery shape: {target: managed agentName, text} (no wait, no extra fields, single
 // delivery without retry); outcome determinism is guaranteed by the unique handoff-file-name redirect (see executor).
@@ -431,12 +431,12 @@ export function parsePong(result: unknown): HerdrServerInfo {
   const capabilities = obj['capabilities']
   if (capabilities === undefined || capabilities === null) return info
   if (!isObj(capabilities)) {
-    throw new HelmError('herdr_protocol_violation', 'ping capabilities must be an object or null', 502, { capabilities })
+    throw new HelmxError('herdr_protocol_violation', 'ping capabilities must be an object or null', 502, { capabilities })
   }
   const casValue = capabilities[SEND_KEYS_CAS_CAPABILITY]
   if (casValue !== undefined) {
     if (typeof casValue !== 'boolean') {
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_protocol_violation',
         `ping capabilities.${SEND_KEYS_CAS_CAPABILITY} must be a boolean, got: ${JSON.stringify(casValue)}`,
         502,
@@ -450,7 +450,7 @@ export function parsePong(result: unknown): HerdrServerInfo {
 
 /**
  * Server CAS rejection detection: wire error.code === 'stale_state' (becomes HerdrTransportError.code
- * via transport raiseWireError; the structured check also tolerates the in-process HelmError
+ * via transport raiseWireError; the structured check also tolerates the in-process HelmxError
  * shape). Semantics = keys not sent; callers must not treat it as a successful send.
  */
 export function isStaleStateError(error: unknown): boolean {

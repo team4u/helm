@@ -11,12 +11,12 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import type { ArtifactPreviewerProps, ArtifactMetadata, ConversationSummary, PluginUiContribution } from '@helm/protocol'
+import type { ArtifactPreviewerProps, ArtifactMetadata, ConversationSummary, PluginUiContribution } from '@helmx/protocol'
 import { groupUiContributions } from '../src/lib/types.js'
 import { ArtifactPreviewModal } from '../src/conversation/ArtifactPreviewModal.js'
 import { seedPluginClientModule, resetPluginClientCache } from '../src/lib/plugin-client.js'
 import { makeTestStore } from './helpers/store.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { readHostStyles } from './helpers/host-styles.js'
 
@@ -49,7 +49,7 @@ function installObjectUrlShim(): { active: () => string[]; created: () => string
   let seq = 0
   URL.createObjectURL = ((blob: Blob) => {
     seq += 1
-    const url = `blob:helm-test-${seq}`
+    const url = `blob:helmx-test-${seq}`
     created.push(url)
     live.add(url)
     return url
@@ -71,7 +71,7 @@ function installArtifactFetch(artifacts: TestArtifact[]): void {
     // 插件 client 模块：返回空体 + seeded hash，让真实 loadPluginClientModule 走
     // 缓存命中路径复用 seedPluginClientModule 已发布的模块命名空间（真实加载链路）。
     if (raw.startsWith('/api/plugins/')) {
-      return new Response('', { status: 200, headers: { 'x-helm-client-hash': 'seeded' } })
+      return new Response('', { status: 200, headers: { 'x-helmx-client-hash': 'seeded' } })
     }
     const match = /^\/api\/artifacts\/([^/]+)\/content/.exec(raw)
     if (match !== null) {
@@ -126,7 +126,7 @@ function buildStore(over: {
   artifacts?: TestArtifact[]
   conversationId?: number
   asyncMeta?: boolean
-}): HelmExternalStore {
+}): HelmxExternalStore {
   const conversationId = over.conversationId ?? 7
   const metas = (over.artifacts ?? []).map((a) => artifactMeta(a, conversationId))
   const store = makeTestStore({
@@ -138,7 +138,7 @@ function buildStore(over: {
   return store
 }
 
-function mount(host: HTMLElement, store: HelmExternalStore, artifactId: string, conversationId?: number): Root {
+function mount(host: HTMLElement, store: HelmxExternalStore, artifactId: string, conversationId?: number): Root {
   let root: Root | undefined
   act(() => {
     root = createRoot(host)
@@ -166,7 +166,7 @@ async function flush(): Promise<void> {
 }
 
 /** 再渲染一次（触发 client 组件缓存快路径等渲染批次）。 */
-async function rerender(root: Root, store: HelmExternalStore, artifactId: string, conversationId?: number): Promise<void> {
+async function rerender(root: Root, store: HelmxExternalStore, artifactId: string, conversationId?: number): Promise<void> {
   await act(async () => {
     root.render(e(
       HostStoreProviders, { value: store },
@@ -275,7 +275,7 @@ test('client 轨插件预览器：真实 Props（会话上下文 / blobUrl / siz
   assert.ok(previewPanel() === null, '切回默认后插件视图消失')
 
   // 选择器存在且包含默认项与插件项
-  const trigger = document.querySelector('.helm-select-trigger') as HTMLElement | null
+  const trigger = document.querySelector('.helmx-select-trigger') as HTMLElement | null
   assert.ok(trigger !== null, '预览方式选择器渲染')
 
   act(() => { root.unmount() })
@@ -334,7 +334,7 @@ test('插件停用（贡献移除）：选择状态有效回退默认渲染', { 
   await flush()
 
   // 选择插件视图
-  const selectTrigger = document.querySelector('.helm-select-trigger') as HTMLElement
+  const selectTrigger = document.querySelector('.helmx-select-trigger') as HTMLElement
   assert.ok(selectTrigger !== undefined)
   // 通过 select trigger 的键盘交互较繁琐：直接模拟 Select 的 onChange 不可达（Radix 封装），
   // 改为断言选中插件视图的默认行为（priority 唯一命中自动选择前仍显示默认），

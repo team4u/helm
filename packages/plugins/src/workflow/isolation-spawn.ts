@@ -6,12 +6,12 @@
  * - `trackWithoutPreallocation`：外部运行时 / 普通派生（不预分配；`onResolved` 回传 worktree 时统一登记与上锁）。
  */
 import {
-  HelmError,
+  HelmxError,
   redactJsonValue,
   sanitizeAgentExecutionInfo as sanitizeExecutionInfo,
   type AgentExecutionInfo,
   type AgentSpawnRequest,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { extractWorkflowExecutionMeta, workflowExecutionMeta, type WorktreeExecutionDescriptor } from '../contracts.js'
 import type { ManagedWorktreeRecord, WorktreeAllocator } from './worktree.js'
 import type { WorktreeStore } from './worktree-store.js'
@@ -151,17 +151,17 @@ export async function resumeWithWorktree(
   next: (finalRequest: AgentSpawnRequest) => Promise<unknown>,
 ): Promise<unknown> {
   if (record.status === 'removed') {
-    throw new HelmError('worktree_missing', `子会话绑定的隔离 worktree '${record.path}' 已被清理（branch: ${record.branch}）`, 409)
+    throw new HelmxError('worktree_missing', `子会话绑定的隔离 worktree '${record.path}' 已被清理（branch: ${record.branch}）`, 409)
   }
   const conv = ctx.deps.host.getConversation(childId)
   if ((conv.nodeId ?? 'local') !== record.nodeId) {
-    throw new HelmError('resume_cwd_conflict', '隔离子会话必须在原节点和工作树上续接，不能切换节点', 409, {
+    throw new HelmxError('resume_cwd_conflict', '隔离子会话必须在原节点和工作树上续接，不能切换节点', 409, {
       conversationId: childId,
       nodeId: record.nodeId,
     })
   }
   if (request.cwd !== undefined && request.cwd !== record.path) {
-    throw new HelmError(
+    throw new HelmxError(
       'resume_cwd_conflict',
       `子会话已绑定隔离 worktree '${record.path}'，不支持在 resume 时改写 cwd 为 '${request.cwd}'`,
       409,
@@ -216,7 +216,7 @@ export async function reattachWithWorktree(
   next: (finalRequest: AgentSpawnRequest) => Promise<unknown>,
 ): Promise<unknown> {
   if (record.status === 'removed') {
-    throw new HelmError('worktree_missing', `子会话绑定的隔离 worktree '${record.path}' 已被清理（branch: ${record.branch}）`, 409)
+    throw new HelmxError('worktree_missing', `子会话绑定的隔离 worktree '${record.path}' 已被清理（branch: ${record.branch}）`, 409)
   }
   const convId = request.reattach?.conversationId
   const leaseToken = await ctx.store.acquireReattachLease(
@@ -285,7 +285,7 @@ export async function trackWithoutPreallocation(
       const externalWorktree = extractWorkflowExecutionMeta(info).worktree
       if (externalWorktree !== undefined) {
         if (info.nodeId === undefined) {
-          throw new HelmError('execution_info_invalid', '隔离工作树必须回传实际 nodeId，不能推测外部运行时的节点', 502)
+          throw new HelmxError('execution_info_invalid', '隔离工作树必须回传实际 nodeId，不能推测外部运行时的节点', 502)
         }
         const managed =
           ctx.allocator.findActive({ path: externalWorktree.path, nodeId: info.nodeId }) ??
@@ -299,7 +299,7 @@ export async function trackWithoutPreallocation(
           })
         const safe = redactJsonValue(managed, (text) => ctx.deps.host.redact(text))
         if (JSON.stringify(safe) !== JSON.stringify(managed)) {
-          throw new HelmError(
+          throw new HelmxError(
             'worktree_metadata_secret',
             `隔离执行元数据包含已登记机密，拒绝持久化；执行标识 ${info.executionId ?? info.conversationId ?? '未知'}`,
             400,

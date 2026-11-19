@@ -1,6 +1,6 @@
 import * as React from 'react'
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
-import { useOverlayChildStyle } from '@helm/plugin-client'
+import { useOverlayChildStyle } from '@helmx/plugin-client'
 
 export interface DropdownMenuPortalProps extends DropdownMenuPrimitive.DropdownMenuPortalProps {}
 
@@ -42,7 +42,7 @@ export const DropdownMenuContent = React.forwardRef<
       ref={ref}
       sideOffset={sideOffset}
       align={align}
-      className={`helm-dropdown-content ${className}`.trim()}
+      className={`helmx-dropdown-content ${className}`.trim()}
       style={layeredStyle}
       {...props}
     >
@@ -68,7 +68,7 @@ export const DropdownMenuItem = React.forwardRef<
 >(({ className = '', danger = false, ...props }, ref) => (
   <DropdownMenuPrimitive.Item
     ref={ref}
-    className={`helm-dropdown-item popover-item ${danger ? 'helm-dropdown-item-danger popover-item-danger' : ''} ${className}`.trim()}
+    className={`helmx-dropdown-item popover-item ${danger ? 'helmx-dropdown-item-danger popover-item-danger' : ''} ${className}`.trim()}
     {...props}
   />
 ))
@@ -82,7 +82,7 @@ export const DropdownMenuSeparator = React.forwardRef<
 >(({ className = '', ...props }, ref) => (
   <DropdownMenuPrimitive.Separator
     ref={ref}
-    className={`helm-dropdown-separator popover-separator ${className}`.trim()}
+    className={`helmx-dropdown-separator popover-separator ${className}`.trim()}
     {...props}
   />
 ))
@@ -96,7 +96,7 @@ export const DropdownMenuLabel = React.forwardRef<
 >(({ className = '', ...props }, ref) => (
   <DropdownMenuPrimitive.Label
     ref={ref}
-    className={`helm-dropdown-label ${className}`.trim()}
+    className={`helmx-dropdown-label ${className}`.trim()}
     {...props}
   />
 ))
@@ -112,7 +112,7 @@ export const DropdownMenuSubTrigger = React.forwardRef<
 >(({ className = '', inset, children, ...props }, ref) => (
   <DropdownMenuPrimitive.SubTrigger
     ref={ref}
-    className={`helm-dropdown-item popover-item helm-dropdown-sub-trigger ${inset ? 'is-inset' : ''} ${className}`.trim()}
+    className={`helmx-dropdown-item popover-item helmx-dropdown-sub-trigger ${inset ? 'is-inset' : ''} ${className}`.trim()}
     {...props}
   >
     {children}
@@ -128,7 +128,7 @@ export const DropdownMenuSubContent = React.forwardRef<
 >(({ className = '', ...props }, ref) => (
   <DropdownMenuPrimitive.SubContent
     ref={ref}
-    className={`helm-dropdown-content helm-dropdown-sub-content ${className}`.trim()}
+    className={`helmx-dropdown-content helmx-dropdown-sub-content ${className}`.trim()}
     {...props}
   />
 ))
@@ -144,7 +144,7 @@ export const DropdownMenuArrow = React.forwardRef<
     ref={ref}
     width={width}
     height={height}
-    className={`helm-dropdown-arrow ${className}`.trim()}
+    className={`helmx-dropdown-arrow ${className}`.trim()}
     {...props}
   />
 ))

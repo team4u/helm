@@ -1,5 +1,5 @@
 /**
- * ConversationTracker: pi-durable conversation view layer for Helm.
+ * ConversationTracker: pi-durable conversation view layer for Helmx.
  *
  * Core mechanism: observeConversation synchronous observer (never awaits inside advance, only records),
  * synchronously updating in-memory mirrors on snapshot pushes and queuing side effects (SSE pushes emit in microtasks).
@@ -13,8 +13,8 @@
  * Exact turn_settled tracking:
  * - Inputs use durable input.id (i.e., SDK requestId) as the unique tracking identity: registerInput registers before submit,
  *   and bindSubmission backfills the submissionId -> requestId correlation index;
- * - Observe paths (helm.input entries / pi.inbox reconstruction) idempotently merge into the single record by requestId;
- *   entry reconstruction only counts the active run window (>= run.first) and current inbox so settled historical helm.input
+ * - Observe paths (helmx.input entries / pi.inbox reconstruction) idempotently merge into the single record by requestId;
+ *   entry reconstruction only counts the active run window (>= run.first) and current inbox so settled historical helmx.input
  *   never resurrects; on restart recovery of active runs, live.run.inputs authoritative manifest + submission queries backfill
  *   metadata and indexes;
  * - Runs are identified by LOGICAL identity, not by pi.live.run.taskId: pi-durable hands run control to a new generation
@@ -38,12 +38,12 @@ import type {
   HubActivityCounts,
   TurnOutcome,
   TurnSettledPayload,
-} from '@helm/protocol'
-import { HelmError, isHubActivityBusy } from '@helm/protocol'
+} from '@helmx/protocol'
+import { HelmxError, isHubActivityBusy } from '@helmx/protocol'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness, ConversationView, Observation, Observer } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
-import type { ConvMeta, HelmStore } from './store.js'
+import type { ConvMeta, HelmxStore } from './store.js'
 import { summaryOf } from './store.js'
 import { deriveConversationLive, toConversationEntry, type EntryRecordLike } from './entries.js'
 import { coveredByRewind, rewindIntervalOf, type RewindInterval } from './runtime-helpers.js'
@@ -53,7 +53,7 @@ import { ContextUsageRefresh, type ContextUsageHost } from './context-usage-refr
 import {
   type ConversationMirror,
   createConversationMirror,
-  type HelmInputMeta,
+  type HelmxInputMeta,
   type InboxItemShape,
   inputFromMeta,
   type LiveStateShape,
@@ -111,7 +111,7 @@ export function isContinuedRun(prev: RunIdentityShape, next: RunIdentityShape | 
 
 export class ConversationTracker {
   private readonly harness: Harness
-  private readonly store: HelmStore
+  private readonly store: HelmxStore
   private readonly events: TrackerEvents
   /** conversation -> per-conversation aggregate mirror (created on observe or first write; deleted wholesale on stopObserving). */
   private readonly mirrors = new Map<number, ConversationMirror>()
@@ -134,13 +134,13 @@ export class ConversationTracker {
 
   constructor(options: {
     harness: Harness
-    store: HelmStore
+    store: HelmxStore
     events: TrackerEvents
     /** Error summary redactor (shared source with runtime SecretStash); defaults to identity (test environments only). */
     redactError?: (text: string) => string
     /** Current conversation ownership reader (injected by Runtime via ownership.getOwnership); defaults to human.
      * Used solely for unread policy on turn settlement so background derived sub-conversations never mark fake human unreads. */
-    ownershipOf?: (id: number) => 'helm' | 'bot' | 'human'
+    ownershipOf?: (id: number) => 'helmx' | 'bot' | 'human'
     /** Current Models catalog reader (for contextUsage window lookup); if omitted, contextWindow stays unset without fabricating. */
     models?: () => Models
     /** Host closing predicate (double protection alongside tracker.close()). */
@@ -186,7 +186,7 @@ export class ConversationTracker {
   }
 
   /** Live conversation ownership reader (defaults to human); consumed solely by unread policy on turn settlement. */
-  private readonly ownershipOf: ((id: number) => 'helm' | 'bot' | 'human') | undefined
+  private readonly ownershipOf: ((id: number) => 'helmx' | 'bot' | 'human') | undefined
 
   /** Live Models catalog reader (if omitted, window stays unset). */
   private readonly modelsOf: (() => Models) | undefined
@@ -238,7 +238,7 @@ export class ConversationTracker {
 
   /** Initial attachment: registers watermarks and internal mirrors without emitting entry/live events.
    *
-   * When recovering an active run (restart/re-attach), the run's helm.input entry may have slid out of the
+   * When recovering an active run (restart/re-attach), the run's helmx.input entry may have slid out of the
    * observe window on long runs, causing synchronous reconstruction to lose input metadata. We backfill via
    * SDK authoritative mappings: live.run.inputs gives the exact submissionIds admitted to this run, which we look
    * up via harness.submission() for entry IDs and fetch precisely (minEntryId=maxEntryId) to restore origin/meta/attachments;
@@ -309,7 +309,7 @@ export class ConversationTracker {
     this.noteActivityMutation()
   }
 
-  /** Back-read result: helm.input entries + authoritative (submissionId, requestId) pairs. */
+  /** Back-read result: helmx.input entries + authoritative (submissionId, requestId) pairs. */
   private async loadRunInputEntries(
     id: number,
     submissionIds: number[],
@@ -355,8 +355,8 @@ export class ConversationTracker {
   private adoptInputsFromInbox(id: number, items: ReadonlyArray<InboxItemShape>): void {
     for (const item of items) {
       if (item.mode === 'write') continue
-      const data = item.entry?.data as HelmInputMeta | undefined
-      if (item.entry?.kind !== 'helm.input' || !data) continue
+      const data = item.entry?.data as HelmxInputMeta | undefined
+      if (item.entry?.kind !== 'helmx.input' || !data) continue
       if (typeof data.id !== 'string' || typeof data.text !== 'string') continue
       // Inbox item id is SDK submissionId: register correlation index so markConsumed matches once dequeued.
       this.mirrorOf(id).submissionIndex.set(item.id, data.id)
@@ -405,14 +405,14 @@ export class ConversationTracker {
         BACKGROUND_CONTEXT,
       )
       for (const raw of page.items as never as ReadonlyArray<EntryRecordLike>) {
-        if (raw.kind === 'helm.rewind') {
+        if (raw.kind === 'helmx.rewind') {
           const cut = rewindIntervalOf(raw)
           if (cut !== undefined) cuts.push(cut)
         }
         const numeric = Number(raw.id)
         if (!Number.isSafeInteger(numeric) || numeric <= 0) continue
         if (raw.kind === 'pi.system') continue
-        if (raw.kind !== 'helm.rewind' && coveredByRewind(numeric, cuts)) continue
+        if (raw.kind !== 'helmx.rewind' && coveredByRewind(numeric, cuts)) continue
         return numeric
       }
       if (page.next === undefined) return 0
@@ -441,7 +441,7 @@ export class ConversationTracker {
   }
 
   /** Register submissionId -> requestId correlation after submit returns (SDK run.inputs etc. identify inputs
-   * by submissionId; maps back to tracking identity, and dropInput removes on HelmError). */
+   * by submissionId; maps back to tracking identity, and dropInput removes on HelmxError). */
   bindSubmission(conversationId: number, requestId: string, submissionId: number): void {
     this.mirrorOf(conversationId).submissionIndex.set(submissionId, requestId)
   }
@@ -726,7 +726,7 @@ export class ConversationTracker {
     this.usage.noteBoundary(id, view, prev, live)
 
     // Assistant text: take the newest pi.assistant entry at the window tail.
-    // Stop scanning backward immediately upon hitting helm.rewind / pi.reset: right after an in-place rewrite
+    // Stop scanning backward immediately upon hitting helmx.rewind / pi.reset: right after an in-place rewrite
     // appends a truncation marker (before a new answer exists), older pi.assistant entries are superseded and must
     // never re-trigger onAssistantText to pollute FTS5 with stale answers.
     for (let i = view.entries.length - 1; i >= 0; i -= 1) {
@@ -734,7 +734,7 @@ export class ConversationTracker {
         | { kind: string; id: number; model?: ReadonlyArray<{ content?: ReadonlyArray<{ type: string; text?: string }> }> }
         | undefined
       if (entry === undefined) continue
-      if (entry.kind === 'helm.rewind' || entry.kind === 'pi.reset') break
+      if (entry.kind === 'helmx.rewind' || entry.kind === 'pi.reset') break
       if (entry.kind === 'pi.assistant') {
         const text = assistantTextOf(entry)
         if (text !== '') {
@@ -744,8 +744,8 @@ export class ConversationTracker {
       }
     }
 
-    // Observe helm.input entries: only consider new items inside the current run window (>= run.first);
-    // historical helm.input entries must never resurrect settled inputs into trackedInputs.
+    // Observe helmx.input entries: only consider new items inside the current run window (>= run.first);
+    // historical helmx.input entries must never resurrect settled inputs into trackedInputs.
     const first = mirror.runFirstEntry
     const candidates: Array<Record<string, unknown>> = []
     for (const raw of view.entries as never as ReadonlyArray<EntryRecordLike>) {
@@ -834,7 +834,7 @@ export class ConversationTracker {
         }
       }
       this.resetRunState(id)
-      // Monotonically advance input-rebuild lower bound to snapshot tail so settled run entries (incl. helm.input)
+      // Monotonically advance input-rebuild lower bound to snapshot tail so settled run entries (incl. helmx.input)
       // become history and cannot resurrect on later snapshot scans.
       const tail = view.entries.length
         ? Number((view.entries[view.entries.length - 1] as EntryRecordLike).id)
@@ -1002,24 +1002,24 @@ export class ConversationTracker {
     this.events.onLiveChanged(snapshot)
   }
 
-  /** Register inputs from helm.input entry data (idempotent merge into unique record keyed by input.id = requestId).
+  /** Register inputs from helmx.input entry data (idempotent merge into unique record keyed by input.id = requestId).
    *
    * On happy paths register/bind already holds the authoritative record, so entry observation only fills missing metadata
    * fields (origin/meta/attachments) without creating duplicates. */
   private adoptInputsFromEntries(id: number, entries: ReadonlyArray<unknown>): void {
     for (const raw of entries) {
       const entry = raw as { kind?: string; data?: unknown }
-      // Custom input entry: SDK pickInputEntry writes {kind:'helm.input', data} into entry.data;
+      // Custom input entry: SDK pickInputEntry writes {kind:'helmx.input', data} into entry.data;
       // model only holds UserMessage (nothing in model[0].data).
-      if (entry?.kind !== 'helm.input') continue
-      const meta = entry.data as HelmInputMeta | undefined
+      if (entry?.kind !== 'helmx.input') continue
+      const meta = entry.data as HelmxInputMeta | undefined
       if (!meta || typeof meta.id !== 'string' || typeof meta.text !== 'string') continue
       this.upsertTrackedInput(id, meta.id, meta)
     }
   }
 
-  /** Register or merge metadata for a single helm.input (idempotent by input.id; caller checked meta.id/text are strings). */
-  private upsertTrackedInput(id: number, requestId: string, meta: HelmInputMeta): void {
+  /** Register or merge metadata for a single helmx.input (idempotent by input.id; caller checked meta.id/text are strings). */
+  private upsertTrackedInput(id: number, requestId: string, meta: HelmxInputMeta): void {
     const map = this.mirrorOf(id).trackedInputs
     const rebuilt = inputFromMeta(meta)
     const existing = map.get(requestId)
@@ -1154,7 +1154,7 @@ export class ConversationTracker {
   /** Derive the five-state status from store meta + live mirror (blocked takes priority over working on derivation). */
   summaryOf(conversationId: number, pendingAskOverride?: number | TurnOutcome): ConversationSummary {
     const meta = this.store.getConv(conversationId)
-    if (!meta) throw new HelmError('not_found', `conversation not found: ${conversationId}`, 404)
+    if (!meta) throw new HelmxError('not_found', `conversation not found: ${conversationId}`, 404)
     const mirror = this.mirrors.get(conversationId)
     const live = mirror?.live
     const pendingAsks =
@@ -1438,11 +1438,11 @@ function assistantTextOf(entry: {
 
 export { deriveTitle }
 
-/** Compute latest visible entry ID (excluding `pi.system` and entries covered by `helm.rewind`; `0` when none). */
+/** Compute latest visible entry ID (excluding `pi.system` and entries covered by `helmx.rewind`; `0` when none). */
 function latestVisibleEntryIdOf(entries: ReadonlyArray<EntryRecordLike>): number {
   const cuts: RewindInterval[] = []
   for (const raw of entries) {
-    if (raw.kind !== 'helm.rewind') continue
+    if (raw.kind !== 'helmx.rewind') continue
     const cut = rewindIntervalOf(raw)
     if (cut !== undefined) cuts.push(cut)
   }
@@ -1451,7 +1451,7 @@ function latestVisibleEntryIdOf(entries: ReadonlyArray<EntryRecordLike>): number
     const numeric = Number(raw.id)
     if (!Number.isSafeInteger(numeric) || numeric <= 0) continue
     if (raw.kind === 'pi.system') continue
-    if (raw.kind !== 'helm.rewind' && coveredByRewind(numeric, cuts)) continue
+    if (raw.kind !== 'helmx.rewind' && coveredByRewind(numeric, cuts)) continue
     if (numeric > latest) latest = numeric
   }
   return latest

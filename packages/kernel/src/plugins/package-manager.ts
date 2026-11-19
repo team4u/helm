@@ -1,7 +1,7 @@
 /**
  * External plugin package management: install / update / remove transactions.
  *
- * Follows pi's source model (npm / git / local), with helm semantics:
+ * Follows pi's source model (npm / git / local), with helmx semantics:
  * staging copy + full doctor preflight + atomic move into managed directory +
  * persisted record + registration into PluginHost. No marketplace DB, versioned pool,
  * or migration scripts.
@@ -25,11 +25,11 @@ import { spawn } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readdir, readFile, rename, rm, stat } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { HelmError, type PluginBuildProvider, type PluginInstallResult, type PluginPackageRecord, type PluginRemoveResult, type PluginPackageSource, type PluginSummary, type PluginUpdateResult } from '@helm/protocol';
+import { HelmxError, type PluginBuildProvider, type PluginInstallResult, type PluginPackageRecord, type PluginRemoveResult, type PluginPackageSource, type PluginSummary, type PluginUpdateResult } from '@helmx/protocol';
 import { verifyDeclaredPrebuiltDir } from './external-loader.js';
 import { parsePluginSource } from './package-source.js';
 import { doctorPluginDir } from './plugin-doctor.js';
-import { readHelmClientDependencies } from './plugin-manifest.js';
+import { readHelmxClientDependencies } from './plugin-manifest.js';
 import type { PluginPackageManagerStore } from './package-store.js';
 
 // ---------------------------------------------------------------------------
@@ -87,8 +87,8 @@ export function tailLines(text: string, lines = 40): string {
   return all.slice(Math.max(0, all.length - lines)).join('\n').trim();
 }
 
-function commandError(kind: string, cmd: string, args: string[], result: RunResult): HelmError {
-  return new HelmError(
+function commandError(kind: string, cmd: string, args: string[], result: RunResult): HelmxError {
+  return new HelmxError(
     `plugin_package_${kind}_failed`,
     `plugin package ${kind} command failed: ${cmd} ${args.join(' ')} (exit ${result.code})\n${tailLines(result.stderr || result.stdout)}`,
     500,
@@ -139,7 +139,7 @@ const PLUGIN_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
 
 function safeDirName(pluginId: string): string {
   if (!PLUGIN_ID_PATTERN.test(pluginId) || pluginId.startsWith('builtin:')) {
-    throw new HelmError('invalid_plugin_definition', `plugin id is not allowed as a managed install directory name: ${pluginId}`, 400, { pluginId });
+    throw new HelmxError('invalid_plugin_definition', `plugin id is not allowed as a managed install directory name: ${pluginId}`, 400, { pluginId });
   }
   return pluginId;
 }
@@ -147,7 +147,7 @@ function safeDirName(pluginId: string): string {
 function assertInsideDataDir(dataDir: string, target: string): void {
   const rel = relative(resolve(dataDir), resolve(target));
   if (rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
-    throw new HelmError('validation_error', `install target escapes managed plugins directory: ${target}`, 400, { target });
+    throw new HelmxError('validation_error', `install target escapes managed plugins directory: ${target}`, 400, { target });
   }
 }
 
@@ -241,7 +241,7 @@ export class PluginPackageManager {
         const report = await doctorPluginDir(payloadDir, { buildProvider: this.buildProvider });
         if (!report.ok) {
           const first = report.checks.find((c) => c.error !== undefined);
-          throw new HelmError(
+          throw new HelmxError(
             'plugin_package_doctor_failed',
             `plugin package install preflight failed (${first ? `${first.label}: ${first.error!.message}` : 'unknown check failed'}); aborting install`,
             422,
@@ -250,7 +250,7 @@ export class PluginPackageManager {
         }
         // Duplicate install protection: reject if a managed record or registered instance already exists.
         if (this.store.getRecord(pluginId) !== undefined) {
-          throw new HelmError(
+          throw new HelmxError(
             'plugin_package_already_installed',
             `plugin ${pluginId} is already installed via package manager (run update or remove before reinstalling)`,
             409,
@@ -258,7 +258,7 @@ export class PluginPackageManager {
           );
         }
         if (this.host.listSummaries().some((s) => s.id === pluginId)) {
-          throw new HelmError(
+          throw new HelmxError(
             'plugin_package_already_installed',
             `plugin ${pluginId} is already registered (possibly manually placed in plugins directory); refusing duplicate install`,
             409,
@@ -268,7 +268,7 @@ export class PluginPackageManager {
         const target = join(this.pluginsDir(), safeDirName(dirName));
         assertInsideDataDir(this.pluginsDir(), target);
         if (await pathExists(target)) {
-          throw new HelmError(
+          throw new HelmxError(
             'plugin_package_target_occupied',
             `install target directory already exists (untracked leftover; inspect and clean up manually): ${target}`,
             409,
@@ -286,7 +286,7 @@ export class PluginPackageManager {
           // Keep directory & instance if a concurrent scan already registered the same plugin ID.
           if (this.host.listSummaries().some((s) => s.id === pluginId)) {
             inPlace = false;
-            throw new HelmError(
+            throw new HelmxError(
               'plugin_package_install_failed',
               `Plugin ${pluginId} registration failed after install: same name plugin registered concurrently; keeping existing directory and instance without managed record: ${err instanceof Error ? err.message : String(err)}`,
               500,
@@ -300,7 +300,7 @@ export class PluginPackageManager {
           }
           await rm(target, { recursive: true, force: true }).catch(() => {});
           inPlace = false;
-          throw new HelmError(
+          throw new HelmxError(
             'plugin_package_install_failed',
             `Plugin ${pluginId} registration failed after install; rolled back and deleted directory: ${err instanceof Error ? err.message : String(err)}`,
             500,
@@ -322,7 +322,7 @@ export class PluginPackageManager {
             // register and directory all already in, record persist after restart can load retry.
             enableError = {
               message: err instanceof Error ? err.message : String(err),
-              code: err instanceof HelmError ? err.code : 'plugin_enable_failed',
+              code: err instanceof HelmxError ? err.code : 'plugin_enable_failed',
             };
             const fallback = this.host.listSummaries().find((s) => s.id === registered.pluginId);
             summary = { ...registered.summary, ...(fallback !== undefined ? { enabled: fallback.enabled } : {}) };
@@ -354,7 +354,7 @@ export class PluginPackageManager {
           if (unregisterError === undefined) {
             await rm(target, { recursive: true, force: true }).catch(() => {});
             inPlace = false;
-            throw new HelmError(
+            throw new HelmxError(
               'plugin_package_install_failed',
               `Plugin ${pluginId} failed to persist install record; rolled back (unregistered and deleted directory): ${err instanceof Error ? err.message : String(err)}`,
               500,
@@ -366,7 +366,7 @@ export class PluginPackageManager {
               },
             );
           }
-          throw new HelmError(
+          throw new HelmxError(
             'plugin_package_install_failed',
             `Plugin ${pluginId} failed to persist install record, and rollback unregister failed (${unregisterError instanceof Error ? unregisterError.message : String(unregisterError)}); directory and instance already keep`,
             500,
@@ -416,7 +416,7 @@ export class PluginPackageManager {
     return this.enqueue(async () => {
       const record = this.store.getRecord(pluginId);
       if (record === undefined) {
-        throw new HelmError('unknown_plugin_package', `plugin ${pluginId} has no managed install record (only managed packages can be updated)`, 404, { pluginId });
+        throw new HelmxError('unknown_plugin_package', `plugin ${pluginId} has no managed install record (only managed packages can be updated)`, 404, { pluginId });
       }
       // 1. Safety preflight: reject when live tasks or busy providers exist without modifying anything.
       await this.host.assertManagedPluginUpdateSafe(pluginId);
@@ -430,7 +430,7 @@ export class PluginPackageManager {
         await this.installRuntimeDeps(payloadDir);
         const identified = await this.identifyPlugin(payloadDir, record.source);
         if (identified.pluginId !== pluginId) {
-          throw new HelmError(
+          throw new HelmxError(
             'plugin_package_id_changed',
             `plugin id changed during update (expected ${pluginId}, actual ${identified.pluginId}); rejecting replacement`,
             409,
@@ -440,7 +440,7 @@ export class PluginPackageManager {
         const report = await doctorPluginDir(payloadDir, { buildProvider: this.buildProvider });
         if (!report.ok) {
           const first = report.checks.find((c) => c.error !== undefined);
-          throw new HelmError(
+          throw new HelmxError(
             'plugin_package_doctor_failed',
             `Plugin package update preflight failed (${first ? `${first.label}: ${first.error!.message}` : 'unknown check failed'}); keeping existing installation`,
             422,
@@ -505,7 +505,7 @@ export class PluginPackageManager {
             };
           }
         }
-        throw new HelmError(
+        throw new HelmxError(
           'plugin_package_update_failed',
           `plugin ${pluginId} update after reload failed${rollbackError === undefined ? '(already rollback to update before directory and instance, old version continue available)' : `(rollback do not complete:${rollbackError.message})`}:${reloadError instanceof Error ? reloadError.message : String(reloadError)}`,
           500,
@@ -536,11 +536,11 @@ export class PluginPackageManager {
   async remove(pluginId: string): Promise<PluginRemoveResult> {
     return this.enqueue(async () => {
       if (pluginId.startsWith('builtin:')) {
-        throw new HelmError('plugin_locked', `built-in plugin ${pluginId} cannot be removed`, 403, { pluginId });
+        throw new HelmxError('plugin_locked', `built-in plugin ${pluginId} cannot be removed`, 403, { pluginId });
       }
       const record = this.store.getRecord(pluginId);
       if (record === undefined) {
-        throw new HelmError('unknown_plugin_package', `plugin ${pluginId} has no managed install record (delete manually placed plugin directories directly)`, 404, { pluginId });
+        throw new HelmxError('unknown_plugin_package', `plugin ${pluginId} has no managed install record (delete manually placed plugin directories directly)`, 404, { pluginId });
       }
       const { wasEnabled } = await this.host.removeManagedPlugin(pluginId);
       // Purge persisted docs and flush before removing files/records so failures remain safely retryable.
@@ -574,7 +574,7 @@ export class PluginPackageManager {
     const files = await readdir(packDir);
     const tarball = files.find((f) => f.endsWith('.tgz'));
     if (tarball === undefined) {
-      throw new HelmError('plugin_package_install_failed', `npm pack did not produce a tarball (spec: ${source.spec})`, 500, { spec: source.spec, stdoutTail: tailLines(pack.stdout) });
+      throw new HelmxError('plugin_package_install_failed', `npm pack did not produce a tarball (spec: ${source.spec})`, 500, { spec: source.spec, stdoutTail: tailLines(pack.stdout) });
     }
     const payload = join(staging, 'payload');
     await mkdir(payload, { recursive: true });
@@ -597,7 +597,7 @@ export class PluginPackageManager {
       root = join(repoDir, source.subdirectory);
       const st = await stat(root).catch(() => undefined);
       if (st?.isDirectory() !== true) {
-        throw new HelmError('plugin_package_install_failed', `git repository subdirectory is missing: ${source.subdirectory}`, 404, { repo: source.repo, subdirectory: source.subdirectory });
+        throw new HelmxError('plugin_package_install_failed', `git repository subdirectory is missing: ${source.subdirectory}`, 404, { repo: source.repo, subdirectory: source.subdirectory });
       }
     }
     const payload = join(staging, 'payload');
@@ -609,12 +609,12 @@ export class PluginPackageManager {
   private async fetchLocal(source: Extract<PluginPackageSource, { kind: 'local' }>, staging: string): Promise<string> {
     const st = await stat(source.path).catch(() => undefined);
     if (st?.isDirectory() !== true) {
-      throw new HelmError('plugin_package_install_failed', `local plugin path is missing or not a directory: ${source.path}`, 404, { path: source.path });
+      throw new HelmxError('plugin_package_install_failed', `local plugin path is missing or not a directory: ${source.path}`, 404, { path: source.path });
     }
     const rel = relative(resolve(this.pluginsDir()), resolve(source.path));
     const inside = !(rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel));
     if (inside) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `local plugin directory lies inside the managed plugins tree (${this.pluginsDir()}); self-installation is disallowed: ${source.path}`,
         400,
@@ -636,7 +636,7 @@ export class PluginPackageManager {
   private async installRuntimeDeps(dir: string): Promise<void> {
     const pkgJson = join(dir, 'package.json');
     const hasPkg = await stat(pkgJson).then(() => true).catch(() => false);
-    const declaredClientSpecs = readHelmClientDependencies(dir);
+    const declaredClientSpecs = readHelmxClientDependencies(dir);
     const prebuiltDir = verifyDeclaredPrebuiltDir(dir);
     const clientSpecs = prebuiltDir !== undefined ? [] : declaredClientSpecs;
     const ranges = new Map<string, string>();
@@ -691,7 +691,7 @@ export class PluginPackageManager {
     // Fallback to manifest-declared id if doctor could not reach definition export (doctor will reject in next step).
     const declared = await readDeclaredPluginId(payloadDir);
     if (declared !== undefined) return { pluginId: declared, dirName: declared };
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_package_doctor_failed',
       `cannot determine plugin id (doctor failed and manifest declares no id): ${source.raw}`,
       422,
@@ -722,7 +722,7 @@ async function pathExists(target: string): Promise<boolean> {
   }
 }
 
-/** Read plugin.json id or package.json name/helm.id (used only as directory-name hint). */
+/** Read plugin.json id or package.json name/helmx.id (used only as directory-name hint). */
 async function readDeclaredPluginId(dir: string): Promise<string | undefined> {
   const { readFile } = await import('node:fs/promises');
   const pluginJson = join(dir, 'plugin.json');
@@ -734,9 +734,9 @@ async function readDeclaredPluginId(dir: string): Promise<string | undefined> {
   const pkgJson = join(dir, 'package.json');
   try {
     const pkg = JSON.parse(await readFile(pkgJson, 'utf8')) as Record<string, unknown>;
-    const helm = pkg['helm'];
-    if (typeof helm === 'object' && helm !== null && typeof (helm as Record<string, unknown>)['id'] === 'string') {
-      return (helm as Record<string, unknown>)['id'] as string;
+    const helmx = pkg['helmx'];
+    if (typeof helmx === 'object' && helmx !== null && typeof (helmx as Record<string, unknown>)['id'] === 'string') {
+      return (helmx as Record<string, unknown>)['id'] as string;
     }
     if (typeof pkg['name'] === 'string' && PLUGIN_ID_PATTERN.test(pkg['name'])) return pkg['name'];
   } catch { /* ignore */ }

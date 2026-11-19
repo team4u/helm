@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import type { ConversationSummary } from '@helm/protocol/browser'
-import { resolveLocalizedText } from '@helm/protocol/browser'
-import { HelmIcon } from '@helm/plugin-client'
+import type { ConversationSummary } from '@helmx/protocol/browser'
+import { resolveLocalizedText } from '@helmx/protocol/browser'
+import { HelmxIcon } from '@helmx/plugin-client'
 import {
   useAuthConnection,
   useConversations,
@@ -159,18 +159,18 @@ function SidebarSectionGroup({
           onClick={() => setOpen((v) => !v)}
         >
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, minWidth: 0 }}>
-            {spec.icon !== undefined && <HelmIcon name={spec.icon} size={12} />}
+            {spec.icon !== undefined && <HelmxIcon name={spec.icon} size={12} />}
             <span className="nav-item-label">{sectionLabel}</span>
           </span>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
             <span className="badge badge-neutral tabular-nums">{convs.length}</span>
-            <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
+            <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
           </span>
         </button>
       ) : (
         <div className="sidebar-group-header">
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-            <HelmIcon name={spec.icon} size={12} />
+            <HelmxIcon name={spec.icon} size={12} />
             {sectionLabel}
           </span>
           <span className="tabular-nums">{convs.length}</span>
@@ -228,7 +228,7 @@ function ViewNavGroup({ store }: { store: SidebarStoreView }) {
               onClick={() => store.openTarget(view.target)}
               aria-current={presence.active ? 'page' : undefined}
             >
-              <HelmIcon name={view.icon} size={14} />
+              <HelmxIcon name={view.icon} size={14} />
               <span className="nav-item-label">{view.label}</span>
             </button>
             <span className="nav-item-meta">
@@ -333,8 +333,8 @@ function ActivityRail({
 
   return (
     <nav className="activity-rail" aria-label={t('shell.sidebar.mainNavigation')}>
-      <div className="activity-rail-brand" title="Helm">
-        <HelmIcon name="layers" size={17} />
+      <div className="activity-rail-brand" title="Helmx">
+        <HelmxIcon name="layers" size={17} />
         <StatusDot connected={sseConnected} />
       </div>
       <Tooltip content={expandWithShortcut} side="right">
@@ -345,7 +345,7 @@ function ActivityRail({
           aria-label={t('shell.sidebar.expandNav')}
           onClick={() => onToggleSidebarCollapsed?.()}
         >
-          <HelmIcon name="chevron-right" size={16} />
+          <HelmxIcon name="chevron-right" size={16} />
         </button>
       </Tooltip>
       <div className="activity-rail-spaces">
@@ -361,7 +361,7 @@ function ActivityRail({
                 aria-current={space === key ? 'page' : undefined}
                 onClick={() => onOpenSpace(key)}
               >
-                <HelmIcon name={SPACE_ICONS[key]} size={16} />
+                <HelmxIcon name={SPACE_ICONS[key]} size={16} />
               </button>
             </Tooltip>
           )
@@ -377,7 +377,7 @@ function ActivityRail({
             aria-label={themeAriaLabel}
             onClick={onToggleTheme}
           >
-            <HelmIcon
+            <HelmxIcon
               name={
                 themePreference === 'system'
                   ? 'monitor'
@@ -421,7 +421,7 @@ function SettingsNavGroup({ store, onNavigate }: { store: SidebarStoreView; onNa
                 onNavigate?.()
               }}
             >
-              <HelmIcon name={CENTER_ICONS[key]} size={14} />
+              <HelmxIcon name={CENTER_ICONS[key]} size={14} />
               <span className="nav-item-label">{t(CENTER_LABEL_KEYS[key])}</span>
             </button>
             {presence.paneTag !== null && (
@@ -528,7 +528,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
         : t('shell.sidebar.spaceHeaderSettings')
 
   return (
-    <aside className="helm-sidebar">
+    <aside className="helmx-sidebar">
       {/* Mobile drawer: stays expanded after switching spaces — the secondary list of the space
           (settings list / views list / agent list) renders naturally inside the drawer and closes it
           only when the user picks a concrete item (items carry onNavigate / the App nav-item close
@@ -548,7 +548,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
       <div className="sidebar-context">
         <div className="sidebar-header">
           <div className="sidebar-context-title">
-            <HelmIcon
+            <HelmxIcon
               name={space === 'conversations' ? 'message-square' : space === 'views' ? 'layout-grid' : 'settings'}
               size={14}
             />
@@ -566,7 +566,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                   void setQuietNotify(!quietNotifyEnabled)
                 }}
               >
-                <HelmIcon name={quietNotifyEnabled && readBrowserNotificationPermission() === 'granted' ? 'bell' : 'bell-off'} size={13} />
+                <HelmxIcon name={quietNotifyEnabled && readBrowserNotificationPermission() === 'granted' ? 'bell' : 'bell-off'} size={13} />
               </button>
             </Tooltip>
             <Tooltip content={t('shell.sidebar.openCommandPalette')} side="bottom">
@@ -577,7 +577,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                 aria-label={t('shell.sidebar.openCommandPalette')}
                 onClick={() => setActiveModal({ kind: 'command-palette' })}
               >
-                <HelmIcon name="search" size={13} />
+                <HelmxIcon name="search" size={13} />
               </button>
             </Tooltip>
             <Tooltip content={collapseWithShortcut} side="bottom">
@@ -588,7 +588,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                 aria-label={t('shell.sidebar.collapseNav')}
                 onClick={() => toggleSidebarCollapsed?.()}
               >
-                <HelmIcon name="chevron-left" size={13} />
+                <HelmxIcon name="chevron-left" size={13} />
               </button>
             </Tooltip>
             {onClose && (
@@ -600,7 +600,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                   title={t('shell.nav.closeNav')}
                   onClick={onClose}
                 >
-                  <HelmIcon name="x" size={14} />
+                  <HelmxIcon name="x" size={14} />
                 </button>
               </Tooltip>
             )}

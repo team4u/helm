@@ -5,7 +5,7 @@
  * Strictly one function per shortcut, single-key muscle memory; coverage:
  * 1. keybindings-model pure logic (Shift+Tab / ↑ / Enter / Mod+Enter / panel matching / index cycling,
  *    no multi-key aliases);
- * 2. Ctrl+L (helm:shortcut) precise split routing + search autoFocus + ↑↓Enter picking + Esc focus
+ * 2. Ctrl+L (helmx:shortcut) precise split routing + search autoFocus + ↑↓Enter picking + Esc focus
  *    return + no bubbling blocked;
  * 3. Shift+Tab preventDefault() immediately and cycles thinkingLevel (never answers the Ctrl+T alias);
  * 4. ↑ (empty draft on the first line) prefers withdrawing the newest human queued input from
@@ -32,12 +32,12 @@ import type {
   Profile,
   QueuedConversationInput,
   SkillSummary,
-} from '@helm/protocol'
-import { COMPOSER_DOCK_SLOT } from '@helm/protocol'
-import { groupUiContributions, type HelmStoreValue } from '../src/lib/types.js'
+} from '@helmx/protocol'
+import { COMPOSER_DOCK_SLOT } from '@helmx/protocol'
+import { groupUiContributions, type HelmxStoreValue } from '../src/lib/types.js'
 import {
   canRecallOnArrowUp,
-  HELM_SHORTCUT_EVENT,
+  HELMX_SHORTCUT_EVENT,
   initialModelActiveIndex,
   isCaretAtFirstLine,
   isComposerSubmitEnterEvent,
@@ -59,9 +59,9 @@ const { createRoot } = await import('react-dom/client')
 const { renderToStaticMarkup } = await import('react-dom/server')
 const { conversationsApi, assetsApi } = await import('../src/lib/api.js')
 const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
-const { usePluginContext } = await import('@helm/plugin-client')
+const { usePluginContext } = await import('@helmx/plugin-client')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
-const { makeTestStore, HelmExternalStoreContext } = await import('./helpers/store.js')
+const { makeTestStore, HelmxExternalStoreContext } = await import('./helpers/store.js')
 const { Composer } = await import('../src/conversation/Composer.js')
 const { ComposerSendControls } = await import('../src/conversation/ComposerSendControls.js')
 const { AgentStandbyPane } = await import('../src/conversation/AgentStandbyPane.js')
@@ -145,7 +145,7 @@ test('keybindings-model: initialModelActiveIndex / stepActiveIndex and panel mat
   assert.equal(stepActiveIndex(0, 3, -1), 2)
 
   const splitWrap = document.createElement('div')
-  splitWrap.setAttribute('data-helm-panel', 'split')
+  splitWrap.setAttribute('data-helmx-panel', 'split')
   const child = document.createElement('span')
   splitWrap.appendChild(child)
   assert.equal(resolveElementPanel(child), 'split')
@@ -156,7 +156,7 @@ test('keybindings-model: initialModelActiveIndex / stepActiveIndex and panel mat
   drawer.className = 'conversation-drawer'
   const drawerChild = document.createElement('span')
   drawer.appendChild(drawerChild)
-  assert.equal(isShortcutPanelMatch(drawerChild, 'primary'), false, 'a drawer child without data-helm-panel never answers primary shortcuts')
+  assert.equal(isShortcutPanelMatch(drawerChild, 'primary'), false, 'a drawer child without data-helmx-panel never answers primary shortcuts')
 })
 
 // ---------------------------------------------------------------------------
@@ -220,7 +220,7 @@ function makeModels() {
 
 function mountTree(node: React.ReactNode, panel?: 'primary' | 'split'): HTMLElement {
   const host = document.createElement('div')
-  if (panel !== undefined) host.setAttribute('data-helm-panel', panel)
+  if (panel !== undefined) host.setAttribute('data-helmx-panel', panel)
   document.body.appendChild(host)
   const root = createRoot(host)
   act(() => {
@@ -256,7 +256,7 @@ function stubMatchMedia(isMobile: boolean): void {
 // 2. Ctrl+L cross-component wiring + search autoFocus + keyboard picking + Esc focus return
 // ---------------------------------------------------------------------------
 
-test('Ctrl+L: precisely toggles the ModelPicker per data-helm-panel in split view, auto-focuses search and supports ↑↓Enter picking', { timeout: 60_000 }, async () => {
+test('Ctrl+L: precisely toggles the ModelPicker per data-helmx-panel in split view, auto-focuses search and supports ↑↓Enter picking', { timeout: 60_000 }, async () => {
   const patched: Array<{ id: number; body: Record<string, unknown> }> = []
   conversationsApi.patch = (async (id, body) => {
     patched.push({ id, body: body as Record<string, unknown> })
@@ -299,9 +299,9 @@ test('Ctrl+L: precisely toggles the ModelPicker per data-helm-panel in split vie
     window.removeEventListener('keydown', windowSpy)
   }
 
-  // Globally dispatch helm:shortcut (panel='split'): only the right ModelPicker opens; the left stays closed
+  // Globally dispatch helmx:shortcut (panel='split'): only the right ModelPicker opens; the left stays closed
   await act(async () => {
-    window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
+    window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
 
   assert.equal(primaryHost.querySelector('button.composer-model-button')?.getAttribute('aria-expanded'), 'false', 'the primary panel ignores the split shortcut')
@@ -335,11 +335,11 @@ test('Ctrl+L: precisely toggles the ModelPicker per data-helm-panel in split vie
 
   // Ctrl+L again reopens; one more Ctrl+L closes and returns focus
   await act(async () => {
-    window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
+    window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
   assert.ok(document.body.querySelector('.composer-model-popover') !== null)
   await act(async () => {
-    window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
+    window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
   assert.ok(document.body.querySelector('.composer-model-popover') === null, 'a second Ctrl+L closes the popover')
   await waitForCondition(() => document.activeElement === splitTa)
@@ -347,7 +347,7 @@ test('Ctrl+L: precisely toggles the ModelPicker per data-helm-panel in split vie
 
   // Ctrl+L reopens, Esc closes: it must stopPropagation so the outer double-Esc abort never fires, and return focus
   await act(async () => {
-    window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
+    window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
   assert.ok(document.body.querySelector('.composer-model-popover'))
 
@@ -422,7 +422,7 @@ test('↑ (empty draft, first line): withdraws the newest human queued input and
   const detail: ConversationDetail = {
     ...conv,
     entries: [
-      { id: '1', kind: 'helm.input', data: { text: '更早的历史提问', origin: 'human' } },
+      { id: '1', kind: 'helmx.input', data: { text: '更早的历史提问', origin: 'human' } },
     ],
   }
   const live: ConversationLive = {
@@ -489,7 +489,7 @@ test('↑ (no human queued input): falls back to editing the previous historical
   const detail: ConversationDetail = {
     ...conv,
     entries: [
-      { id: '5', kind: 'helm.input', data: { text: '历史提问五', origin: 'human' } },
+      { id: '5', kind: 'helmx.input', data: { text: '历史提问五', origin: 'human' } },
     ],
   }
   const live: ConversationLive = {
@@ -524,7 +524,7 @@ test('Esc layering: closing the slash popover and cancelling history editing bot
   const conv = makeConv({ id: 9, status: 'working' })
   const detail: ConversationDetail = {
     ...conv,
-    entries: [{ id: '2', kind: 'helm.input', data: { text: '旧消息', origin: 'human' } }],
+    entries: [{ id: '2', kind: 'helmx.input', data: { text: '旧消息', origin: 'human' } }],
   }
   const store = makeTestStore({ conversations: [conv], conversationDetails: { 9: detail } })
   const host = mountTree(e(HostStoreProviders, { value: store }, e(Composer, { conversation: conv, prefill: null })))
@@ -642,7 +642,7 @@ test('ComposerSendControls: mobile busy with input explicitly renders independen
   // split trigger. ComposerSendControls reads the locale via useWebLocale, so it mounts inside a
   // store provider.
   const mobileHost = mountTree(
-    e(HelmExternalStoreContext.Provider, { value: makeTestStore() }, e(ComposerSendControls, {
+    e(HelmxExternalStoreContext.Provider, { value: makeTestStore() }, e(ComposerSendControls, {
       working: true,
       editingEntryId: null,
       sending: false,
@@ -668,7 +668,7 @@ test('ComposerSendControls: mobile busy with input explicitly renders independen
 
   // Desktop: renders the split dropdown; menu-item badges carry the .kbd-hint class
   const desktopHost = mountTree(
-    e(HelmExternalStoreContext.Provider, { value: makeTestStore() }, e(ComposerSendControls, {
+    e(HelmxExternalStoreContext.Provider, { value: makeTestStore() }, e(ComposerSendControls, {
       working: true,
       editingEntryId: null,
       sending: false,
@@ -765,12 +765,12 @@ test('Standby pane: inherits the global default model glm-5.3·max; supports Shi
 
   // Ctrl+L targets the split panel only, opening the StandbyModelPicker and auto-focusing the search
   await act(async () => {
-    window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'primary' } }))
+    window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'primary' } }))
   })
   assert.ok(document.body.querySelector('.composer-model-popover') === null, 'a primary event never opens the split standby picker')
 
   await act(async () => {
-    window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
+    window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
   const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
   assert.ok(popover !== null, 'split Ctrl+L opens the standby model popover')
@@ -778,7 +778,7 @@ test('Standby pane: inherits the global default model glm-5.3·max; supports Shi
   assert.ok(document.activeElement === popover.querySelector('input[aria-label="Search models"]'), 'auto-focuses the search input')
 
   await act(async () => {
-    window.dispatchEvent(new CustomEvent(HELM_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
+    window.dispatchEvent(new CustomEvent(HELMX_SHORTCUT_EVENT, { detail: { action: 'toggle-model-picker', panel: 'split' } }))
   })
   assert.ok(document.body.querySelector('.composer-model-popover') === null)
 
@@ -1023,7 +1023,7 @@ test('zh-CN locale: ComposerSendControls mobile busy buttons render the Chinese 
   const send = async (mode?: 'steer' | 'followUp' | 'reject') => { sent.push(mode) }
   const blocker = { blocked: false, reason: null }
   const mobileHost = mountTree(
-    e(HelmExternalStoreContext.Provider, { value: makeTestStore({ locale: 'zh-CN' }) }, e(ComposerSendControls, {
+    e(HelmxExternalStoreContext.Provider, { value: makeTestStore({ locale: 'zh-CN' }) }, e(ComposerSendControls, {
       working: true,
       editingEntryId: null,
       sending: false,

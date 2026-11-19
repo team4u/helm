@@ -12,10 +12,10 @@ import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { setTimeout as delay } from 'node:timers/promises'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { RemoteExecutionEnv, type NodeRpcResolver } from '../src/env/remote-env.js'
 import { envWithFileMutationQueue, fileMutationQueueSize } from '../src/env/file-mutation-queue.js'
-import type { NodeEnvRpcFunctions } from '@helm/protocol'
+import type { NodeEnvRpcFunctions } from '@helmx/protocol'
 
 /**
  * Controllable mock node backed by an in-memory file map: once online flips to false,
@@ -109,7 +109,7 @@ describe('RemoteExecutionEnv bounded RPC wait for file operations', { timeout: 6
     const startedAt = Date.now()
     await assert.rejects(
       task1,
-      (error: unknown) => error instanceof HelmError && error.code === 'node_offline',
+      (error: unknown) => error instanceof HelmxError && error.code === 'node_offline',
       'RPC wait timeout inside lock must throw node_offline',
     )
     const elapsed = Date.now() - startedAt
@@ -138,7 +138,7 @@ describe('RemoteExecutionEnv bounded RPC wait for file operations', { timeout: 6
     const env = new RemoteExecutionEnv(node.resolver, { nodeId: 'dead-node', cwd: '/w', rpcWaitTimeoutMs: WAIT_MS })
     await assert.rejects(
       envWithFileMutationQueue(env, '/w/c.txt', async () => 'never', BACKGROUND_CONTEXT),
-      (error: unknown) => error instanceof HelmError && error.code === 'node_offline',
+      (error: unknown) => error instanceof HelmxError && error.code === 'node_offline',
     )
     assert.equal(fileMutationQueueSize(), 0)
   })

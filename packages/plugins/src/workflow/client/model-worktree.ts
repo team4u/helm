@@ -4,7 +4,7 @@
  * view model, inspect/cleanup action selectors and the review request copy;
  * zero React/DOM dependencies).
  */
-import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/plugin-client'
+import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/plugin-client'
 import { firstLineOf, inspectString } from './model-format.ts'
 import {
   wtReviewAheadLine,
@@ -161,7 +161,7 @@ export function buildWorktreeReviewRequest(
     taskLabel?: string
     inspect?: WorktreeInspectView
   },
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   const taskLine =
     input.taskLabel !== undefined && input.taskLabel.trim() !== ''
@@ -169,7 +169,7 @@ export function buildWorktreeReviewRequest(
       : undefined
   const inspect = input.inspect
   const inspectLine = inspect !== undefined
-    ? (loc: HelmLocale): string[] => {
+    ? (loc: HelmxLocale): string[] => {
         if (!inspect.exists) {
           return [wtReviewInspectMissing(inspect.unavailableReason === 'removed', loc)]
         }

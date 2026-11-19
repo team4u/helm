@@ -4,12 +4,12 @@
  * model-*.ts domain module; inputString / inspectString are internal exports
  * between domain modules and are not exposed through the models.ts facade.
  */
-import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/plugin-client'
+import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/plugin-client'
 import { summarizeJsonMoreSuffix } from './copy.ts'
 
 // ---------------------------------------------------------------------------
 // Formatting helpers (duration summaries reuse the host lib/format.ts
-// implementation shared via @helm/plugin-client)
+// implementation shared via @helmx/plugin-client)
 // ---------------------------------------------------------------------------
 
 export function toolResultPreviewTruncated(preview: string | undefined): boolean {
@@ -135,7 +135,7 @@ function formatReadableScalar(value: unknown): string {
 export function summarizeReadableJson(
   value: unknown,
   maxChars: number,
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   if (value === null || typeof value !== 'object') {
     const scalar = formatReadableScalar(value)

@@ -2,9 +2,9 @@
  * Coordinates plugin service declarations, lifecycle barriers (`prepare -> start -> stop`), and resource tracking.
  */
 import {
-  HelmError,
+  HelmxError,
   type MaybePromise,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import {
   toJsonSafeError,
   type JsonSafeErrorInfo,
@@ -37,9 +37,9 @@ export async function prepareServices(state: PluginState): Promise<void> {
       await svc.prepare();
       svc.prepared = true;
     } catch (err) {
-      throw err instanceof HelmError
+      throw err instanceof HelmxError
         ? err
-        : new HelmError(
+        : new HelmxError(
             'plugin_service_prepare_failed',
             `Plugin ${state.definition.id} service ${svc.id} prepare failed: ${err instanceof Error ? err.message : String(err)}`,
             500,
@@ -69,16 +69,16 @@ export async function startServices(state: PluginState): Promise<void> {
         svc.started = false;
       }
     }
-    if (err instanceof HelmError) {
+    if (err instanceof HelmxError) {
       if (stopErrors.length > 0) {
-        throw new HelmError(err.code, err.message, err.status, {
+        throw new HelmxError(err.code, err.message, err.status, {
           ...(err.details as object),
           stopErrors,
         });
       }
       throw err;
     }
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_service_start_failed',
       `Plugin ${state.definition.id} service failed to start: ${err instanceof Error ? err.message : String(err)}`,
       500,
@@ -104,7 +104,7 @@ export async function stopServicesQuietly(state: PluginState): Promise<void> {
     }
   }
   if (errors.length > 0) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_service_stop_failed',
       `Failed to stop plugin ${state.definition.id} services during rollback: ${errors.map((e) => e.serviceId).join(', ')}`,
       500,
@@ -162,7 +162,7 @@ export async function startServiceBarrier(
         rollbackStopErrors.push({
           pluginId: state.definition.id,
           stopErrors:
-            rollbackErr instanceof HelmError &&
+            rollbackErr instanceof HelmxError &&
             Array.isArray((rollbackErr.details as { stopErrors?: unknown })?.stopErrors)
               ? (rollbackErr.details as {
                   stopErrors: Array<{ serviceId: string; error: JsonSafeErrorInfo }>;
@@ -172,13 +172,13 @@ export async function startServiceBarrier(
       }
     }
     if (rollbackStopErrors.length > 0) {
-      if (err instanceof HelmError) {
-        throw new HelmError(err.code, err.message, err.status, {
+      if (err instanceof HelmxError) {
+        throw new HelmxError(err.code, err.message, err.status, {
           ...((err.details as object) ?? {}),
           rollbackStopErrors,
         });
       }
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_service_start_failed',
         `Plugin service failed to start: ${err instanceof Error ? err.message : String(err)}`,
         500,
@@ -204,7 +204,7 @@ export async function collectServiceInUse(
     try {
       declared = (await svc.inUse()) as PluginInUseItem[];
     } catch (err) {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_in_use_check_failed',
         `Plugin ${pluginId} service ${svc.id} inUse check threw an error; refusing disable`,
         500,
@@ -226,7 +226,7 @@ export async function collectServiceInUse(
           (item as { label: string }).label.length === 0,
       )
     ) {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_in_use_check_failed',
         `Plugin ${pluginId} service ${svc.id} inUse must return an array of { kind, id, label } non-empty strings`,
         500,
@@ -255,7 +255,7 @@ export function assertNoLiveTasks(
       try {
         declared = svc.liveTasks();
       } catch (err) {
-        throw new HelmError(
+        throw new HelmxError(
           'plugin_live_tasks_check_failed',
           `Plugin ${pluginId} service ${svc.id} liveTasks check threw an error; refusing disable/unregister`,
           500,
@@ -266,7 +266,7 @@ export function assertNoLiveTasks(
         !Array.isArray(declared) ||
         declared.some((item) => typeof item !== 'string')
       ) {
-        throw new HelmError(
+        throw new HelmxError(
           'plugin_live_tasks_check_failed',
           `Plugin ${pluginId} service ${svc.id} liveTasks must return a string array, got ${Object.prototype.toString.call(declared)}`,
           500,
@@ -279,7 +279,7 @@ export function assertNoLiveTasks(
   // Check tracker after synchronous `svc.liveTasks()` so any task spawned during that call is also caught.
   labels.push(...tracker.activeLabels(pluginId));
   if (labels.length > 0) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_has_live_tasks',
       `Plugin ${pluginId} still has ${labels.length} live task(s) (${labels.join(', ')}); refusing disable/unregister`,
       409,

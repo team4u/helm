@@ -4,9 +4,9 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { AskSpec, ConversationSummary } from '@helm/protocol'
-import type { HelmLocale } from '@helm/protocol/browser'
-import type { ActiveModal, HelmStoreValue } from '../src/lib/types.js'
+import type { AskSpec, ConversationSummary } from '@helmx/protocol'
+import type { HelmxLocale } from '@helmx/protocol/browser'
+import type { ActiveModal, HelmxStoreValue } from '../src/lib/types.js'
 
 /**
  * AskDock descendant-approval aggregation regression:
@@ -21,7 +21,7 @@ Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { AskDock } = await import('../src/conversation/AskDock.js')
 const { makeTestStore } = await import('./helpers/store.js')
-type HelmExternalStore = import('../src/lib/helm-store.js').HelmExternalStore
+type HelmxExternalStore = import('../src/lib/helmx-store.js').HelmxExternalStore
 const { TestStoreProvider } = await import('./helpers/host-store.js')
 const e = React.createElement
 const originalFetch = globalThis.fetch
@@ -74,7 +74,7 @@ const pendingAsks = [
   ask('ask-other', 9),
 ]
 
-function makeStore(overrides: Partial<HelmStoreValue> = {}): HelmExternalStore {
+function makeStore(overrides: Partial<HelmxStoreValue> = {}): HelmxExternalStore {
   const store = makeTestStore({
     conversations,
     pendingAsks,
@@ -98,7 +98,7 @@ function installFetch(status = 200): void {
   }) as typeof fetch
 }
 
-async function renderAskDock(store: HelmExternalStore, conversationId: number): Promise<void> {
+async function renderAskDock(store: HelmxExternalStore, conversationId: number): Promise<void> {
   // When rendering multiple times in one test (switching viewpoints), tear down the
   // previous tree first so no stale card DOM lingers.
   if (root !== undefined) act(() => root?.unmount())
@@ -147,7 +147,7 @@ test('AskDock aggregates pending asks of the current conversation and all descen
   assert.deepEqual(cardTitles(), ['审批 ask-root', '审批 ask-child', '审批 ask-grand'], 'shows own + child + grandchild asks')
   assert.equal(cardTitles().includes('审批 ask-other'), false, 'the ask of unrelated conversation #9 must not show')
   // Card main status: one blocked status light with a visible label (no icon-only hover dependency)
-  const lights = [...document.querySelectorAll('.ask-dock-header .helm-status-light')]
+  const lights = [...document.querySelectorAll('.ask-dock-header .helmx-status-light')]
   assert.equal(lights.length, 3, 'each ask card renders exactly one status light')
   for (const light of lights) {
     assert.equal(light.getAttribute('data-tone'), 'blocked')
@@ -286,9 +286,9 @@ test('setLocale switches AskDock copy en -> zh-CN -> en immediately in place', {
   installFetch()
   const host2 = document.createElement('div')
   document.body.appendChild(host2)
-  let committedLocale: HelmLocale = 'en'
+  let committedLocale: HelmxLocale = 'en'
   function Harness(): React.JSX.Element {
-    const [locale, setLocale] = React.useState<HelmLocale>('en')
+    const [locale, setLocale] = React.useState<HelmxLocale>('en')
     committedLocale = locale
     const store = React.useMemo(() => makeStore({ locale, setLocale }), [locale])
     return e(TestStoreProvider, { value: store },

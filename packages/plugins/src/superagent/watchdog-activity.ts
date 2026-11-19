@@ -14,7 +14,7 @@
  * 绝不用每帧心跳假活动；重启后无活动记录时不报停滞（保守，不伪造时钟起点）。
  */
 
-import type { ConversationSummary, HelmPluginContext, TurnOutcome } from '@helm/protocol'
+import type { ConversationSummary, HelmxPluginContext, TurnOutcome } from '@helmx/protocol'
 import {
   asConversationDeletedEvent,
   asConversationLiveEvent,
@@ -30,7 +30,7 @@ export class ConversationActivityTracker {
   private readonly liveProgressKeys = new Map<number, string>()
 
   /** 订阅真实事件（PluginHost 生命周期内自动随插件停用解除）。 */
-  subscribe(ctx: HelmPluginContext): void {
+  subscribe(ctx: HelmxPluginContext): void {
     ctx.host.onEvent('conversation.live', (raw) => {
       const live = asConversationLiveEvent(raw)
       if (live === undefined) return

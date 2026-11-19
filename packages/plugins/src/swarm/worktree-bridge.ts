@@ -4,7 +4,7 @@
  * - 统一释放持久持有锁（release_worktree_hold）与清理工作树（cleanup_worktree）；
  * - 统一生成 Worktree 交接快照与未合入提交汇总。
  */
-import type { HelmPluginContext } from '@helm/protocol'
+import type { HelmxPluginContext } from '@helmx/protocol'
 import type { WorktreeInspectResult } from '../contracts.js'
 import { SWARM_PLUGIN_ID, type GroupMemberState, type WorktreeHandoffSnapshot } from './contracts.js'
 
@@ -42,7 +42,7 @@ export function extractChangedFilesPreview(inspected: WorktreeInspectResult, max
 }
 
 export async function inspectManagedWorktree(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   worktreeId: string,
   signal?: AbortSignal,
 ): Promise<WorktreeInspectResult> {
@@ -69,7 +69,7 @@ export function toWorktreeHandoffSnapshot(
 }
 
 export async function checkMemberWorktree(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   member: GroupMemberState,
   signal?: AbortSignal,
 ): Promise<CheckedMemberWorktree | undefined> {
@@ -86,7 +86,7 @@ export async function checkMemberWorktree(
 }
 
 export async function releaseWorktreeHoldById(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   holdId: string,
   worktreeId: string,
   signal?: AbortSignal,
@@ -104,7 +104,7 @@ export async function releaseWorktreeHoldById(
 }
 
 export async function releaseWorktreeHold(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   groupId: string,
   memberName: string,
   worktreeId: string,
@@ -114,7 +114,7 @@ export async function releaseWorktreeHold(
 }
 
 export async function cleanupManagedWorktree(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   worktreeId: string,
   force: boolean,
   signal?: AbortSignal,

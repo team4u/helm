@@ -6,10 +6,10 @@
  * ESM output, target `node20`, and `sourcefile` pointing to the real source file for diagnostics.
  *
  * Syntax errors propagate verbatim (preserving esbuild's `errors[].location`), and the kernel
- * loader hook wraps them into `HelmError('plugin_load_failed')` without discarding diagnostics.
+ * loader hook wraps them into `HelmxError('plugin_load_failed')` without discarding diagnostics.
  */
 import { transformSync } from 'esbuild';
-import type { PluginBackendTsTransform } from '@helm/protocol';
+import type { PluginBackendTsTransform } from '@helmx/protocol';
 
 export function transformBackendTs(input: PluginBackendTsTransform): string {
   return transformSync(input.source, {

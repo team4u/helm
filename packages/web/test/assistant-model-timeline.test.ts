@@ -16,7 +16,7 @@ import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
-import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helmx/protocol'
 import {
   assistantModelFullLabel,
   assistantModelShortLabel,
@@ -71,7 +71,7 @@ function legacyAssistantEntry(id: string, blocks: unknown[]): ConversationEntry 
 }
 
 function humanInputEntry(id: string, text: string): ConversationEntry {
-  return { id, kind: 'helm.input', data: { text, origin: 'human' } }
+  return { id, kind: 'helmx.input', data: { text, origin: 'human' } }
 }
 
 function toolResultEntry(id: string, callId: string, text: string): ConversationEntry {
@@ -405,7 +405,7 @@ test('rewind 覆盖的新模型 entry 不产生边界（被覆盖历史不参与
   const items = buildTimelineItems([
     modelAssistantEntry('1', 'faux', 'glm-4.6', [{ type: 'text', text: '保留的回答' }]),
     modelAssistantEntry('2', 'faux', 'glm-4.7', [{ type: 'text', text: '被覆盖的回答' }]),
-    { id: '3', kind: 'helm.rewind', data: { fromEntryId: 2, throughEntryId: 2 } },
+    { id: '3', kind: 'helmx.rewind', data: { fromEntryId: 2, throughEntryId: 2 } },
   ])
   const turns = assistantTurns(items)
   assert.equal(turns.length, 1)

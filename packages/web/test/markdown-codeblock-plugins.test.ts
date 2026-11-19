@@ -17,9 +17,9 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { join, resolve, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { PluginUiContribution } from '@helm/protocol'
-import * as HelmPluginClient from '@helm/plugin-client'
-import { compilePluginClientModule, safeDirName, safeFileName } from '@helm/plugin-build'
+import type { PluginUiContribution } from '@helmx/protocol'
+import * as HelmxPluginClient from '@helmx/plugin-client'
+import { compilePluginClientModule, safeDirName, safeFileName } from '@helmx/plugin-build'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
@@ -31,12 +31,12 @@ const e = React.createElement
 const here = dirname(fileURLToPath(import.meta.url))
 
 // 宿主共享命名空间（与浏览器一致；mermaid bundle 不依赖共享 mermaid——已自带）
-;(globalThis as Record<string, unknown>).__helm_shared_react = React
-;(globalThis as Record<string, unknown>).__helm_shared_react_jsx_runtime = await import('react/jsx-runtime')
-;(globalThis as Record<string, unknown>).__helm_shared_react_dom = await import('react-dom')
-;(globalThis as Record<string, unknown>).__helm_shared_react_dom_client = await import('react-dom/client')
-;(globalThis as Record<string, unknown>).__helm_shared_lucide_react = await import('lucide-react')
-;(globalThis as Record<string, unknown>).__helm_shared_plugin_client = HelmPluginClient
+;(globalThis as Record<string, unknown>).__helmx_shared_react = React
+;(globalThis as Record<string, unknown>).__helmx_shared_react_jsx_runtime = await import('react/jsx-runtime')
+;(globalThis as Record<string, unknown>).__helmx_shared_react_dom = await import('react-dom')
+;(globalThis as Record<string, unknown>).__helmx_shared_react_dom_client = await import('react-dom/client')
+;(globalThis as Record<string, unknown>).__helmx_shared_lucide_react = await import('lucide-react')
+;(globalThis as Record<string, unknown>).__helmx_shared_plugin_client = HelmxPluginClient
 
 const { matchMarkdownCodeBlock } = await import('../src/conversation/codeblock-registry-model.js')
 const { CodeBlockRenderer } = await import('../src/conversation/CodeBlockRenderer.js')
@@ -45,7 +45,7 @@ const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
 const JSON_RENDER_ROOT = resolve(here, '../../plugins/src/json-render/client')
 const MERMAID_ROOT = resolve(here, '../../plugins/src/mermaid/client')
 const PLUGINS_ROOT = resolve(here, '../../plugins')
-const CACHE = fileURLToPath(new URL('../../../node_modules/.cache/helm-test-plugin-clients', import.meta.url))
+const CACHE = fileURLToPath(new URL('../../../node_modules/.cache/helmx-test-plugin-clients', import.meta.url))
 mkdirSync(CACHE, { recursive: true })
 
 // ---------------------------------------------------------------------------
@@ -116,14 +116,14 @@ async function importCompiled(root: string, pluginId: string, npmRoots?: Array<{
 test('json-render client 真实编译：模块可导入且导出 JsonRenderCodeBlock 组件与插件样式', { timeout: 60_000 }, async () => {
   const mod = await importCompiled(JSON_RENDER_ROOT, 'builtin:json-render')
   assert.equal(typeof mod['JsonRenderCodeBlock'], 'function', 'JsonRenderCodeBlock 导出为组件函数')
-  assert.equal(typeof mod['__helmClientCss'], 'string', '__helmClientCss 导出为 string')
-  assert.ok((mod['__helmClientCss'] as string).includes('.jr-card'), '必须包含 .jr-card 样式')
-  assert.ok((mod['__helmClientCss'] as string).includes('.jr-metric-grid'), '必须包含 .jr-metric-grid 样式')
+  assert.equal(typeof mod['__helmxClientCss'], 'string', '__helmxClientCss 导出为 string')
+  assert.ok((mod['__helmxClientCss'] as string).includes('.jr-card'), '必须包含 .jr-card 样式')
+  assert.ok((mod['__helmxClientCss'] as string).includes('.jr-metric-grid'), '必须包含 .jr-metric-grid 样式')
 })
 
 test('mermaid client 真实编译（受控 npm bundle）：模块可导入且不依赖宿主 mermaid 全局', { timeout: 120_000 }, async () => {
-  // 不挂载 __helm_shared_mermaid：mermaid 经插件受控 npm 依赖自带，宿主零绑定
-  ;(globalThis as Record<string, unknown>).__helm_shared_mermaid = undefined
+  // 不挂载 __helmx_shared_mermaid：mermaid 经插件受控 npm 依赖自带，宿主零绑定
+  ;(globalThis as Record<string, unknown>).__helmx_shared_mermaid = undefined
   const mod = await importCompiled(MERMAID_ROOT, 'builtin:mermaid', [
     { specifiers: ['mermaid'], packageRoot: PLUGINS_ROOT },
   ])
@@ -131,7 +131,7 @@ test('mermaid client 真实编译（受控 npm bundle）：模块可导入且不
 })
 
 test('mermaid 编译器边界：未声明 npm 说明符显式拒绝（不留旁门）', { timeout: 120_000 }, async () => {
-  const { HelmError } = await import('@helm/protocol')
+  const { HelmxError } = await import('@helmx/protocol')
   // 直接以空 npmRoots 编译 mermaid client：import 'mermaid' 必须被拒绝
   await assert.rejects(
     compilePluginClientModule('builtin:mermaid', MERMAID_ROOT, 'index.tsx', CACHE),

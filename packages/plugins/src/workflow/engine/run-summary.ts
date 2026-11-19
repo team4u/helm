@@ -15,7 +15,7 @@
  * 纯投影零 IO：脱敏钩子经参数注入，与 RunStore 持久层正交。
  */
 
-import { redactJsonValue } from '@helm/protocol'
+import { redactJsonValue } from '@helmx/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../../contracts.js'
 import { collapse, type WorkflowEntry } from './progress.js'
 import type { RunRecord } from './run-store.js'

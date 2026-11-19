@@ -1,12 +1,12 @@
 /**
- * HTTP Mock Hub test helper (`@helm/test-kit/http`).
+ * HTTP Mock Hub test helper (`@helmx/test-kit/http`).
  * Starts a real HTTP server bound to an ephemeral `127.0.0.1` port, records request hit history,
  * and supports structured responses, Web `Response` passthrough, streaming endpoints, and
  * automatic lifecycle cleanup.
  */
 
 import http from 'node:http'
-import type { MaybePromise } from '@helm/protocol/browser'
+import type { MaybePromise } from '@helmx/protocol/browser'
 import type { CleanupRegistrar } from './node.js'
 
 /** Snapshot of a single recorded request hit on the mock Hub. */

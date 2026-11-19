@@ -9,7 +9,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HelmError, type ExternalTriggerEnvelope, type PluginDefinition } from '@helm/protocol'
+import { HelmxError, type ExternalTriggerEnvelope, type PluginDefinition } from '@helmx/protocol'
 import { PluginHost } from '../../kernel/src/plugins/index.js'
 import {
   advanceAfterFire,
@@ -25,7 +25,7 @@ import {
   type CronJob,
 } from '../src/triggers/cron.js'
 import { hostBackendStub } from '../../kernel/test/helpers/host-backend-stub.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, waitFor as baseWaitFor } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
@@ -104,7 +104,7 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
   const clock = new FakeClock(startMs)
   const dispatched: Array<{ envelope: ExternalTriggerEnvelope; targetProfileId?: string }> = []
   const events: Array<{ type: string; payload: unknown }> = []
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-cron-test-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-cron-test-'))
   const h: Harness = {
     host: undefined as never,
     docs,
@@ -145,13 +145,13 @@ function makeHarness(startMs: number, docSeed?: CronDoc): Harness {
       registerAskSeqResolver: () => () => {},
       onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
       return 'human'
     },
     isClosing: () => false,
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    execEnv: async () => { throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501) },
     withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
       emitEvent: (type, payload) => {
         events.push({ type, payload })
@@ -268,7 +268,7 @@ test('nextFireTime：严格晚于 after；时区真实生效；DST 跳变正确'
 })
 
 test('nextFireTime：不可达表达式（2 月 30 日）显式拒绝', { timeout: 60_000 }, () => {
-  assert.throws(() => nextFireTime('0 0 30 2 *', 'UTC', T0), HelmError)
+  assert.throws(() => nextFireTime('0 0 30 2 *', 'UTC', T0), HelmxError)
 })
 
 test('advanceAfterFire：错过多时段时跳到 now 之后（catchUp 只补跑一次）', { timeout: 60_000 }, () => {
@@ -366,7 +366,7 @@ test('cron_create/list/delete：完整动作契约与持久化（含 flush）', 
 
   await assert.rejects(
     h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'daily', schedule: '* * * * *', text: 'x' }),
-    (err: unknown) => err instanceof HelmError && err.code === 'cron_duplicate_id',
+    (err: unknown) => err instanceof HelmxError && err.code === 'cron_duplicate_id',
   )
 
   const del = (await h.host.invokeAction('builtin:triggers', 'cron_delete', { id: 'daily' })) as {
@@ -376,7 +376,7 @@ test('cron_create/list/delete：完整动作契约与持久化（含 flush）', 
   await assert.rejects(
     h.host.invokeAction('builtin:triggers', 'cron_delete', { id: 'daily' }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError && err.code === 'not_found')
+      assert.ok(err instanceof HelmxError && err.code === 'not_found')
       return true
     },
   )
@@ -387,10 +387,10 @@ test('cron_create/list/delete：完整动作契约与持久化（含 flush）', 
 test('cron_create：非法输入在动作边界拒绝；无未来时点拒绝创建', { timeout: 60_000 }, async () => {
   const h = track(makeHarness(T0))
   await ready(h)
-  await assert.rejects(h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'x' }), HelmError)
+  await assert.rejects(h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'x' }), HelmxError)
   await assert.rejects(
     h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'x', schedule: 'bad', text: 't' }),
-    HelmError,
+    HelmxError,
   )
   await assert.rejects(
     h.host.invokeAction('builtin:triggers', 'cron_create', {
@@ -400,11 +400,11 @@ test('cron_create：非法输入在动作边界拒绝；无未来时点拒绝创
       targetConversationId: 1,
       targetProfileId: 'p',
     }),
-    (err: unknown) => err instanceof HelmError && /互斥|validation/.test(`${err.code}${err.message}`),
+    (err: unknown) => err instanceof HelmxError && /互斥|validation/.test(`${err.code}${err.message}`),
   )
   await assert.rejects(
     h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'x', schedule: '0 0 30 2 *', text: 't' }),
-    HelmError,
+    HelmxError,
   )
 })
 
@@ -430,18 +430,18 @@ test('cron_trigger：真实投递（targetProfileId/threadKey 透传）；失败
   await assert.rejects(
     h.host.invokeAction('builtin:triggers', 'cron_trigger', { id: 'nope' }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError && err.code === 'not_found')
+      assert.ok(err instanceof HelmxError && err.code === 'not_found')
       return true
     },
   )
 
   h.dispatchImpl = async () => {
-    throw new HelmError('runtime_closed', '内核正在关闭', 503)
+    throw new HelmxError('runtime_closed', '内核正在关闭', 503)
   }
   await assert.rejects(
     h.host.invokeAction('builtin:triggers', 'cron_trigger', { id: 'rep' }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError && err.code === 'runtime_closed')
+      assert.ok(err instanceof HelmxError && err.code === 'runtime_closed')
       return true
     },
   )
@@ -568,7 +568,7 @@ test('claim 持久化失败（flush 抛错）：不投递，显式诊断', { tim
   await ready(h)
   await h.host.invokeAction('builtin:triggers', 'cron_create', { id: 'p1', schedule: '*/5 * * * *', text: 'x' })
   h.flushImpl = async () => {
-    throw new HelmError('store_flush_failed', 'SQLite drain 失败', 500)
+    throw new HelmxError('store_flush_failed', 'SQLite drain 失败', 500)
   }
   await h.clock.advance(5 * MIN)
   await h.runtime.settle()
@@ -582,7 +582,7 @@ test('skip-to-future 落盘失败：异常后仍重排（不停摆），下个�
   await h.host.invokeAction('builtin:triggers', 'cron_create', { id: 's2', schedule: '*/5 * * * *', text: 'go' })
   let flushFailures = 0
   h.flushImpl = async () => {
-    if (flushFailures++ === 0) throw new HelmError('store_flush_failed', 'SQLite drain 失败', 500)
+    if (flushFailures++ === 0) throw new HelmxError('store_flush_failed', 'SQLite drain 失败', 500)
   }
   // 篡改 doc：nextRunAt 回拨两个时段（tick 时判 missed-multiple → skip-to-future；
   // 不能用 docSeed 预置过期时点——service start 会先行归一化，轮不到 tick 决策）
@@ -616,7 +616,7 @@ test('投递失败且 lastError 落盘失败：仍通知原始失败并重排，
   h.flushImpl = async () => {
     flushes += 1
     // 第 1 次 flush 是 claim（成功）；第 2 次是 lastError 写回（失败）
-    if (flushes === 2) throw new HelmError('store_flush_failed', 'SQLite drain 失败', 500)
+    if (flushes === 2) throw new HelmxError('store_flush_failed', 'SQLite drain 失败', 500)
   }
   const stderr: string[] = []
   const originalError = console.error
@@ -772,7 +772,7 @@ test('stop（disable）取消 timer 禁止后续投递；重新启用恢复调�
   assert.equal(h.clock.activeTimers(), 0, 'stop 后 timer 全部取消')
   await h.clock.advance(30 * MIN) // 停用期间推进：无投递
   assert.equal(h.dispatched.length, 0)
-  await assert.rejects(h.host.invokeAction('builtin:triggers', 'cron_list', {}), HelmError)
+  await assert.rejects(h.host.invokeAction('builtin:triggers', 'cron_list', {}), HelmxError)
 
   await h.host.enable('builtin:triggers')
   // 重新启用：definePlugin 重跑、service start 重排（doc 持久仍在）
@@ -801,7 +801,7 @@ test('停用时有在途 tick：liveTasks 报在途，禁用被宿主 409 拒绝
   // 在途 dispatch 未完成时停用：宿主 liveTasks 闸门拒绝
   await assert.rejects(
     h.host.disable('builtin:triggers'),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_has_live_tasks',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_has_live_tasks',
   )
   release?.()
   await h.runtime.settle()

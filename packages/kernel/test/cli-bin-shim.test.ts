@@ -1,13 +1,13 @@
 /**
- * helm CLI shim wrapper tests (ensureCliBinDir + cli-shim pure helpers):
+ * helmx CLI shim wrapper tests (ensureCliBinDir + cli-shim pure helpers):
  * 1. POSIX host: generates native exec shim (byte-identical to historical format) + 0o755;
- * 2. Simulated win32 host (injected platform/execPath): `helm` is a runtime-resolving shim
+ * 2. Simulated win32 host (injected platform/execPath): `helmx` is a runtime-resolving shim
  *    (converts node.exe only, keeps host path for entry; prefers wslpath with cygpath fallback;
- *    fails with diagnostic + exit 127 instead of falling back to Linux node), and `helm.cmd`
+ *    fails with diagnostic + exit 127 instead of falling back to Linux node), and `helmx.cmd`
  *    matches historical output byte-for-byte (including doubled `%` escaping);
  * 3. Stale scripts (including old buggy Windows direct-exec script) are unconditionally overwritten; idempotent;
  * 4. shQuote round-trips verbatim through /bin/sh (spaces / single quotes / double quotes / backslashes / `$` etc.);
- * 5. Generated win32 `helm` shim executes live on Linux runner (fake wslpath/cygpath/node without external tools):
+ * 5. Generated win32 `helmx` shim executes live on Linux runner (fake wslpath/cygpath/node without external tools):
  *    wslpath succeeds, cygpath fallback works, missing tools / empty stdout / non-executable target exit 127 cleanly.
  */
 import { test } from 'node:test'
@@ -26,7 +26,7 @@ const run = promisify(execFile)
 let rootDir: string
 
 test('setup: create temporary directory', { timeout: 60_000 }, () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-cli-shim-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-cli-shim-'))
 })
 
 // ---------------------------------------------------------------------------
@@ -74,24 +74,24 @@ async function writeTool(dir: string, name: string, body: string): Promise<void>
 /** Fake wslpath/cygpath: logs received args and prints emit to stdout (nothing by default). */
 function pathToolBody(name: 'wslpath' | 'cygpath', emit?: string): string {
   return [
-    `printf 'tool ${name}\\n' >> "$HELM_SHIM_RECORD"`,
-    'for a in "$@"; do printf \'recv-tool %s\\n\' "$a" >> "$HELM_SHIM_RECORD"; done',
+    `printf 'tool ${name}\\n' >> "$HELMX_SHIM_RECORD"`,
+    'for a in "$@"; do printf \'recv-tool %s\\n\' "$a" >> "$HELMX_SHIM_RECORD"; done',
     ...(emit === undefined ? [] : [`printf '%s\\n' '${emit}'`]),
   ].join('\n')
 }
 
 /** Fake node: logs $0 and all argv (verifies exact binary exec'd and argument forwarding). */
 const FAKE_NODE_BODY = [
-  'printf \'exec %s\\n\' "$0" >> "$HELM_SHIM_RECORD"',
-  'for a in "$@"; do printf \'recv-node %s\\n\' "$a" >> "$HELM_SHIM_RECORD"; done',
+  'printf \'exec %s\\n\' "$0" >> "$HELMX_SHIM_RECORD"',
+  'for a in "$@"; do printf \'recv-node %s\\n\' "$a" >> "$HELMX_SHIM_RECORD"; done',
 ].join('\n')
 
 /** Generates shims for a simulated win32 host and returns relevant paths. */
-async function prepareWin32Shim(execPath: string): Promise<{ dir: string; helm: string; plan: CliShimPlan }> {
+async function prepareWin32Shim(execPath: string): Promise<{ dir: string; helmx: string; plan: CliShimPlan }> {
   const dir = await mkdtemp(join(rootDir, 'shim-'))
   const manager = makeManager(dir)
   await manager.ensureCliBinDir({ platform: 'win32', execPath })
-  return { dir, helm: join(dir, 'bin', 'helm'), plan: currentRepoPlan({ execPath }) }
+  return { dir, helmx: join(dir, 'bin', 'helmx'), plan: currentRepoPlan({ execPath }) }
 }
 
 async function readLines(path: string): Promise<string[]> {
@@ -102,21 +102,21 @@ async function readLines(path: string): Promise<string[]> {
 // 1. POSIX host generation
 // ---------------------------------------------------------------------------
 
-test('POSIX host: helm is a direct exec shim (byte-identical to legacy, 0o755) with no helm.cmd', { timeout: 60_000 }, async () => {
+test('POSIX host: helmx is a direct exec shim (byte-identical to legacy, 0o755) with no helmx.cmd', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'posix-'))
   try {
     const manager = makeManager(dir)
     await manager.ensureCliBinDir()
     const plan = currentRepoPlan()
-    const content = await readFile(join(dir, 'bin', 'helm'), 'utf8')
+    const content = await readFile(join(dir, 'bin', 'helmx'), 'utf8')
     // Byte-for-byte lock: matches legacy format (exec + single-quoted paths + "$@" passthrough).
     const expected = `#!/bin/sh\nexec ${[plan.execPath, ...plan.entryArgs].map(shQuote).join(' ')} "$@"\n`
     assert.equal(content, expected)
     assert.equal(content, buildPosixHostShim(plan))
-    assert.equal((await stat(join(dir, 'bin', 'helm'))).mode & 0o777, 0o755)
+    assert.equal((await stat(join(dir, 'bin', 'helmx'))).mode & 0o777, 0o755)
     assert.equal(manager.cliBinDir, join(dir, 'bin'))
-    // No helm.cmd emitted on POSIX hosts.
-    await assert.rejects(readFile(join(dir, 'bin', 'helm.cmd')))
+    // No helmx.cmd emitted on POSIX hosts.
+    await assert.rejects(readFile(join(dir, 'bin', 'helmx.cmd')))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -126,34 +126,34 @@ test('POSIX host: helm is a direct exec shim (byte-identical to legacy, 0o755) w
 // 2. Simulated win32 host generation
 // ---------------------------------------------------------------------------
 
-test('simulated win32 host: helm resolves runtime node.exe (keeps host paths for entry); helm.cmd matches legacy byte-for-byte', { timeout: 60_000 }, async () => {
-  const execPath = 'C:\\Program Files\\helm space\\node.exe'
+test('simulated win32 host: helmx resolves runtime node.exe (keeps host paths for entry); helmx.cmd matches legacy byte-for-byte', { timeout: 60_000 }, async () => {
+  const execPath = 'C:\\Program Files\\helmx space\\node.exe'
   const dir = await mkdtemp(join(rootDir, 'win32-'))
   try {
     const manager = makeManager(dir)
     await manager.ensureCliBinDir({ platform: 'win32', execPath })
     const plan = currentRepoPlan({ execPath })
-    const helm = await readFile(join(dir, 'bin', 'helm'), 'utf8')
-    assert.equal(helm, buildWindowsPosixShim(plan))
-    assert.ok(helm.startsWith('#!/bin/sh\n'), 'must be a POSIX sh script')
+    const helmx = await readFile(join(dir, 'bin', 'helmx'), 'utf8')
+    assert.equal(helmx, buildWindowsPosixShim(plan))
+    assert.ok(helmx.startsWith('#!/bin/sh\n'), 'must be a POSIX sh script')
     // Windows node path single-quoted safely (spaces never split tokens).
-    assert.ok(helm.includes(`helm_node_win=${shQuote(execPath)}`))
+    assert.ok(helmx.includes(`helmx_node_win=${shQuote(execPath)}`))
     // Prefers wslpath with cygpath fallback; converts node path only.
-    assert.ok(helm.includes('wslpath -u "$helm_node_win"'))
-    assert.ok(helm.includes('cygpath -u "$helm_node_win"'))
+    assert.ok(helmx.includes('wslpath -u "$helmx_node_win"'))
+    assert.ok(helmx.includes('cygpath -u "$helmx_node_win"'))
     // exec uses converted binary; entry args and user args pass through untouched; failure exits 127.
-    assert.ok(helm.includes('exec "$helm_node"'))
-    assert.ok(helm.includes('"$@"'))
-    assert.ok(helm.includes('exit 127'))
+    assert.ok(helmx.includes('exec "$helmx_node"'))
+    assert.ok(helmx.includes('"$@"'))
+    assert.ok(helmx.includes('exit 127'))
     for (const arg of plan.entryArgs) {
-      assert.ok(helm.includes(shQuote(arg)), `entry argument must be embedded verbatim: ${arg}`)
+      assert.ok(helmx.includes(shQuote(arg)), `entry argument must be embedded verbatim: ${arg}`)
     }
     // Never falls back to Linux node (no bare `node` or `/usr/bin/env node`).
-    assert.ok(!helm.includes('\nexec node '))
-    assert.ok(!helm.includes('exec /usr/bin/env node'))
-    assert.equal((await stat(join(dir, 'bin', 'helm'))).mode & 0o777, 0o755)
-    // helm.cmd: byte-identical to legacy format (quoted spaced paths).
-    const cmd = await readFile(join(dir, 'bin', 'helm.cmd'), 'utf8')
+    assert.ok(!helmx.includes('\nexec node '))
+    assert.ok(!helmx.includes('exec /usr/bin/env node'))
+    assert.equal((await stat(join(dir, 'bin', 'helmx'))).mode & 0o777, 0o755)
+    // helmx.cmd: byte-identical to legacy format (quoted spaced paths).
+    const cmd = await readFile(join(dir, 'bin', 'helmx.cmd'), 'utf8')
     const cmdArgs = [execPath, ...plan.entryArgs]
       .map((value) => `"${value.replaceAll('%', '%%')}"`)
       .join(' ')
@@ -164,13 +164,13 @@ test('simulated win32 host: helm resolves runtime node.exe (keeps host paths for
   }
 })
 
-test('simulated win32 host: % doubling escape in helm.cmd never regresses', { timeout: 60_000 }, async () => {
+test('simulated win32 host: % doubling escape in helmx.cmd never regresses', { timeout: 60_000 }, async () => {
   const execPath = 'C:\\tools 100%\\node.exe'
   const dir = await mkdtemp(join(rootDir, 'cmd-escape-'))
   try {
     const manager = makeManager(dir)
     await manager.ensureCliBinDir({ platform: 'win32', execPath })
-    const cmd = await readFile(join(dir, 'bin', 'helm.cmd'), 'utf8')
+    const cmd = await readFile(join(dir, 'bin', 'helmx.cmd'), 'utf8')
     assert.ok(cmd.includes('"C:\\tools 100%%\\node.exe"'), '% must be doubled as %%')
     assert.equal(cmd, buildWindowsCmdWrapper(currentRepoPlan({ execPath })))
   } finally {
@@ -182,31 +182,31 @@ test('simulated win32 host: % doubling escape in helm.cmd never regresses', { ti
 // 3. Stale script overwrite and idempotence
 // ---------------------------------------------------------------------------
 
-test('stale script overwrite: unconditionally replaces stale helm (including legacy buggy Windows exec script) and helm.cmd; idempotent', { timeout: 60_000 }, async () => {
+test('stale script overwrite: unconditionally replaces stale helmx (including legacy buggy Windows exec script) and helmx.cmd; idempotent', { timeout: 60_000 }, async () => {
   const execPath = 'C:\\Program Files\\nodejs\\node.exe'
   const dir = await mkdtemp(join(rootDir, 'rewrite-'))
   try {
     await mkdir(join(dir, 'bin'), { recursive: true })
     // Legacy buggy version: win32 Hub previously wrote raw Windows path directly into #!/bin/sh.
     await writeFile(
-      join(dir, 'bin', 'helm'),
+      join(dir, 'bin', 'helmx'),
       `#!/bin/sh\nexec 'C:\\\\Old Node\\node.exe' 'C:\\\\Old\\cli\\index.js' "$@"\n`,
       'utf8',
     )
-    await writeFile(join(dir, 'bin', 'helm.cmd'), '@echo off\r\nstale\r\n', 'utf8')
+    await writeFile(join(dir, 'bin', 'helmx.cmd'), '@echo off\r\nstale\r\n', 'utf8')
 
     const manager = makeManager(dir)
     await manager.ensureCliBinDir({ platform: 'win32', execPath })
     const plan = currentRepoPlan({ execPath })
-    const helm = await readFile(join(dir, 'bin', 'helm'), 'utf8')
-    assert.equal(helm, buildWindowsPosixShim(plan), 'stale buggy script must be completely replaced by new shim')
-    assert.ok(!helm.includes('Old Node'), 'no legacy content should remain')
-    assert.equal(await readFile(join(dir, 'bin', 'helm.cmd'), 'utf8'), buildWindowsCmdWrapper(plan))
-    assert.equal((await stat(join(dir, 'bin', 'helm'))).mode & 0o777, 0o755)
+    const helmx = await readFile(join(dir, 'bin', 'helmx'), 'utf8')
+    assert.equal(helmx, buildWindowsPosixShim(plan), 'stale buggy script must be completely replaced by new shim')
+    assert.ok(!helmx.includes('Old Node'), 'no legacy content should remain')
+    assert.equal(await readFile(join(dir, 'bin', 'helmx.cmd'), 'utf8'), buildWindowsCmdWrapper(plan))
+    assert.equal((await stat(join(dir, 'bin', 'helmx'))).mode & 0o777, 0o755)
 
     // Idempotent: re-generating leaves file identical.
     await manager.ensureCliBinDir({ platform: 'win32', execPath })
-    assert.equal(await readFile(join(dir, 'bin', 'helm'), 'utf8'), buildWindowsPosixShim(plan))
+    assert.equal(await readFile(join(dir, 'bin', 'helmx'), 'utf8'), buildWindowsPosixShim(plan))
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -215,12 +215,12 @@ test('stale script overwrite: unconditionally replaces stale helm (including leg
   const posixDir = await mkdtemp(join(rootDir, 'rewrite-posix-'))
   try {
     await mkdir(join(posixDir, 'bin'), { recursive: true })
-    await writeFile(join(posixDir, 'bin', 'helm'), '#!/bin/sh\nexec /stale/helm "$@"\n', 'utf8')
-    await chmod(join(posixDir, 'bin', 'helm'), 0o644)
+    await writeFile(join(posixDir, 'bin', 'helmx'), '#!/bin/sh\nexec /stale/helmx "$@"\n', 'utf8')
+    await chmod(join(posixDir, 'bin', 'helmx'), 0o644)
     const manager = makeManager(posixDir)
     await manager.ensureCliBinDir()
-    assert.equal(await readFile(join(posixDir, 'bin', 'helm'), 'utf8'), buildPosixHostShim(currentRepoPlan()))
-    assert.equal((await stat(join(posixDir, 'bin', 'helm'))).mode & 0o777, 0o755)
+    assert.equal(await readFile(join(posixDir, 'bin', 'helmx'), 'utf8'), buildPosixHostShim(currentRepoPlan()))
+    assert.equal((await stat(join(posixDir, 'bin', 'helmx'))).mode & 0o777, 0o755)
   } finally {
     await rm(posixDir, { recursive: true, force: true })
   }
@@ -232,7 +232,7 @@ test('stale script overwrite: unconditionally replaces stale helm (including leg
 
 test('shQuote: round-trips verbatim through sh (spaces / single quotes / double quotes / backslashes / $ / symbols / newlines / %)', { timeout: 60_000 }, async () => {
   const samples = [
-    'C:\\Program Files\\helm\\node.exe',
+    'C:\\Program Files\\helmx\\node.exe',
     "it's",
     'a"b',
     'back\\slash',
@@ -248,12 +248,12 @@ test('shQuote: round-trips verbatim through sh (spaces / single quotes / double 
 })
 
 // ---------------------------------------------------------------------------
-// 5. Real execution of generated win32 helm shim (Linux runner + fake tools)
+// 5. Real execution of generated win32 helmx shim (Linux runner + fake tools)
 // ---------------------------------------------------------------------------
 
-test('win32 helm shim execution: executes wslpath result cleanly; node path and entry/user args pass through verbatim', { timeout: 60_000 }, async () => {
-  const execPath = 'C:\\Program Files\\helm space\\node.exe'
-  const { dir, helm, plan } = await prepareWin32Shim(execPath)
+test('win32 helmx shim execution: executes wslpath result cleanly; node path and entry/user args pass through verbatim', { timeout: 60_000 }, async () => {
+  const execPath = 'C:\\Program Files\\helmx space\\node.exe'
+  const { dir, helmx, plan } = await prepareWin32Shim(execPath)
   try {
     const toolsDir = join(dir, 'tools')
     await mkdir(toolsDir, { recursive: true })
@@ -261,8 +261,8 @@ test('win32 helm shim execution: executes wslpath result cleanly; node path and 
     await writeTool(dir, 'fake-node', FAKE_NODE_BODY)
     await writeTool(toolsDir, 'wslpath', pathToolBody('wslpath', fakeNode))
     const record = join(dir, 'record.log')
-    await run(helm, ['--version', 'arg with space'], {
-      env: { PATH: toolsDir, HELM_SHIM_RECORD: record },
+    await run(helmx, ['--version', 'arg with space'], {
+      env: { PATH: toolsDir, HELMX_SHIM_RECORD: record },
     })
     const lines = await readLines(record)
     // wslpath receives full Windows node path (spaces preserved without splitting, backslashes verbatim).
@@ -281,9 +281,9 @@ test('win32 helm shim execution: executes wslpath result cleanly; node path and 
   }
 })
 
-test('win32 helm shim execution: falls back to cygpath cleanly when wslpath is unavailable', { timeout: 60_000 }, async () => {
+test('win32 helmx shim execution: falls back to cygpath cleanly when wslpath is unavailable', { timeout: 60_000 }, async () => {
   const execPath = 'C:\\Program Files\\nodejs\\node.exe'
-  const { dir, helm } = await prepareWin32Shim(execPath)
+  const { dir, helmx } = await prepareWin32Shim(execPath)
   try {
     const toolsDir = join(dir, 'tools')
     await mkdir(toolsDir, { recursive: true })
@@ -291,7 +291,7 @@ test('win32 helm shim execution: falls back to cygpath cleanly when wslpath is u
     await writeTool(dir, 'fake-node', FAKE_NODE_BODY)
     await writeTool(toolsDir, 'cygpath', pathToolBody('cygpath', fakeNode))
     const record = join(dir, 'record.log')
-    await run(helm, ['--version'], { env: { PATH: toolsDir, HELM_SHIM_RECORD: record } })
+    await run(helmx, ['--version'], { env: { PATH: toolsDir, HELMX_SHIM_RECORD: record } })
     const lines = await readLines(record)
     assert.ok(lines.includes('tool cygpath'))
     assert.ok(lines.includes(`exec ${fakeNode}`), 'must exec converted cygpath result')
@@ -301,14 +301,14 @@ test('win32 helm shim execution: falls back to cygpath cleanly when wslpath is u
   }
 })
 
-test('win32 helm shim execution: exits 127 with readable diagnostics when both wslpath and cygpath are missing', { timeout: 60_000 }, async () => {
+test('win32 helmx shim execution: exits 127 with readable diagnostics when both wslpath and cygpath are missing', { timeout: 60_000 }, async () => {
   const execPath = 'C:\\Program Files\\nodejs\\node.exe'
-  const { dir, helm } = await prepareWin32Shim(execPath)
+  const { dir, helmx } = await prepareWin32Shim(execPath)
   try {
     const emptyDir = join(dir, 'empty-path')
     await mkdir(emptyDir, { recursive: true })
     await assert.rejects(
-      run(helm, ['--version'], { env: { PATH: emptyDir } }),
+      run(helmx, ['--version'], { env: { PATH: emptyDir } }),
       (error: unknown) => {
         const err = error as { code?: number | string; stderr?: string }
         assert.equal(err.code, 127, `exit code must be 127, got ${String(err.code)}`)
@@ -322,17 +322,17 @@ test('win32 helm shim execution: exits 127 with readable diagnostics when both w
   }
 })
 
-test('win32 helm shim execution: rejects untrusted converter outputs (empty stdout or non-executable file) with exit 127', { timeout: 60_000 }, async () => {
+test('win32 helmx shim execution: rejects untrusted converter outputs (empty stdout or non-executable file) with exit 127', { timeout: 60_000 }, async () => {
   const execPath = 'C:\\Program Files\\nodejs\\node.exe'
   // Case A: wslpath exits zero with empty stdout, cygpath missing.
   {
-    const { dir, helm } = await prepareWin32Shim(execPath)
+    const { dir, helmx } = await prepareWin32Shim(execPath)
     try {
       const toolsDir = join(dir, 'tools')
       await mkdir(toolsDir, { recursive: true })
       await writeTool(toolsDir, 'wslpath', pathToolBody('wslpath'))
       await assert.rejects(
-        run(helm, ['--version'], { env: { PATH: toolsDir, HELM_SHIM_RECORD: join(dir, 'record.log') } }),
+        run(helmx, ['--version'], { env: { PATH: toolsDir, HELMX_SHIM_RECORD: join(dir, 'record.log') } }),
         (error: unknown) => {
           const err = error as { code?: number | string; stderr?: string }
           assert.equal(err.code, 127, 'empty output must abort execution')
@@ -346,7 +346,7 @@ test('win32 helm shim execution: rejects untrusted converter outputs (empty stdo
   }
   // Case B: wslpath returns an existing non-executable plain file path.
   {
-    const { dir, helm } = await prepareWin32Shim(execPath)
+    const { dir, helmx } = await prepareWin32Shim(execPath)
     try {
       const toolsDir = join(dir, 'tools')
       await mkdir(toolsDir, { recursive: true })
@@ -355,7 +355,7 @@ test('win32 helm shim execution: rejects untrusted converter outputs (empty stdo
       await chmod(plain, 0o644)
       await writeTool(toolsDir, 'wslpath', pathToolBody('wslpath', plain))
       await assert.rejects(
-        run(helm, ['--version'], { env: { PATH: toolsDir, HELM_SHIM_RECORD: join(dir, 'record.log') } }),
+        run(helmx, ['--version'], { env: { PATH: toolsDir, HELMX_SHIM_RECORD: join(dir, 'record.log') } }),
         (error: unknown) => {
           const err = error as { code?: number | string; stderr?: string }
           assert.equal(err.code, 127, 'non-executable result must abort execution')
@@ -370,32 +370,32 @@ test('win32 helm shim execution: rejects untrusted converter outputs (empty stdo
 })
 
 // ---------------------------------------------------------------------------
-// 6. Env injection (Electron host) and HELM_CLI_ENTRY explicit entrypoint (packaged app layout)
+// 6. Env injection (Electron host) and HELMX_CLI_ENTRY explicit entrypoint (packaged app layout)
 // ---------------------------------------------------------------------------
 
 test('env injection: all three wrappers inject ELECTRON_RUN_AS_NODE=1 via env/set while preserving legacy output when unset', { timeout: 60_000 }, () => {
-  const base: CliShimPlan = { execPath: '/opt/electron/helm', entryArgs: ['/release/cli/dist/index.js'] }
+  const base: CliShimPlan = { execPath: '/opt/electron/helmx', entryArgs: ['/release/cli/dist/index.js'] }
   const withEnv: CliShimPlan = { ...base, env: { ELECTRON_RUN_AS_NODE: '1' } }
 
   // POSIX host: `exec env 'K=V'` -- verified via /bin/sh to inject env without altering argument forwarding.
   const posix = buildPosixHostShim(withEnv)
   assert.equal(
     posix,
-    `#!/bin/sh\nexec env 'ELECTRON_RUN_AS_NODE=1' '/opt/electron/helm' '/release/cli/dist/index.js' "$@"\n`,
+    `#!/bin/sh\nexec env 'ELECTRON_RUN_AS_NODE=1' '/opt/electron/helmx' '/release/cli/dist/index.js' "$@"\n`,
   )
-  assert.equal(buildPosixHostShim(base), `#!/bin/sh\nexec '/opt/electron/helm' '/release/cli/dist/index.js' "$@"\n`, 'byte-identical to legacy output when env omitted')
+  assert.equal(buildPosixHostShim(base), `#!/bin/sh\nexec '/opt/electron/helmx' '/release/cli/dist/index.js' "$@"\n`, 'byte-identical to legacy output when env omitted')
 
   // Windows cmd: setlocal + set "K=V" (avoids polluting caller cmd session); byte-identical to legacy output when unset.
   const cmd = buildWindowsCmdWrapper(withEnv)
   assert.equal(
     cmd,
-    `@echo off\r\nsetlocal\r\nset "ELECTRON_RUN_AS_NODE=1"\r\n"/opt/electron/helm" "/release/cli/dist/index.js" %*\r\n`,
+    `@echo off\r\nsetlocal\r\nset "ELECTRON_RUN_AS_NODE=1"\r\n"/opt/electron/helmx" "/release/cli/dist/index.js" %*\r\n`,
   )
-  assert.equal(buildWindowsCmdWrapper(base), `@echo off\r\n"/opt/electron/helm" "/release/cli/dist/index.js" %*\r\n`, 'byte-identical to legacy output when env omitted')
+  assert.equal(buildWindowsCmdWrapper(base), `@echo off\r\n"/opt/electron/helmx" "/release/cli/dist/index.js" %*\r\n`, 'byte-identical to legacy output when env omitted')
 
-  // Windows POSIX shim (WSL/Git Bash): `exec env 'K=V' "$helm_node"`.
+  // Windows POSIX shim (WSL/Git Bash): `exec env 'K=V' "$helmx_node"`.
   const winPosix = buildWindowsPosixShim(withEnv)
-  assert.ok(winPosix.includes(`exec env 'ELECTRON_RUN_AS_NODE=1' "$helm_node"`), 'must inject env')
+  assert.ok(winPosix.includes(`exec env 'ELECTRON_RUN_AS_NODE=1' "$helmx_node"`), 'must inject env')
   assert.ok(!buildWindowsPosixShim(base).includes('exec env '), 'must omit env prefix when no env is configured')
 })
 
@@ -408,7 +408,7 @@ test('env injection live execution: POSIX shim takes effect via /bin/sh (child s
       entryArgs: ['-e', 'process.stdout.write(process.env.ELECTRON_RUN_AS_NODE ?? "<unset>")'],
       env: { ELECTRON_RUN_AS_NODE: '1' },
     }
-    const shim = join(dir, 'helm')
+    const shim = join(dir, 'helmx')
     await writeFile(shim, buildPosixHostShim(plan), 'utf8')
     await chmod(shim, 0o755)
     // Launch from a deliberately polluted environment to verify shim overrides rather than inherits it.
@@ -419,23 +419,23 @@ test('env injection live execution: POSIX shim takes effect via /bin/sh (child s
   }
 })
 
-test('HELM_CLI_ENTRY: generates shim directly from explicit entrypoint without probing repo tree; preserves default when unset', { timeout: 60_000 }, async () => {
+test('HELMX_CLI_ENTRY: generates shim directly from explicit entrypoint without probing repo tree; preserves default when unset', { timeout: 60_000 }, async () => {
   const dir = await mkdtemp(join(rootDir, 'explicit-entry-'))
-  const entry = '/opt/helm-release/cli/dist/index.js'
-  const prev = process.env.HELM_CLI_ENTRY
+  const entry = '/opt/helmx-release/cli/dist/index.js'
+  const prev = process.env.HELMX_CLI_ENTRY
   try {
-    process.env.HELM_CLI_ENTRY = entry
+    process.env.HELMX_CLI_ENTRY = entry
     const manager = makeManager(dir)
     await manager.ensureCliBinDir()
-    const content = await readFile(join(dir, 'bin', 'helm'), 'utf8')
+    const content = await readFile(join(dir, 'bin', 'helmx'), 'utf8')
     // entryArgs contains the explicit path alone, free of repo tsx/source probes.
-    assert.ok(content.includes(shQuote(entry)), 'shim must point to HELM_CLI_ENTRY')
+    assert.ok(content.includes(shQuote(entry)), 'shim must point to HELMX_CLI_ENTRY')
     assert.ok(!content.includes('tsx'), 'explicit entrypoint must not probe repo tsx')
     assert.ok(!content.includes('src/index.ts'), 'explicit entrypoint must not probe repo CLI sources')
     assert.equal(content, buildPosixHostShim({ execPath: process.execPath, entryArgs: [entry] }))
   } finally {
-    if (prev === undefined) delete process.env.HELM_CLI_ENTRY
-    else process.env.HELM_CLI_ENTRY = prev
+    if (prev === undefined) delete process.env.HELMX_CLI_ENTRY
+    else process.env.HELMX_CLI_ENTRY = prev
     await rm(dir, { recursive: true, force: true })
   }
 })

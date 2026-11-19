@@ -7,8 +7,8 @@
  * host locale; gateway diagnostics, lastError and quota data from the status
  * doc pass through unchanged.
  */
-import type { HelmLocale, LocalizedText } from '@helm/plugin-client'
-import { resolveLocalizedText } from '@helm/plugin-client'
+import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText } from '@helmx/plugin-client'
 
 /** Panel header and refresh action. */
 export const MAGPIE_TITLE: LocalizedText = { en: 'Magpie Gateway', 'zh-CN': 'Magpie 网关' }
@@ -55,6 +55,6 @@ export const MAGPIE_ROUTES_COL_TIME: LocalizedText = { en: 'Time', 'zh-CN': '时
 export const MAGPIE_ROUTES_EMPTY: LocalizedText = { en: 'No route history', 'zh-CN': '暂无路由记录' }
 
 /** Resolve the yes/no label used by models.ts boolLabel. */
-export function magpieBoolLabel(value: boolean, locale: HelmLocale): string {
+export function magpieBoolLabel(value: boolean, locale: HelmxLocale): string {
   return resolveLocalizedText(value ? MAGPIE_YES : MAGPIE_NO, locale)
 }

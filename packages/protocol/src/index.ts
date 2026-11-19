@@ -1,5 +1,5 @@
 /**
- * @helm/protocol — helm's single shared contract package.
+ * @helmx/protocol — helmx's single shared contract package.
  * Zero heavy runtime dependencies; only types and a few dependency-free constants/error classes.
  */
 

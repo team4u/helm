@@ -1,5 +1,5 @@
 /**
- * 动作发现运行时集成验证（真实 createHelm 组合 + faux provider 最终模型请求断言，共享单实例减少冷启动）。
+ * 动作发现运行时集成验证（真实 createHelmx 组合 + faux provider 最终模型请求断言，共享单实例减少冷启动）。
  */
 import {
   fauxAssistantMessage,
@@ -7,7 +7,7 @@ import {
   type FauxResponseStep,
 } from '@earendil-works/pi-ai/providers/faux'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
-import type { ConversationEntry, PluginDefinition } from '@helm/protocol'
+import type { ConversationEntry, PluginDefinition } from '@helmx/protocol'
 import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -23,7 +23,7 @@ let env: HubTestEnv
 const requests: CapturedRequest[] = []
 
 before(async () => {
-  env = await openHubTestEnv({ prefix: 'helm-action-discovery-' })
+  env = await openHubTestEnv({ prefix: 'helmx-action-discovery-' })
 }, { timeout: 60_000 })
 
 after(async () => {
@@ -104,8 +104,8 @@ test('动作目录生命周期：普通插件启用即进目录、XML 转义与�
     assert.ok(section.includes('name: string(required)') && section.includes('times: number(optional)'))
     assert.ok(section.includes('config: object(embed set)(describe query)(optional)'))
     assert.ok(section.includes('tags: string[](optional)'))
-    assert.ok(section.includes('CLI: helm demo:plain greet'))
-    assert.ok(section.includes('describe: true') && section.includes('helm actions list --json'))
+    assert.ok(section.includes('CLI: helmx demo:plain greet'))
+    assert.ok(section.includes('describe: true') && section.includes('helmx actions list --json'))
 
     await host.disable('demo:plain')
     requests.length = 0
@@ -159,7 +159,7 @@ test('磁盘外部插件：rescan 后默认隐藏，启用即自动进入目录�
     await submitAndWait(conv.id, 'after enable')
     const section = actionsSection(requests.at(-1)!)!
     assert.ok(section.includes('external-notice.send') && section.includes('EXTERNAL_NOTICE_GUIDE'))
-    assert.ok(section.includes('CLI: helm external-notice send'))
+    assert.ok(section.includes('CLI: helmx external-notice send'))
 
     await host.disable('external-notice')
     env.faux.setResponses([capture()])
@@ -314,7 +314,7 @@ test('指引单次注入、CLI 覆写/隐藏与插件重载元数据更新', { t
     assert.ok(section.includes('PLAIN_SNIPPET_MARKER') && section.includes('PLAIN_GUIDELINE_MARKER'))
     assert.ok(section.includes('refer quote (demo:guide-cli.plain_guided)') && section.includes('note (demo:guide-cli.plain_guided)'))
     assert.ok(!directToolSection.includes('PLAIN_SNIPPET_MARKER'))
-    assert.ok(section.includes('CLI: helm team report make'))
+    assert.ok(section.includes('CLI: helmx team report make'))
     const secretIdx = section.indexOf('demo:guide-cli.secret_cmd')
     const nextIdx = section.indexOf('- demo:', secretIdx + 1)
     assert.ok(!section.slice(secretIdx, nextIdx === -1 ? section.length : nextIdx).includes('CLI:'))

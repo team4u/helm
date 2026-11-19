@@ -20,7 +20,7 @@
 
 import { CronExpressionParser } from 'cron-parser'
 import { randomUUID } from 'node:crypto'
-import { HelmError, type ExternalTriggerEnvelope, type HelmPluginContext } from '@helm/protocol'
+import { HelmxError, type ExternalTriggerEnvelope, type HelmxPluginContext } from '@helmx/protocol'
 
 // ---------------------------------------------------------------------------
 // Constants and types
@@ -98,16 +98,16 @@ interface CronRuntime {
 // Pure functions: validation / time computation / doc parsing (exported for tests)
 // ---------------------------------------------------------------------------
 
-/** Validate a five-field cron expression and IANA timezone; invalid throws HelmError (cron-parser messages pass through). */
+/** Validate a five-field cron expression and IANA timezone; invalid throws HelmxError (cron-parser messages pass through). */
 export function assertValidSchedule(schedule: string, timezone: string): void {
   if (typeof schedule !== 'string' || schedule.trim().length === 0) {
-    throw new HelmError('validation_error', 'cron schedule must not be empty (standard five fields: min hour day month weekday)', 400, {
+    throw new HelmxError('validation_error', 'cron schedule must not be empty (standard five fields: min hour day month weekday)', 400, {
       field: 'schedule',
     })
   }
   const fields = schedule.trim().split(/\s+/)
   if (fields.length !== 5) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `cron schedule must be standard five fields (min hour day month weekday); got ${fields.length}: ${schedule}`,
       400,
@@ -115,7 +115,7 @@ export function assertValidSchedule(schedule: string, timezone: string): void {
     )
   }
   if (typeof timezone !== 'string' || timezone.length === 0) {
-    throw new HelmError('validation_error', 'cron timezone must not be empty (an IANA zone name; defaults to UTC)', 400, {
+    throw new HelmxError('validation_error', 'cron timezone must not be empty (an IANA zone name; defaults to UTC)', 400, {
       field: 'timezone',
     })
   }
@@ -124,7 +124,7 @@ export function assertValidSchedule(schedule: string, timezone: string): void {
     // hasNext() silently returns false for a bad timezone -- the validation boundary must evaluate one point directly
     CronExpressionParser.parse(schedule, { tz: timezone }).next()
   } catch (err) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `invalid cron schedule: ${err instanceof Error ? err.message : String(err)}`,
       400,
@@ -140,7 +140,7 @@ export function nextFireTime(schedule: string, timezone: string, afterMs: number
     if (!iter.hasNext()) return undefined
     return iter.next().getTime()
   } catch (err) {
-    throw new HelmError(
+    throw new HelmxError(
       'cron_next_time_unavailable',
       `failed to compute the next cron time (schedule=${schedule} tz=${timezone}): ${err instanceof Error ? err.message : String(err)}`,
       500,
@@ -163,7 +163,7 @@ export function normalizeCronInput(input: {
   threadKey?: string
 }): CronJob {
   if (typeof input.id !== 'string' || !ID_PATTERN.test(input.id)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `invalid cron id (1..64 chars, alphanumeric _ - allowed, dots forbidden): ${String(input.id)}`,
       400,
@@ -171,10 +171,10 @@ export function normalizeCronInput(input: {
     )
   }
   if (typeof input.text !== 'string' || input.text.trim().length === 0) {
-    throw new HelmError('validation_error', 'cron text must not be empty (the payload text delivered at trigger time)', 400, { field: 'text' })
+    throw new HelmxError('validation_error', 'cron text must not be empty (the payload text delivered at trigger time)', 400, { field: 'text' })
   }
   if (input.description !== undefined && (typeof input.description !== 'string' || input.description.length > 500)) {
-    throw new HelmError('validation_error', 'cron description must be a string of at most 500 chars', 400, {
+    throw new HelmxError('validation_error', 'cron description must be a string of at most 500 chars', 400, {
       field: 'description',
     })
   }
@@ -184,7 +184,7 @@ export function normalizeCronInput(input: {
   const hasConv = input.targetConversationId !== undefined
   const hasProfile = input.targetProfileId !== undefined
   if (hasConv && hasProfile) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       'targetConversationId and targetProfileId are mutually exclusive: direct conversation delivery and per-Profile resolution cannot both be set',
       400,
@@ -192,21 +192,21 @@ export function normalizeCronInput(input: {
     )
   }
   if (hasConv && (!Number.isInteger(input.targetConversationId) || (input.targetConversationId as number) <= 0)) {
-    throw new HelmError('validation_error', 'targetConversationId must be a positive integer conversation ID', 400, {
+    throw new HelmxError('validation_error', 'targetConversationId must be a positive integer conversation ID', 400, {
       field: 'targetConversationId',
     })
   }
   if (hasProfile && (typeof input.targetProfileId !== 'string' || input.targetProfileId.length === 0)) {
-    throw new HelmError('validation_error', 'targetProfileId must be a non-empty string', 400, { field: 'targetProfileId' })
+    throw new HelmxError('validation_error', 'targetProfileId must be a non-empty string', 400, { field: 'targetProfileId' })
   }
   if (input.threadKey !== undefined && (typeof input.threadKey !== 'string' || input.threadKey.length === 0)) {
-    throw new HelmError('validation_error', 'threadKey must be a non-empty string', 400, { field: 'threadKey' })
+    throw new HelmxError('validation_error', 'threadKey must be a non-empty string', 400, { field: 'threadKey' })
   }
   if (input.enabled !== undefined && typeof input.enabled !== 'boolean') {
-    throw new HelmError('validation_error', 'enabled must be a boolean', 400, { field: 'enabled' })
+    throw new HelmxError('validation_error', 'enabled must be a boolean', 400, { field: 'enabled' })
   }
   if (input.catchUp !== undefined && typeof input.catchUp !== 'boolean') {
-    throw new HelmError('validation_error', 'catchUp must be a boolean', 400, { field: 'catchUp' })
+    throw new HelmxError('validation_error', 'catchUp must be a boolean', 400, { field: 'catchUp' })
   }
 
   return {
@@ -225,21 +225,21 @@ export function normalizeCronInput(input: {
 }
 
 /**
- * Strictly validate the persisted doc: bad data throws HelmError explicitly (cron_doc_corrupt); never silently resets.
+ * Strictly validate the persisted doc: bad data throws HelmxError explicitly (cron_doc_corrupt); never silently resets.
  * Unknown fields are ignored (forward evolution); known-field type/constraint errors must be rejected.
  */
 export function parseCronDoc(raw: unknown): CronDoc {
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new HelmError('cron_doc_corrupt', 'crons doc corrupted: the root must be an object', 500, { actual: String(raw) })
+    throw new HelmxError('cron_doc_corrupt', 'crons doc corrupted: the root must be an object', 500, { actual: String(raw) })
   }
   const doc = raw as Record<string, unknown>
   if (doc.version !== 1) {
-    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: invalid version: ${String(doc.version)} (expected 1)`, 500, {
+    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: invalid version: ${String(doc.version)} (expected 1)`, 500, {
       version: doc.version,
     })
   }
   if (!Array.isArray(doc.jobs)) {
-    throw new HelmError('cron_doc_corrupt', 'crons doc corrupted: jobs must be an array', 500, { actual: typeof doc.jobs })
+    throw new HelmxError('cron_doc_corrupt', 'crons doc corrupted: jobs must be an array', 500, { actual: typeof doc.jobs })
   }
   const seen = new Set<string>()
   const jobs = doc.jobs.map((rawJob, index) => parseCronJob(rawJob, index, seen))
@@ -249,43 +249,43 @@ export function parseCronDoc(raw: unknown): CronDoc {
 function parseCronJob(rawJob: unknown, index: number, seen: Set<string>): CronJob {
   const where = `jobs[${index}]`
   if (rawJob === null || typeof rawJob !== 'object' || Array.isArray(rawJob)) {
-    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} must be an object`, 500, { index })
+    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} must be an object`, 500, { index })
   }
   const job = rawJob as Record<string, unknown>
   if (typeof job.id !== 'string' || !ID_PATTERN.test(job.id)) {
-    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: invalid ${where}.id: ${String(job.id)}`, 500, { index })
+    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: invalid ${where}.id: ${String(job.id)}`, 500, { index })
   }
   if (typeof job.rev !== 'string' || job.rev.length === 0) {
-    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) is missing the creation generation rev`, 500, {
+    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) is missing the creation generation rev`, 500, {
       index,
       id: job.id,
     })
   }
   if (seen.has(job.id)) {
-    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: duplicate ${where}.id: ${job.id}`, 500, { index })
+    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: duplicate ${where}.id: ${job.id}`, 500, { index })
   }
   seen.add(job.id)
   if (typeof job.schedule !== 'string' || typeof job.text !== 'string') {
-    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) is missing schedule/text`, 500, {
+    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) is missing schedule/text`, 500, {
       index,
       id: job.id,
     })
   }
   if (typeof job.timezone !== 'string' || job.timezone.length === 0) {
-    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) has an invalid timezone`, 500, {
+    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) has an invalid timezone`, 500, {
       index,
       id: job.id,
     })
   }
   if (typeof job.enabled !== 'boolean' || typeof job.catchUp !== 'boolean') {
-    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) enabled/catchUp must be booleans`, 500, {
+    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) enabled/catchUp must be booleans`, 500, {
       index,
       id: job.id,
     })
   }
   for (const field of ['description', 'targetProfileId', 'threadKey', 'lastError'] as const) {
     if (job[field] !== undefined && typeof job[field] !== 'string') {
-      throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) has an invalid ${field} type`, 500, {
+      throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) has an invalid ${field} type`, 500, {
         index,
         id: job.id,
         field,
@@ -296,13 +296,13 @@ function parseCronJob(rawJob: unknown, index: number, seen: Set<string>): CronJo
     job.targetConversationId !== undefined &&
     (!Number.isInteger(job.targetConversationId) || (job.targetConversationId as number) <= 0)
   ) {
-    throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) has an invalid targetConversationId`, 500, {
+    throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) has an invalid targetConversationId`, 500, {
       index,
       id: job.id,
     })
   }
   if (job.targetConversationId !== undefined && job.targetProfileId !== undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'cron_doc_corrupt',
       `crons doc corrupted: ${where} (${job.id}) targetConversationId and targetProfileId are mutually exclusive`,
       500,
@@ -311,7 +311,7 @@ function parseCronJob(rawJob: unknown, index: number, seen: Set<string>): CronJo
   }
   for (const field of ['lastRunAt', 'nextRunAt'] as const) {
     if (job[field] !== undefined && (typeof job[field] !== 'number' || !Number.isFinite(job[field]))) {
-      throw new HelmError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) ${field} must be finite numbers`, 500, {
+      throw new HelmxError('cron_doc_corrupt', `crons doc corrupted: ${where} (${job.id}) ${field} must be finite numbers`, 500, {
         index,
         id: job.id,
         field,
@@ -366,7 +366,7 @@ export function decideTick(job: CronJob, now: number): TickDecision {
   const future = nextFireTime(job.schedule, job.timezone, now)
   if (future === undefined || future <= now) {
     // nextFireTime strictly increases, so this is theoretically unreachable; defensively error explicitly instead of silence
-    throw new HelmError(
+    throw new HelmxError(
       'cron_schedule_stalled',
       `cron job ${job.id} cannot jump to a future point (schedule=${job.schedule} tz=${job.timezone})`,
       500,
@@ -417,12 +417,12 @@ function clearLastError(job: CronJob): CronJob {
  * delivery helper (validates the Profile, resolves/creates the conversation, then enters
  * ctx.host.dispatchTrigger -- already defanged by the kernel).
  */
-export function registerCron(ctx: HelmPluginContext, deps: CronDeps): CronRuntime {
+export function registerCron(ctx: HelmxPluginContext, deps: CronDeps): CronRuntime {
   return createCronScheduler(ctx, deps, defaultClock())
 }
 
 /** Internal test entry: controllable clock injection (runtime has no injection need; defaults to the real clock). */
-export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, clock: CronClock): CronRuntime {
+export function createCronScheduler(ctx: HelmxPluginContext, deps: CronDeps, clock: CronClock): CronRuntime {
   const doc = ctx.doc<CronDoc>(CRON_DOC_NAME, { version: 1, jobs: [] }, { public: true })
 
   let stopping = false
@@ -585,7 +585,7 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
     if (job.nextRunAt === undefined) {
       emitError(
         `cron job ${id} has no next time`,
-        new HelmError('cron_no_next_time', `schedule=${job.schedule} has no future matching point in ${job.timezone}`, 500, {
+        new HelmxError('cron_no_next_time', `schedule=${job.schedule} has no future matching point in ${job.timezone}`, 500, {
           id,
           schedule: job.schedule,
         }),
@@ -656,7 +656,7 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
       const now = clock.now()
       const nextRunAt = nextFireTime(job.schedule, job.timezone, now)
       if (nextRunAt === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'cron_no_next_time',
           `cron schedule has no future matching point in ${job.timezone}; creation refused: ${job.schedule}`,
           400,
@@ -665,7 +665,7 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
       }
       const current = readDoc()
       if (current.jobs.some((j) => j.id === job.id)) {
-        throw new HelmError('cron_duplicate_id', `cron job already exists: ${job.id}`, 409, { id: job.id })
+        throw new HelmxError('cron_duplicate_id', `cron job already exists: ${job.id}`, 409, { id: job.id })
       }
       const created: CronJob = { ...job, nextRunAt }
       await writeDoc({ version: 1, jobs: [...current.jobs, created] })
@@ -693,7 +693,7 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
     handler: async (input: { id: string }) => {
       const current = readDoc()
       if (!current.jobs.some((j) => j.id === input.id)) {
-        throw new HelmError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
+        throw new HelmxError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
       }
       // Stop the timer first, then persist the deletion; a concurrent tick's (id, rev) check silently ends on a
       // generation change -- a deleted job can never revive
@@ -724,7 +724,7 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
       // Manual triggering only reads a snapshot + delivers for real, writing no doc: no claim/lastError write-back,
       // hence no delete+create same-id pollution surface; the deletion race is backstopped by the read-time existence check.
       const job = readDoc().jobs.find((j) => j.id === input.id)
-      if (!job) throw new HelmError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
+      if (!job) throw new HelmxError('not_found', `cron job does not exist: ${input.id}`, 404, { id: input.id })
       const envelope = { ...buildCronEnvelope(job, clock.now()), id: `cron:${job.id}:manual:${randomUUID()}` }
       await deps.dispatchTrigger(envelope, job.targetProfileId)
       return { triggered: true }
@@ -755,7 +755,7 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
         for (const job of current.jobs) {
           assertValidSchedule(job.schedule, job.timezone)
           if (job.enabled && job.nextRunAt === undefined) {
-            throw new HelmError('cron_doc_corrupt', `enabled cron job ${job.id} is missing nextRunAt`, 500, { id: job.id })
+            throw new HelmxError('cron_doc_corrupt', `enabled cron job ${job.id} is missing nextRunAt`, 500, { id: job.id })
           }
         }
         const now = clock.now()
@@ -764,7 +764,7 @@ export function createCronScheduler(ctx: HelmPluginContext, deps: CronDeps, cloc
           if (job.enabled && !job.catchUp && job.nextRunAt !== undefined && job.nextRunAt < now) {
             const nextRunAt = nextFireTime(job.schedule, job.timezone, now)
             if (nextRunAt === undefined) {
-              throw new HelmError('cron_no_next_time', `cron job ${job.id} has no future matching point`, 500, { id: job.id })
+              throw new HelmxError('cron_no_next_time', `cron job ${job.id} has no future matching point`, 500, { id: job.id })
             }
             await tryUpdateJob(job.id, job.rev, (value) => ({ ...value, nextRunAt }))
           }

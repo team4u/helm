@@ -1,7 +1,7 @@
 import {
-  HelmError,
-  type HelmPluginContext,
-} from '@helm/protocol'
+  HelmxError,
+  type HelmxPluginContext,
+} from '@helmx/protocol'
 import {
   parseMutedSources,
   ROUTER_BLOCKED_TOOL_NAMES,
@@ -12,10 +12,10 @@ import {
 } from './contracts.js'
 import { recallHasNode, updateRecallDoc } from './recall.js'
 import { collectWorkerSettlement } from './settlement.js'
-import { escapeXml } from '@helm/protocol'
+import { escapeXml } from '@helmx/protocol'
 
 export function activeWorkersSection(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   coordinator: SuperAgentCoordinator,
 ): string {
   const workers = coordinator.readIndex().workers
@@ -28,7 +28,7 @@ export function activeWorkersSection(
       status = summary.status
       doing = summary.doing ?? ''
     } catch (err) {
-      if (err instanceof HelmError && err.code === 'not_found') status = 'deleted'
+      if (err instanceof HelmxError && err.code === 'not_found') status = 'deleted'
       else throw err
     }
     const detail = doing !== '' ? ` doing="${escapeXml(ctx.host.redact(doing))}"` : ''
@@ -38,7 +38,7 @@ export function activeWorkersSection(
 }
 
 export function registerSuperAgentHooks(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   coordinator: SuperAgentCoordinator,
 ): void {
   const {

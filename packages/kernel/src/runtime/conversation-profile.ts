@@ -12,16 +12,16 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { AgentChange, Harness } from '@earendil-works/pi-durable'
 import type { ModelThinkingLevel, Models } from '@earendil-works/pi-ai'
-import type { ConversationSummary } from '@helm/protocol'
-import { HelmError, assertProfileId } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
+import { HelmxError, assertProfileId } from '@helmx/protocol'
 import { type Profile, type ProfileService } from '../services/index.js'
 import { clampThinkingLevelForModel } from './models.js'
 import type { EventHub } from './events.js'
-import type { HelmStore } from './store.js'
+import type { HelmxStore } from './store.js'
 
 interface ConversationProfileHost {
   readonly harness: Harness
-  readonly store: HelmStore
+  readonly store: HelmxStore
   readonly events: EventHub
   readonly profilesSvc: ProfileService
   /** Current Models collection (for capability clamping; reads latest collection after hot reload). */
@@ -47,12 +47,12 @@ export class ConversationProfileService {
     try {
       assertProfileId(profileId)
     } catch (error) {
-      throw new HelmError('validation_error', error instanceof Error ? error.message : String(error), 400)
+      throw new HelmxError('validation_error', error instanceof Error ? error.message : String(error), 400)
     }
     try {
       return await this.host.profilesSvc.get(profileId)
     } catch (error) {
-      throw new HelmError(
+      throw new HelmxError(
         'profile_read_failed',
         `failed to read Profile ${profileId}: ${error instanceof Error ? error.message : String(error)}`,
         500,
@@ -68,7 +68,7 @@ export class ConversationProfileService {
   ): Promise<string | undefined> {
     const profile = await this.readProfile(profileId)
     if (profile === undefined) {
-      throw new HelmError('profile_not_found', `Profile referenced by conversation does not exist: ${profileId}`, 404, { profileId })
+      throw new HelmxError('profile_not_found', `Profile referenced by conversation does not exist: ${profileId}`, 404, { profileId })
     }
     return override || profile.model || this.host.defaultModel()
   }
@@ -81,7 +81,7 @@ export class ConversationProfileService {
    */
   async resolveEffectiveThinkingLevel(override: string | undefined, profileId: string, modelRef?: { provider: string; modelId: string }): Promise<string | undefined> {
     const profile = await this.readProfile(profileId)
-    if (!profile) throw new HelmError('profile_not_found', `Profile referenced by conversation does not exist: ${profileId}`, 404, { profileId })
+    if (!profile) throw new HelmxError('profile_not_found', `Profile referenced by conversation does not exist: ${profileId}`, 404, { profileId })
     const perModel = modelRef !== undefined ? this.host.modelThinkingLevelOf(modelRef) : undefined
     const inherited = override || perModel || profile.thinkingLevel || this.host.defaultThinkingLevel()
     return clampThinkingLevelForModel(this.host.models(), modelRef, inherited)
@@ -110,7 +110,7 @@ export class ConversationProfileService {
       const clampedOverride = clampThinkingLevelForModel(this.host.models(), ref, meta.thinkingLevelOverride)
       const thinking = await this.resolveEffectiveThinkingLevel(clampedOverride, meta.profileId, ref)
       const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
-      if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       const agent = await conversation.agent(BACKGROUND_CONTEXT)
       const change: AgentChange = {
         ...(agent.model?.provider !== ref?.provider || agent.model?.modelId !== ref?.modelId

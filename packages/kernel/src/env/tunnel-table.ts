@@ -9,7 +9,7 @@
  * while this table manages registration and destruction with identical character-by-character behavior.
  */
 import type { Duplex } from 'node:stream'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 
 /** In-flight tunnel registration (created by `openTunnel`, awaiting dedicated gateway first-frame auth). */
 export interface PendingTunnel {
@@ -21,7 +21,7 @@ export interface PendingTunnel {
   timer: NodeJS.Timeout
   /** Called by gateway after auth succeeds to hand off the Duplex (fills stream and settles pending). */
   grant: (duplex: Duplex) => void
-  reject: (error: HelmError) => void
+  reject: (error: HelmxError) => void
   settled: boolean
 }
 
@@ -33,7 +33,7 @@ export interface ActiveTunnel {
 }
 
 /**
- * Normalize explicit failure from node-side tunnel RPC: maps `result.error.code` -> HelmError
+ * Normalize explicit failure from node-side tunnel RPC: maps `result.error.code` -> HelmxError
  * code/status (`timeout` 504 / `aborted` 499 / `node_draining` 503 / all others 502).
  */
 export function tunnelRpcFailureOf(errorCode: string): { code: string; status: number } {
@@ -51,8 +51,8 @@ export function tunnelRpcFailureOf(errorCode: string): { code: string; status: n
 
 /** Factory for bulk-settlement errors (pending and active differ in wording/context, supplied by caller). */
 interface TunnelFinalizeErrors {
-  pending: (nodeId: string, tunnelId: string) => HelmError
-  active: (nodeId: string, tunnelId: string) => HelmError
+  pending: (nodeId: string, tunnelId: string) => HelmxError
+  active: (nodeId: string, tunnelId: string) => HelmxError
 }
 
 export class TunnelTable {

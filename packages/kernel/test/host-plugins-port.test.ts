@@ -15,7 +15,7 @@ import assert from 'node:assert/strict'
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-import { HelmError, type HelmHostApi, type PluginDefinition, type PluginSummary } from '@helm/protocol'
+import { HelmxError, type HelmxHostApi, type PluginDefinition, type PluginSummary } from '@helmx/protocol'
 import {
   PluginHost,
   PluginPackageManager,
@@ -23,7 +23,7 @@ import {
 } from '../src/plugins/index.js'
 import { ConfigService } from '../src/services/config.js'
 import { hostBackendStub } from './helpers/host-backend-stub.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, cleanupDir, makeTempDir } from './helpers.js'
 
 // ---------------------------------------------------------------------------
@@ -63,8 +63,8 @@ interface Env {
 
 /** Real PluginHost + real PluginPackageManager backed by local dirs (zero network dependencies). */
 async function makeEnv(): Promise<Env> {
-  const dataDir = await makeTempDir('helm-host-plugins-')
-  const srcParent = await makeTempDir('helm-host-plugins-src-')
+  const dataDir = await makeTempDir('helmx-host-plugins-')
+  const srcParent = await makeTempDir('helmx-host-plugins-src-')
   // Wire plugins port identically to runtime's createPluginHostBackend (direct delegation to PluginHost
   // public methods, reusing the same lifecycle queue and task tracking).
   const backend = hostBackendStub()
@@ -102,7 +102,7 @@ async function makeEnv(): Promise<Env> {
 
 function requireSummary(host: PluginHost, pluginId: string): PluginSummary {
   const summary = host.list().find((s) => s.id === pluginId)
-  if (!summary) throw new HelmError('plugin_enable_failed', `plugin ${pluginId} missing from host list after operation (inconsistent internal state)`, 500, { pluginId })
+  if (!summary) throw new HelmxError('plugin_enable_failed', `plugin ${pluginId} missing from host list after operation (inconsistent internal state)`, 500, { pluginId })
   return summary
 }
 
@@ -110,8 +110,8 @@ function requireSummary(host: PluginHost, pluginId: string): PluginSummary {
 async function registerProbe(
   host: PluginHost,
   id = 'p:probe',
-): Promise<HelmHostApi> {
-  let captured: HelmHostApi | undefined
+): Promise<HelmxHostApi> {
+  let captured: HelmxHostApi | undefined
   const def: PluginDefinition = {
     id,
     definePlugin(ctx) {
@@ -123,17 +123,17 @@ async function registerProbe(
   return captured!
 }
 
-/** Asserts that invoking p throws/rejects with a HelmError matching code and status. */
-async function expectHelmError(p: () => unknown, code: string, status: number): Promise<HelmError> {
+/** Asserts that invoking p throws/rejects with a HelmxError matching code and status. */
+async function expectHelmxError(p: () => unknown, code: string, status: number): Promise<HelmxError> {
   try {
     await p()
   } catch (err) {
-    assert.ok(err instanceof HelmError, `expected HelmError(${code}), got ${String(err)}`)
+    assert.ok(err instanceof HelmxError, `expected HelmxError(${code}), got ${String(err)}`)
     assert.equal(err.code, code, `expected code=${code}, got ${err.code}`)
     assert.equal(err.status, status, `expected status=${status}, got ${err.status}`)
     return err
   }
-  throw new Error(`expected HelmError(${code}) to be thrown, returned normally`)
+  throw new Error(`expected HelmxError(${code}) to be thrown, returned normally`)
 }
 
 // ---------------------------------------------------------------------------
@@ -300,10 +300,10 @@ test('self-lifecycle rejection: update/remove/disable on self fail immediately 4
     const selfEnabled = await api.plugins.enable('p:self')
     assert.equal(selfEnabled.id, 'p:self')
 
-    await expectHelmError(() => api.plugins.update('p:self'), 'plugin_self_lifecycle_forbidden', 409)
-    await expectHelmError(() => api.plugins.remove('p:self'), 'plugin_self_lifecycle_forbidden', 409)
-    await expectHelmError(() => api.plugins.disable('p:self'), 'plugin_self_lifecycle_forbidden', 409)
-    await expectHelmError(() => api.plugins.disable('p:self', { force: true }), 'plugin_self_lifecycle_forbidden', 409)
+    await expectHelmxError(() => api.plugins.update('p:self'), 'plugin_self_lifecycle_forbidden', 409)
+    await expectHelmxError(() => api.plugins.remove('p:self'), 'plugin_self_lifecycle_forbidden', 409)
+    await expectHelmxError(() => api.plugins.disable('p:self'), 'plugin_self_lifecycle_forbidden', 409)
+    await expectHelmxError(() => api.plugins.disable('p:self', { force: true }), 'plugin_self_lifecycle_forbidden', 409)
 
     // After rejection, plugin remains enabled and healthy (never enters backend queue, zero side effects)
     const summary = env.host.get('p:self')
@@ -319,7 +319,7 @@ test('self-lifecycle rejection: update/remove/disable on self fail immediately 4
 test('self-lifecycle rejection also applies inside action execution: calling self-disable from handler never deadlocks', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
-    let api: HelmHostApi | undefined
+    let api: HelmxHostApi | undefined
     const def: PluginDefinition = {
       id: 'p:selfaction',
       definePlugin(ctx) {
@@ -330,7 +330,7 @@ test('self-lifecycle rejection also applies inside action execution: calling sel
           inputSchema: { type: 'object', additionalProperties: false },
           outputSchema: { type: 'object', properties: { ok: { type: 'boolean' } }, required: ['ok'], additionalProperties: false },
           handler: async () => {
-            await expectHelmError(() => ctx.host.plugins.disable('p:selfaction'), 'plugin_self_lifecycle_forbidden', 409)
+            await expectHelmxError(() => ctx.host.plugins.disable('p:selfaction'), 'plugin_self_lifecycle_forbidden', 409)
             return { ok: true }
           },
         })
@@ -359,20 +359,20 @@ test('error boundaries: unknown plugin, invalid path, and mutually exclusive tar
     const api = await registerProbe(env.host)
 
     // Unknown plugin: enable/update/remove all return 404 (real PluginHost backend semantics)
-    await expectHelmError(() => api.plugins.enable('never-registered'), 'unknown_plugin', 404)
-    await expectHelmError(() => api.plugins.update('never-registered'), 'unknown_plugin_package', 404)
-    await expectHelmError(() => api.plugins.remove('never-registered'), 'unknown_plugin_package', 404)
-    await expectHelmError(() => api.plugins.doctor({ id: 'never-registered' }), 'plugin_source_missing', 404)
+    await expectHelmxError(() => api.plugins.enable('never-registered'), 'unknown_plugin', 404)
+    await expectHelmxError(() => api.plugins.update('never-registered'), 'unknown_plugin_package', 404)
+    await expectHelmxError(() => api.plugins.remove('never-registered'), 'unknown_plugin_package', 404)
+    await expectHelmxError(() => api.plugins.doctor({ id: 'never-registered' }), 'plugin_source_missing', 404)
 
     // Invalid doctor path: relative paths and traversal `..` reject (matches HTTP parseDoctorTarget)
-    await expectHelmError(() => api.plugins.doctor({ dir: 'relative/path' }), 'validation_error', 400)
-    await expectHelmError(() => api.plugins.doctor({ dir: '/abs/../escape' }), 'validation_error', 400)
+    await expectHelmxError(() => api.plugins.doctor({ dir: 'relative/path' }), 'validation_error', 400)
+    await expectHelmxError(() => api.plugins.doctor({ dir: '/abs/../escape' }), 'validation_error', 400)
     // Mutual exclusion between id and dir / empty target
-    await expectHelmError(() => api.plugins.doctor({ id: 'x', dir: '/abs' }), 'validation_error', 400)
-    await expectHelmError(() => api.plugins.doctor({}), 'validation_error', 400)
+    await expectHelmxError(() => api.plugins.doctor({ id: 'x', dir: '/abs' }), 'validation_error', 400)
+    await expectHelmxError(() => api.plugins.doctor({}), 'validation_error', 400)
 
     // Invalid source syntax (missing local dir -> 404 real error)
-    await expectHelmError(() => api.plugins.install('/nonexistent/plugin/dir'), 'plugin_package_install_failed', 404)
+    await expectHelmxError(() => api.plugins.install('/nonexistent/plugin/dir'), 'plugin_package_install_failed', 404)
   } finally {
     await env.host.dispose()
     await env.close()
@@ -380,7 +380,7 @@ test('error boundaries: unknown plugin, invalid path, and mutually exclusive tar
 })
 
 test('unwired backend plugins port: write operations fail 501 while reads continue working', { timeout: 60_000 }, async () => {
-  const dataDir = await makeTempDir('helm-host-plugins-noport-')
+  const dataDir = await makeTempDir('helmx-host-plugins-noport-')
   // Explicitly leave plugins port undefined (matching lightweight test hosts).
   const backend = hostBackendStub()
   backend.plugins = undefined
@@ -391,14 +391,14 @@ test('unwired backend plugins port: write operations fail 501 while reads contin
     assert.ok(Array.isArray(api.plugins.list()))
     assert.ok(Array.isArray(api.plugins.listUi()))
     // Write side fails explicitly 501 (never degrades silently)
-    await expectHelmError(() => api.plugins.doctor({ dir: '/tmp' }), 'not_supported', 501)
-    await expectHelmError(() => api.plugins.install('/tmp'), 'not_supported', 501)
-    await expectHelmError(() => api.plugins.update('x'), 'not_supported', 501)
-    await expectHelmError(() => api.plugins.remove('x'), 'not_supported', 501)
-    await expectHelmError(() => api.plugins.enable('x'), 'not_supported', 501)
-    await expectHelmError(() => api.plugins.disable('x'), 'not_supported', 501)
+    await expectHelmxError(() => api.plugins.doctor({ dir: '/tmp' }), 'not_supported', 501)
+    await expectHelmxError(() => api.plugins.install('/tmp'), 'not_supported', 501)
+    await expectHelmxError(() => api.plugins.update('x'), 'not_supported', 501)
+    await expectHelmxError(() => api.plugins.remove('x'), 'not_supported', 501)
+    await expectHelmxError(() => api.plugins.enable('x'), 'not_supported', 501)
+    await expectHelmxError(() => api.plugins.disable('x'), 'not_supported', 501)
     // Self-check runs prior to 501: even with unwired port, self-target still throws 409 (sync guard unchanged)
-    await expectHelmError(() => api.plugins.disable('p:probe'), 'plugin_self_lifecycle_forbidden', 409)
+    await expectHelmxError(() => api.plugins.disable('p:probe'), 'plugin_self_lifecycle_forbidden', 409)
   } finally {
     await host.dispose()
     await cleanupDir(dataDir)
@@ -425,7 +425,7 @@ test('epoch guard: all methods on stale plugins handle throw 409 plugin_context_
       () => api.plugins.disable('x'),
     ]
     for (const call of expired) {
-      await expectHelmError(call, 'plugin_context_expired', 409)
+      await expectHelmxError(call, 'plugin_context_expired', 409)
     }
   } finally {
     await env.host.dispose()
@@ -434,10 +434,10 @@ test('epoch guard: all methods on stale plugins handle throw 409 plugin_context_
 })
 
 test('redaction boundary: secrets in failed doctor diagnostics pass through host redactText outbound', { timeout: 60_000 }, async () => {
-  const dataDir = await makeTempDir('helm-host-plugins-redact-')
-  const srcParent = await makeTempDir('helm-host-plugins-redact-src-')
+  const dataDir = await makeTempDir('helmx-host-plugins-redact-')
+  const srcParent = await makeTempDir('helmx-host-plugins-redact-src-')
   // Construct host with secret redaction replacing plaintext with [REDACTED] (simulating SecretStash).
-  const SECRET = 'sk-helm-super-secret-token'
+  const SECRET = 'sk-helmx-super-secret-token'
   const stub = hostBackendStub()
   stub.redact = (text: string) => text.split(SECRET).join('[REDACTED]')
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
@@ -449,11 +449,11 @@ test('redaction boundary: secrets in failed doctor diagnostics pass through host
   // Wire only doctor port (no package manager needed; runtime delegates identically).
   stub.plugins = {
     doctorPlugin: (target) => host.doctorExternalPlugin(target),
-    installPlugin: () => Promise.reject(new HelmError('unsupported', 'this test only wires doctor', 501)),
-    updatePlugin: () => Promise.reject(new HelmError('unsupported', 'this test only wires doctor', 501)),
-    removePlugin: () => Promise.reject(new HelmError('unsupported', 'this test only wires doctor', 501)),
-    enablePlugin: () => Promise.reject(new HelmError('unsupported', 'this test only wires doctor', 501)),
-    disablePlugin: () => Promise.reject(new HelmError('unsupported', 'this test only wires doctor', 501)),
+    installPlugin: () => Promise.reject(new HelmxError('unsupported', 'this test only wires doctor', 501)),
+    updatePlugin: () => Promise.reject(new HelmxError('unsupported', 'this test only wires doctor', 501)),
+    removePlugin: () => Promise.reject(new HelmxError('unsupported', 'this test only wires doctor', 501)),
+    enablePlugin: () => Promise.reject(new HelmxError('unsupported', 'this test only wires doctor', 501)),
+    disablePlugin: () => Promise.reject(new HelmxError('unsupported', 'this test only wires doctor', 501)),
   }
   try {
     const api = await registerProbe(host)
@@ -485,7 +485,7 @@ test('live-task tracking: port calls count against caller plugin tracker (409 pr
     // Operator installs target and holds an in-flight host.plugins.disable('track-target') call inside its action;
     // disabling operator mid-flight must fail 409 plugin_has_live_tasks.
     const src = writeLocalPlugin(env.srcParent, 'track-target')
-    let operatorApi: HelmHostApi | undefined
+    let operatorApi: HelmxHostApi | undefined
     let gate: (() => void) | undefined
     const gatePromise = new Promise<void>((resolve) => { gate = resolve })
     const operatorDef: PluginDefinition = {
@@ -513,7 +513,7 @@ test('live-task tracking: port calls count against caller plugin tracker (409 pr
     const actionPromise = env.host.invokeAction('p:operator', 'hold_disable', {})
     await new Promise((r) => setTimeout(r, 30))
     // Mid-flight: disabling operator fails 409 (host.plugins.disable task active)
-    await expectHelmError(() => env.host.disable('p:operator'), 'plugin_has_live_tasks', 409)
+    await expectHelmxError(() => env.host.disable('p:operator'), 'plugin_has_live_tasks', 409)
     gate!()
     await actionPromise
     // Once settled, disabling operator succeeds normally

@@ -9,7 +9,7 @@
  */
 
 import {
-  HelmError,
+  HelmxError,
   redactJsonValue,
   agentGateResultMissingError as gateResultMissingError,
   sanitizeAgentExecutionInfo as sanitizeExecutionInfo,
@@ -18,7 +18,7 @@ import {
   type AgentGateResult,
   type AgentSpawnRequest,
   type JsonSchema,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import {
   extractWorkflowExecutionMeta,
   parseWorkflowSpawnMeta,
@@ -102,7 +102,7 @@ function createSubagentSession(params: SubagentSessionParams) {
           svc.abortChildConversation(run, childId)
         }
       }
-      void settler.settle({ ok: false, error: new HelmError('aborted', '后台子代理执行已取消', 409) }).catch(
+      void settler.settle({ ok: false, error: new HelmxError('aborted', '后台子代理执行已取消', 409) }).catch(
         (error: unknown) => {
           settler.reportSettleError(error)
         },
@@ -178,10 +178,10 @@ function finalizeSubagentOutcome(
 ): SubagentRawOutcome {
   let effective = outcome
   if (effective.ok && ctx.aborted) {
-    effective = { ok: false, error: new HelmError('aborted', '后台子代理执行已取消', 409) }
+    effective = { ok: false, error: new HelmxError('aborted', '后台子代理执行已取消', 409) }
   }
   if (effective.ok && ctx.gateResult !== undefined && !ctx.gateResult.ok) {
-    effective = { ok: false, error: new HelmError('gate_failed', ctx.gateResult.output, 502) }
+    effective = { ok: false, error: new HelmxError('gate_failed', ctx.gateResult.output, 502) }
   }
   if (
     effective.ok &&
@@ -242,14 +242,14 @@ export async function startBackgroundAgent(
 }> {
   if (svc.isClosed()) {
     options?.preassigned?.onPersistFailed?.()
-    throw new HelmError('service_closed', 'WorkflowService 已关闭，拒绝启动新后台子代理', 503)
+    throw new HelmxError('service_closed', 'WorkflowService 已关闭，拒绝启动新后台子代理', 503)
   }
   try {
     await svc.init()
-    if (svc.isClosed()) throw new HelmError('service_closed', 'WorkflowService 已关闭，拒绝启动新后台子代理', 503)
+    if (svc.isClosed()) throw new HelmxError('service_closed', 'WorkflowService 已关闭，拒绝启动新后台子代理', 503)
     svc.host.getConversation(request.parentConversationId)
     if (request.signal?.aborted) {
-      throw new HelmError('aborted', 'spawn 请求在创建前已取消', 409)
+      throw new HelmxError('aborted', 'spawn 请求在创建前已取消', 409)
     }
   } catch (error) {
     options?.preassigned?.onPersistFailed?.()
@@ -279,7 +279,7 @@ export async function startBackgroundAgent(
 
   const journalPath = svc.runs.journalPathFor(request.parentConversationId, runId)
   const agentIdForProto = request.agentId ?? `${runId}:subagent-0`
-  const deterministicRequestId = request.requestId ?? `helm:spawn:${runId}`
+  const deterministicRequestId = request.requestId ?? `helmx:spawn:${runId}`
   const hadSecretGrant = Array.isArray(request.secretNames) && request.secretNames.length > 0
   const spawnMeta = parseWorkflowSpawnMeta(request.meta)
   const subagentSpec: PersistedSubagentSpec = {
@@ -432,7 +432,7 @@ export async function startBackgroundAgent(
   else if (!detachedBeforeBind && parentSignal?.aborted) abort.abort()
 
   const spawnPromise = (async () => {
-    if (abort.signal.aborted) throw new HelmError('aborted', '后台子代理启动期间已取消', 409)
+    if (abort.signal.aborted) throw new HelmxError('aborted', '后台子代理启动期间已取消', 409)
     return svc.host.spawnAgent(proto)
   })()
   let spawnOutcome: SubagentRawOutcome | undefined
@@ -551,7 +551,7 @@ export function reattachBackgroundAgent(
     if (!isNativeReattach && svc.deferExternalReattach) {
       await svc.waitExternalRuntimeReady()
     }
-    if (abort.signal.aborted) throw new HelmError('aborted', '后台子代理恢复期间已取消', 409)
+    if (abort.signal.aborted) throw new HelmxError('aborted', '后台子代理恢复期间已取消', 409)
     return svc.host.spawnAgent(proto)
   })()
 

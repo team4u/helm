@@ -6,7 +6,7 @@
  * 2. 全视口多栏主控台骨架（Sidebar + Primary Pane + Split Pane + Workbench）
  * ========================================================================== */
 
-.helm-shell {
+.helmx-shell {
   display: flex;
   width: 100vw;
   height: 100dvh;
@@ -14,7 +14,7 @@
   background: var(--bg);
 }
 
-.helm-sidebar {
+.helmx-sidebar {
   width: 296px;
   min-width: 296px;
   height: 100%;
@@ -111,7 +111,7 @@
   overflow: hidden;
 }
 
-.helm-main-stage {
+.helmx-main-stage {
   flex: 1;
   min-width: 0;
   height: 100%;
@@ -119,7 +119,7 @@
   overflow: hidden;
 }
 
-.helm-pane {
+.helmx-pane {
   flex: 1;
   min-width: 0;
   height: 100%;
@@ -130,7 +130,7 @@
   position: relative;
 }
 
-.helm-primary-pane {
+.helmx-primary-pane {
   flex: 1;
   min-width: 0;
   height: 100%;
@@ -140,8 +140,8 @@
   position: relative;
 }
 
-/* 会话窗口保活舞台：Activity 不产生宿主节点，.helm-pane 是舞台直接子节点；
- * 隐藏窗口由 react-dom 写 display:none!important 折叠，可见窗口按原 .helm-pane 布局填充。
+/* 会话窗口保活舞台：Activity 不产生宿主节点，.helmx-pane 是舞台直接子节点；
+ * 隐藏窗口由 react-dom 写 display:none!important 折叠，可见窗口按原 .helmx-pane 布局填充。
  * 主屏为非会话目标时舞台整体折叠，让位给待命页/视图/中心页。 */
 .conversation-window-stage {
   flex: 1;
@@ -155,7 +155,7 @@
   display: none;
 }
 
-.helm-split-pane {
+.helmx-split-pane {
   flex: 1;
   min-width: 0;
   height: 100%;
@@ -167,8 +167,8 @@
   position: relative;
 }
 
-.helm-primary-pane[data-helm-panel-focused='true']::after,
-.helm-split-pane[data-helm-panel-focused='true']::after {
+.helmx-primary-pane[data-helmx-panel-focused='true']::after,
+.helmx-split-pane[data-helmx-panel-focused='true']::after {
   content: '';
   position: absolute;
   top: 0;
@@ -186,14 +186,14 @@
 }
 
 @media (min-width: 861px) {
-  .helm-shell.sidebar-collapsed .helm-sidebar {
+  .helmx-shell.sidebar-collapsed .helmx-sidebar {
     width: 48px;
     min-width: 48px;
   }
-  .helm-shell.sidebar-collapsed .sidebar-context {
+  .helmx-shell.sidebar-collapsed .sidebar-context {
     display: none;
   }
-  .helm-shell.sidebar-collapsed .desktop-sidebar-expand-btn {
+  .helmx-shell.sidebar-collapsed .desktop-sidebar-expand-btn {
     display: inline-flex;
   }
 }
@@ -279,7 +279,7 @@
   -webkit-tap-highlight-color: transparent;
 }
 
-.helm-workbench {
+.helmx-workbench {
   position: fixed;
   top: 0;
   right: 0;
@@ -340,7 +340,7 @@
  * SSE 浮动重连胶囊、Suspense 懒加载占位与首页落地中性骨架屏
  * ========================================================================== */
 
-/* 浮动重连胶囊：不进 .helm-main-stage 文档流，避免挤压 .helm-panes 触发时间线跳动 */
+/* 浮动重连胶囊：不进 .helmx-main-stage 文档流，避免挤压 .helmx-panes 触发时间线跳动 */
 .connection-banner {
   position: fixed;
   top: max(10px, env(safe-area-inset-top));

@@ -1,10 +1,10 @@
 /**
- * plugin-manifest.ts: external plugin manifest parser (`plugin.json` and `package.json` `helm` field).
+ * plugin-manifest.ts: external plugin manifest parser (`plugin.json` and `package.json` `helmx` field).
  *
  * Responsibilities:
  * - `plugin.json`: JSON object with optional `clientRoot`, `clientDependencies` (managed frontend npm
  *   specifiers), and `dependencies` (inter-plugin IDs); invalid shapes fail with `plugin_manifest_invalid`;
- * - `package.json` `helm` field: `{ main?, clientRoot?, clientDependencies?, dependencies? }`, while
+ * - `package.json` `helmx` field: `{ main?, clientRoot?, clientDependencies?, dependencies? }`, while
  *   top-level `dependencies` remains standard npm runtime dependencies;
  * - Specifier/ID validation, deduplication, and lightweight metadata reading (`id/name/description/version`).
  *
@@ -12,15 +12,15 @@
  */
 import { readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
-import { HelmError } from '@helm/protocol';
+import { HelmxError } from '@helmx/protocol';
 
 /**
- * Metadata extracted from `plugin.json` / `package.json#helm`:
+ * Metadata extracted from `plugin.json` / `package.json#helmx`:
  * - `clientRoot`: relative frontend source directory (defaults to plugin root);
  * - `clientDependencies`: managed frontend npm specifiers (bare names/subpaths resolved in plugin dir);
  * - `dependencies`: inter-plugin IDs (distinct from npm `dependencies`).
  */
-interface HelmManifest {
+interface HelmxManifest {
   /** Relative `clientRoot` path declared in manifest (optional). */
   clientRoot?: string;
   /** Relative `clientDist` prebuilt client directory path declared in manifest (optional). */
@@ -50,7 +50,7 @@ function isValidClientDependencySpec(spec: string): boolean {
 function normalizeClientDependencySpecs(dirPath: string, source: string, values: unknown): string[] | undefined {
   if (values === undefined) return undefined;
   if (!Array.isArray(values) || values.some((v) => typeof v !== 'string' || !isValidClientDependencySpec(v))) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_manifest_invalid',
       `External plugin ${dirPath} ${source} must be an array of npm specifiers (bare package names or subpaths; relative/absolute paths and '..' are disallowed)`,
       400,
@@ -71,7 +71,7 @@ function normalizeClientDependencySpecs(dirPath: string, source: string, values:
 function normalizeManifestDependencies(dirPath: string, source: string, values: unknown): string[] | undefined {
   if (values === undefined) return undefined;
   if (!Array.isArray(values) || values.some((v) => typeof v !== 'string' || !MANIFEST_PLUGIN_ID_PATTERN.test(v))) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_manifest_invalid',
       `External plugin ${dirPath} ${source} must be an array of plugin IDs (letters, digits, :, _, - only; declare npm packages in package.json dependencies)`,
       400,
@@ -88,22 +88,22 @@ function normalizeManifestDependencies(dirPath: string, source: string, values: 
   return out.length > 0 ? out : undefined;
 }
 
-/** Reads `clientRoot` from `plugin.json` or `package.json#helm` (`plugin.json` takes precedence). */
-export function readHelmClientRoot(dirPath: string): string | undefined {
+/** Reads `clientRoot` from `plugin.json` or `package.json#helmx` (`plugin.json` takes precedence). */
+export function readHelmxClientRoot(dirPath: string): string | undefined {
   const manifestClientRoot = readManifestStringField(dirPath, 'clientRoot');
   if (manifestClientRoot !== undefined) return manifestClientRoot;
-  return readHelmField(dirPath)?.clientRoot;
+  return readHelmxField(dirPath)?.clientRoot;
 }
 
-/** Reads `clientDist` from `plugin.json` or `package.json#helm` (`plugin.json` takes precedence). */
-export function readHelmClientDist(dirPath: string): string | undefined {
+/** Reads `clientDist` from `plugin.json` or `package.json#helmx` (`plugin.json` takes precedence). */
+export function readHelmxClientDist(dirPath: string): string | undefined {
   const manifestClientDist = readManifestStringField(dirPath, 'clientDist');
   if (manifestClientDist !== undefined) return manifestClientDist;
-  return readHelmField(dirPath)?.clientDist;
+  return readHelmxField(dirPath)?.clientDist;
 }
 
-/** Reads frontend managed npm dependencies from `plugin.json` and `package.json#helm` (merged & deduplicated). */
-export function readHelmClientDependencies(dirPath: string): string[] {
+/** Reads frontend managed npm dependencies from `plugin.json` and `package.json#helmx` (merged & deduplicated). */
+export function readHelmxClientDependencies(dirPath: string): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   const add = (specs: string[] | undefined): void => {
@@ -114,7 +114,7 @@ export function readHelmClientDependencies(dirPath: string): string[] {
     }
   };
   add(readManifestOptional(dirPath)?.clientDependencies);
-  add(readHelmField(dirPath)?.clientDependencies);
+  add(readHelmxField(dirPath)?.clientDependencies);
   return out;
 }
 
@@ -136,7 +136,7 @@ function readManifestIfPresent(dirPath: string): Record<string, unknown> | undef
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_scan_failed',
       `Cannot read external plugin directory manifest: ${manifestPath} (${err instanceof Error ? err.message : String(err)})`,
       500,
@@ -148,7 +148,7 @@ function readManifestIfPresent(dirPath: string): Record<string, unknown> | undef
 }
 
 /** Reads optional extended fields from `plugin.json` (`clientDependencies` / `dependencies`). */
-export function readManifestOptional(dirPath: string): HelmManifest | undefined {
+export function readManifestOptional(dirPath: string): HelmxManifest | undefined {
   const manifest = readManifestIfPresent(dirPath);
   if (manifest === undefined) return undefined;
   const clientDependencies = normalizeClientDependencySpecs(dirPath, 'plugin.json clientDependencies', manifest['clientDependencies']);
@@ -166,7 +166,7 @@ function readManifestStringField(dirPath: string, field: 'clientRoot' | 'clientD
   const value = manifest[field];
   if (value === undefined) return undefined;
   if (typeof value !== 'string' || value.length === 0) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_manifest_invalid',
       `External plugin ${dirPath} plugin.json ${field} must be a non-empty string`,
       500,
@@ -176,8 +176,8 @@ function readManifestStringField(dirPath: string, field: 'clientRoot' | 'clientD
   return value;
 }
 
-/** Reads `package.json#helm` (validates object shape; returns `null` when `package.json` is absent). */
-export function readHelmField(
+/** Reads `package.json#helmx` (validates object shape; returns `null` when `package.json` is absent). */
+export function readHelmxField(
   dirPath: string,
 ): { main?: string; clientRoot?: string; clientDist?: string; clientDependencies?: string[]; dependencies?: string[] } | null {
   const pkgPath = join(dirPath, 'package.json');
@@ -187,7 +187,7 @@ export function readHelmField(
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') return null;
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_scan_failed',
       `Cannot read external plugin package.json: ${pkgPath} (${err instanceof Error ? err.message : String(err)})`,
       500,
@@ -198,7 +198,7 @@ export function readHelmField(
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_manifest_invalid',
       `External plugin package.json is not valid JSON: ${pkgPath} (${err instanceof Error ? err.message : String(err)})`,
       500,
@@ -206,30 +206,30 @@ export function readHelmField(
     );
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
-  const helm = (parsed as Record<string, unknown>)['helm'];
-  if (helm === undefined) {
-    // Fallback to standard npm package.json `main` when `helm` is absent.
+  const helmx = (parsed as Record<string, unknown>)['helmx'];
+  if (helmx === undefined) {
+    // Fallback to standard npm package.json `main` when `helmx` is absent.
     const main = (parsed as Record<string, unknown>)['main'];
     if (typeof main === 'string' && main.length > 0) return { main };
     return null;
   }
-  if (typeof helm !== 'object' || helm === null || Array.isArray(helm)) {
-    throw new HelmError(
+  if (typeof helmx !== 'object' || helmx === null || Array.isArray(helmx)) {
+    throw new HelmxError(
       'plugin_manifest_invalid',
-      `External plugin ${dirPath} package.json helm field must be an object`,
+      `External plugin ${dirPath} package.json helmx field must be an object`,
       500,
       { dirPath },
     );
   }
   const result: { main?: string; clientRoot?: string; clientDist?: string; clientDependencies?: string[]; dependencies?: string[] } = {};
-  const helmObj = helm as Record<string, unknown>;
+  const helmxObj = helmx as Record<string, unknown>;
   for (const field of ['main', 'clientRoot', 'clientDist'] as const) {
-    const val = helmObj[field];
+    const val = helmxObj[field];
     if (val !== undefined) {
       if (typeof val !== 'string' || val.length === 0) {
-        throw new HelmError(
+        throw new HelmxError(
           'plugin_manifest_invalid',
-          `External plugin ${dirPath} package.json helm.${field} must be a non-empty string`,
+          `External plugin ${dirPath} package.json helmx.${field} must be a non-empty string`,
           500,
           { dirPath },
         );
@@ -239,14 +239,14 @@ export function readHelmField(
   }
   const clientDependencies = normalizeClientDependencySpecs(
     dirPath,
-    'package.json helm.clientDependencies',
-    helmObj['clientDependencies'],
+    'package.json helmx.clientDependencies',
+    helmxObj['clientDependencies'],
   );
   if (clientDependencies !== undefined) result.clientDependencies = clientDependencies;
   const dependencies = normalizeManifestDependencies(
     dirPath,
-    'package.json helm.dependencies',
-    helmObj['dependencies'],
+    'package.json helmx.dependencies',
+    helmxObj['dependencies'],
   );
   if (dependencies !== undefined) result.dependencies = dependencies;
   if (
@@ -267,7 +267,7 @@ export function readManifest(manifestPath: string): Record<string, unknown> {
   try {
     raw = readFileSync(manifestPath, 'utf8');
   } catch (err) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_manifest_invalid',
       `Failed to read external plugin manifest: ${manifestPath} (${err instanceof Error ? err.message : String(err)})`,
       500,
@@ -278,7 +278,7 @@ export function readManifest(manifestPath: string): Record<string, unknown> {
   try {
     parsed = JSON.parse(raw);
   } catch (err) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_manifest_invalid',
       `External plugin manifest is not valid JSON: ${manifestPath} (${err instanceof Error ? err.message : String(err)})`,
       500,
@@ -286,7 +286,7 @@ export function readManifest(manifestPath: string): Record<string, unknown> {
     );
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_manifest_invalid',
       `External plugin manifest must be a JSON object: ${manifestPath}`,
       500,

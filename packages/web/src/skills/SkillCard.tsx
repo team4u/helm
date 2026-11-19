@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react'
-import type { SkillSummary } from '@helm/protocol/browser'
-import { copyToClipboard, HelmIcon } from '@helm/plugin-client'
+import type { SkillSummary } from '@helmx/protocol/browser'
+import { copyToClipboard, HelmxIcon } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { getSkillSourceBadge } from './skill-center-model.js'
 
@@ -120,7 +120,7 @@ export function SkillCard({
             onClick={(e) => void handleCopyCommand(e)}
             onKeyDown={(e) => e.stopPropagation()}
           >
-            <HelmIcon name={copied ? 'check' : 'copy'} size={10} />
+            <HelmxIcon name={copied ? 'check' : 'copy'} size={10} />
             <span>{copied ? t('skills.card.copied') : slashCommand}</span>
           </button>
           {refCount > 0 && (
@@ -128,7 +128,7 @@ export function SkillCard({
               className="primary-card-pill tabular-nums"
               title={t('skills.card.referenceFiles', { count: refCount })}
             >
-              <HelmIcon name="file-text" size={11} />
+              <HelmxIcon name="file-text" size={11} />
               <span aria-label={t('skills.card.referenceFiles', { count: refCount })}>{refCount}</span>
             </span>
           )}

@@ -29,10 +29,10 @@ import {
 } from '../src/services/index.js'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
-import { HelmError, type ConversationDetail, type ConversationEntry, type ConversationInputResult, type ConversationPatch, type ConversationSummary, type AskSpec, type PluginSummary, type HelmPluginContext } from '@helm/protocol'
+import { HelmxError, type ConversationDetail, type ConversationEntry, type ConversationInputResult, type ConversationPatch, type ConversationSummary, type AskSpec, type PluginSummary, type HelmxPluginContext } from '@helmx/protocol'
 import { createHubHandler, startHub } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir } from './helpers.js'
 
 /** Initial conversation ID (SDK anchors #1 as default entry; normal conversation semantics, no special privileges). */
@@ -125,7 +125,7 @@ const updateCalls: Array<{ id: number; patch: ConversationPatch }> = []
 let entryFixture: ConversationEntry | undefined
 const entryCalls: Array<{ id: number; entryId: number }> = []
 let waitForInputResult: ConversationInputResult | undefined
-let waitForInputError: HelmError | undefined
+let waitForInputError: HelmxError | undefined
 const waitForInputCalls: Array<{ id: number; submissionId: string }> = []
 const setHubUrlCalls: string[] = []
 
@@ -135,7 +135,7 @@ function detailOf(overrides: Partial<ConversationDetail> = {}): ConversationDeta
     ...base,
     entries: [
       { id: 'e2', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'answer' }] }], createdAt: 2 },
-      { id: 'e1', kind: 'helm.input', data: { id: 'i1', text: 'question', origin: 'human', createdAt: 1 } },
+      { id: 'e1', kind: 'helmx.input', data: { id: 'i1', text: 'question', origin: 'human', createdAt: 1 } },
     ],
     nextCursor: '{"order":"descending","after":5}',
     ...overrides,
@@ -174,7 +174,7 @@ function makeKernel(): KernelRuntimeLike {
     },
     async getConversationDetail(id: number, opts?: { limit?: number; cursor?: string }) {
       detailCalls.push({ id, opts })
-      if (!conversations.has(id)) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       if (detailFixture !== undefined) {
         return { ...detailFixture, id }
       }
@@ -182,9 +182,9 @@ function makeKernel(): KernelRuntimeLike {
     },
     async getConversationEntry(id: number, entryId: number) {
       entryCalls.push({ id, entryId })
-      if (!conversations.has(id)) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       if (entryFixture !== undefined) return { ...entryFixture, id: String(entryId) }
-      throw new HelmError('not_found', `entry ${entryId} not found in conversation ${id}`, 404, { conversationId: id, entryId })
+      throw new HelmxError('not_found', `entry ${entryId} not found in conversation ${id}`, 404, { conversationId: id, entryId })
     },
     async createConversation(init) {
       const id = Math.max(0, ...conversations.keys()) + 1
@@ -197,22 +197,22 @@ function makeKernel(): KernelRuntimeLike {
     async updateConversation(id, patch) {
       updateCalls.push({ id, patch: { ...patch } })
       const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      if (found === undefined) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       const next = { ...found, ...patch }
       conversations.set(id, next)
       return next
     },
     async deleteConversation(id) {
-      if (!conversations.has(id)) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       conversations.delete(id)
     },
     async submitInput(id, text, opts) {
-      if (!conversations.has(id)) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       submitted.push({ id, text, opts })
       return { submissionId: 'sub-mock' }
     },
     async withdrawQueuedInput(id, opts) {
-      if (!conversations.has(id)) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       withdrawn.push({ id, submissionId: opts.submissionId })
       return { status: 'withdrawn' }
     },
@@ -227,16 +227,16 @@ function makeKernel(): KernelRuntimeLike {
     },
     async resetConversation(id) {
       const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      if (found === undefined) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       return found
     },
     async compactConversation(id) {
       const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      if (found === undefined) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       return { taskId: 1, conversation: found }
     },
     async forkConversation(id) {
-      if (!conversations.has(id)) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       return summary(id + 100, `conversation ${id} (fork)`)
     },
     async listAsks() {
@@ -244,15 +244,15 @@ function makeKernel(): KernelRuntimeLike {
     },
     async answerAsk(id, answers, expectedStateSeq) {
       const ask = asks.get(id)
-      if (ask === undefined) throw new HelmError('not_found', `ask not found: ${id}`, 404)
+      if (ask === undefined) throw new HelmxError('not_found', `ask not found: ${id}`, 404)
       if (expectedStateSeq !== undefined && ask.expectedStateSeq !== undefined && expectedStateSeq < ask.expectedStateSeq) {
-        throw new HelmError('superseded', 'already handled on terminal', 409)
+        throw new HelmxError('superseded', 'already handled on terminal', 409)
       }
       void answers
       asks.delete(id)
     },
     async cancelAsk(id) {
-      if (!asks.has(id)) throw new HelmError('not_found', `ask not found: ${id}`, 404)
+      if (!asks.has(id)) throw new HelmxError('not_found', `ask not found: ${id}`, 404)
       asks.delete(id)
     },
     async search(q) {
@@ -314,12 +314,12 @@ function hostApiForPluginHost(): PluginHostBackend {
     listConversations: () => [...conversations.values()],
     getConversation: (id: number) => {
       const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      if (found === undefined) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       return found
     },
     updateConversation: async (id: number) => {
       const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      if (found === undefined) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       return found
     },
     manageConversation: () => () => {},
@@ -329,12 +329,12 @@ function hostApiForPluginHost(): PluginHostBackend {
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
       return 'human'
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', 'this fixture does not execute node commands', 501) },
+    execEnv: async () => { throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501) },
     withFileMutationQueue(): Promise<never> { throw new Error('this fixture does not support file mutation queue') },
     emitEvent: () => {},
   }
@@ -347,7 +347,7 @@ async function registerRoutePlugin(host: PluginHost): Promise<void> {
   await host.register({
     id: 'builtin:triggers',
     name: 'triggers',
-    async definePlugin(ctx: HelmPluginContext) {
+    async definePlugin(ctx: HelmxPluginContext) {
       // PluginHost declares relative paths and mounts them under /api/plugins/<enc id>/routes/...
       ctx.route({
         method: 'POST',
@@ -373,7 +373,7 @@ async function registerRoutePlugin(host: PluginHost): Promise<void> {
         outputSchema: { type: 'object' },
         async handler(input) {
           const text = (input as { text?: unknown }).text
-          if (typeof text !== 'string') throw new HelmError('validation_error', 'text must be a string', 400)
+          if (typeof text !== 'string') throw new HelmxError('validation_error', 'text must be a string', 400)
           return { echoed: text }
         },
       })
@@ -385,7 +385,7 @@ async function registerDocPlugin(host: PluginHost): Promise<void> {
   await host.register({
     id: 'builtin:statusboard',
     name: 'statusboard',
-    async definePlugin(ctx: HelmPluginContext) {
+    async definePlugin(ctx: HelmxPluginContext) {
       const pub = ctx.doc('board', { count: 0 }, { public: true })
       pub.set({ count: 42 })
       ctx.doc('secret-board', { hidden: true })
@@ -395,7 +395,7 @@ async function registerDocPlugin(host: PluginHost): Promise<void> {
 }
 
 before(async () => {
-  dataDir = await makeTempDir('helm-http-test-')
+  dataDir = await makeTempDir('helmx-http-test-')
   auth = new AuthService(dataDir)
   credentials = new CredentialService(dataDir)
   profiles = new ProfileService(dataDir)
@@ -414,7 +414,7 @@ before(async () => {
     ...summary(3, 'subagent 3'),
     parentConversationId: ROOT_CONVERSATION_ID,
     parentToolCallId: 'call-1',
-    ownedBy: 'helm',
+    ownedBy: 'helmx',
   })
   conversations.set(4, { ...summary(4, 'fork 4'), parentConversationId: 2 })
 })
@@ -467,7 +467,7 @@ test('status after setup: no token false; wrong token false; valid token true', 
 
 test('prevents cross-site pre-setup hijack: non-JSON text/plain gets 415 without writing config; valid JSON succeeds', { timeout: 60_000 }, async () => {
   // Isolated dataDir: verify malicious cross-origin form POST cannot hijack initial password setup
-  const evilDir = await makeTempDir('helm-http-evil-')
+  const evilDir = await makeTempDir('helmx-http-evil-')
   try {
     const evilAuth = new AuthService(evilDir)
     const evilKernel = makeKernel()
@@ -529,7 +529,7 @@ test('POST /api/auth/setup weak password returns 400 weak_password; repeat setup
 
 test('POST /api/auth/login before setup returns 409 not_setup', { timeout: 60_000 }, async () => {
   // Isolated dataDir: shared fixture completed setup in first auth test, which would otherwise mask unconfigured branch
-  const freshDir = await makeTempDir('helm-http-nosetup-')
+  const freshDir = await makeTempDir('helmx-http-nosetup-')
   try {
     const freshKernel = makeKernel()
     ;(freshKernel as { auth: AuthService }).auth = new AuthService(freshDir)
@@ -709,7 +709,7 @@ test('GET /:id returns details (top-level summary fields + entries + nextCursor)
   assert.equal(res.body.entries.length, 2)
   assert.equal(res.body.entries[0].kind, 'pi.assistant')
   assert.ok(Array.isArray(res.body.entries[0].model))
-  assert.equal(res.body.entries[1].kind, 'helm.input')
+  assert.equal(res.body.entries[1].kind, 'helmx.input')
   assert.deepEqual(res.body.entries[1].data, { id: 'i1', text: 'question', origin: 'human', createdAt: 1 })
   assert.equal(typeof res.body.nextCursor, 'string')
 })
@@ -908,8 +908,8 @@ test('POST input?wait=1 invokes waitForInput and returns ConversationInputResult
   })
   assert.equal(bad.status, 400)
 
-  // HelmError thrown by waitForInput (aborted etc.) passes status/code through cleanly
-  waitForInputError = new HelmError('input_unanswered', 'input received no answer (aborted)', 409, { reason: 'aborted' })
+  // HelmxError thrown by waitForInput (aborted etc.) passes status/code through cleanly
+  waitForInputError = new HelmxError('input_unanswered', 'input received no answer (aborted)', 409, { reason: 'aborted' })
   const failed = await call(handler, 'POST', `/api/conversations/${ROOT_CONVERSATION_ID}/input?wait=1`, {
     body: { text: 'x' },
   })
@@ -1129,7 +1129,7 @@ test('profiles POST/PUT rejects disabled model binding pre-flight (409 model_dis
   const kernel = makeKernel()
   kernel.assertModelEnabled = (provider, modelId) => {
     if (provider === 'faux' && modelId === 'disabled-model') {
-      throw new HelmError('model_disabled', `model ${provider}/${modelId} is disabled`, 409)
+      throw new HelmxError('model_disabled', `model ${provider}/${modelId} is disabled`, 409)
     }
   }
   const handler = createHubHandler(kernel)
@@ -1183,10 +1183,10 @@ test('profiles skills allowlist HTTP round-trip: three states (create/update/rea
   const { handler } = makeHandlers()
   // Create: deduplicates allowlist + permits temporarily absent IDs (for later installation)
   const created = await call(handler, 'POST', '/api/profiles', {
-    body: { id: 'skills-profile', name: 'skills allowlist', skills: ['helm-cli', 'future-skill', 'helm-cli'] },
+    body: { id: 'skills-profile', name: 'skills allowlist', skills: ['helmx-cli', 'future-skill', 'helmx-cli'] },
   })
   assert.equal(created.status, 201)
-  assert.deepEqual(created.body.skills, ['helm-cli', 'future-skill'], 'duplicate entries deduplicated on return')
+  assert.deepEqual(created.body.skills, ['helmx-cli', 'future-skill'], 'duplicate entries deduplicated on return')
 
   // PUT sets empty array (disable all) -- full-replacement contract, not treated as default
   const put = await call(handler, 'PUT', '/api/profiles/skills-profile', {
@@ -1218,7 +1218,7 @@ test('profiles skills allowlist HTTP round-trip: three states (create/update/rea
   assert.equal(bad.status, 400)
   assert.equal(bad.body.error.code, 'validation_error')
   const bad2 = await call(handler, 'PUT', '/api/profiles/skills-profile', {
-    body: { skills: 'helm-cli' },
+    body: { skills: 'helmx-cli' },
   })
   assert.equal(bad2.status, 400)
   // Previously saved state remains untouched after rejection (stays default)
@@ -1299,7 +1299,7 @@ test('profiles runtime nodeId/workspace/env: valid round-trip persists; malforme
         agent: 'pi',
         nodeId: 'ops-box',
         workspace: '/srv/ops',
-        env: { HELM_ENV_ROLE: 'worker', LANG: 'C' },
+        env: { HELMX_ENV_ROLE: 'worker', LANG: 'C' },
       },
     },
   })
@@ -1310,7 +1310,7 @@ test('profiles runtime nodeId/workspace/env: valid round-trip persists; malforme
     agent: 'pi',
     nodeId: 'ops-box',
     workspace: '/srv/ops',
-    env: { HELM_ENV_ROLE: 'worker', LANG: 'C' },
+    env: { HELMX_ENV_ROLE: 'worker', LANG: 'C' },
   })
 
   const cases: Array<{ runtime: unknown; why: string }> = [
@@ -1821,7 +1821,7 @@ test('real actions: invocation 200; raw null return is not wrapped into {ok:true
   await pluginHost.register({
     id: 'builtin:nullish',
     name: 'nullish',
-    async definePlugin(ctx: HelmPluginContext) {
+    async definePlugin(ctx: HelmxPluginContext) {
       ctx.action({
         id: 'get-null',
         description: 'returns null',
@@ -1882,7 +1882,7 @@ test('error.details also redacted', { timeout: 60_000 }, async () => {
   const secret = 'err-detail-secret-123'
   stash.put(ROOT_CONVERSATION_ID, 'ERR_KEY', secret)
   ;(kernel as { search: (q: string) => Promise<unknown[]> }).search = async () => {
-    throw new HelmError('search_failed', 'search failed', 500, { trace: secret })
+    throw new HelmxError('search_failed', 'search failed', 500, { trace: secret })
   }
   const handler = createHubHandler(kernel)
   const res = await call(handler, 'GET', '/api/search?q=x')

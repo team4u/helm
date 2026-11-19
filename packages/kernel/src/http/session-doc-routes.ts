@@ -1,13 +1,13 @@
 /**
  * Multiplexed session-doc SSE domain routing: `GET /api/session-docs/events?sub=<pluginId>/<name>/<conversationId>&...`.
  *
- * Strictly validates every `?sub=` tuple via `@helm/protocol`'s `parseSessionDocSubParam`,
+ * Strictly validates every `?sub=` tuple via `@helmx/protocol`'s `parseSessionDocSubParam`,
  * rejects empty/malformed/duplicate/over-limit subscriptions with `400 validation_error`,
  * checks plugin/session-doc service availability (`501 not_implemented` when missing),
  * and delegates to `kernel.sessionDocEvents.multiplexResponse(...)` without modifying `plugin-routes.ts`.
  */
-import { HelmError, parseSessionDocSubParam } from '@helm/protocol'
-import type { PublicPluginSessionDoc, SessionDocSubscription } from '@helm/protocol'
+import { HelmxError, parseSessionDocSubParam } from '@helmx/protocol'
+import type { PublicPluginSessionDoc, SessionDocSubscription } from '@helmx/protocol'
 import type { KernelRuntimeLike } from './contracts.js'
 import { errorResponse, type JsonRedactor } from './http-utils.js'
 import type { RouteContext } from './route-context.js'
@@ -50,7 +50,7 @@ export async function handleSessionDocsDomain(
   }
 
   if (kernel.plugins === undefined || typeof kernel.plugins.getPublicSessionDoc !== 'function') {
-    throw new HelmError(
+    throw new HelmxError(
       'not_implemented',
       'current runtime does not provide plugin session document service',
       501,
@@ -58,7 +58,7 @@ export async function handleSessionDocsDomain(
   }
   const port = kernel.sessionDocEvents
   if (port === undefined || typeof port.multiplexResponse !== 'function') {
-    throw new HelmError(
+    throw new HelmxError(
       'not_implemented',
       'current runtime does not provide multiplexed conversation document event stream',
       501,
@@ -79,7 +79,7 @@ function snapshotDocOf(
 ): PublicPluginSessionDoc {
   const result = kernel.plugins.getPublicSessionDoc(sub.pluginId, sub.name, sub.conversationId)
   if (result instanceof Promise) {
-    throw new HelmError(
+    throw new HelmxError(
       'not_implemented',
       'current runtime getPublicSessionDoc is async; cannot provide sync conversation document snapshot',
       501,

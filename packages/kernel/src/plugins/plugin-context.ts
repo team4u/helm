@@ -1,8 +1,8 @@
 /**
- * Builds the `HelmPluginContext` passed to `definePlugin` (hook, action, tool, route, doc, sessionDoc, service, provider, ui, and host).
+ * Builds the `HelmxPluginContext` passed to `definePlugin` (hook, action, tool, route, doc, sessionDoc, service, provider, ui, and host).
  */
 import {
-  HelmError,
+  HelmxError,
   parseNonEmptyLocalizedText,
   type ActionManifest,
   type ArtifactPreviewerSpec,
@@ -10,7 +10,7 @@ import {
   type ComposerCompleterSpec,
   type ComposerPillSpec,
   type ComposerWidgetSpec,
-  type HelmPluginContext,
+  type HelmxPluginContext,
   type HookHandler,
   type HookName,
   type HookOptions,
@@ -28,7 +28,7 @@ import {
   type ToolViewSpec,
   type UiActionSpec,
   type WorkbenchPanelSpec,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import type { Provider } from '@earendil-works/pi-ai';
 import type { HookPipeline } from './hooks.js';
 import type { CapabilityRegistry } from './capability-registry.js';
@@ -67,11 +67,11 @@ function assertConfigSchemaDisplayCopy(
   schema: Record<string, PluginConfigFieldSchema>,
 ): void {
   if (!schema || typeof schema !== 'object' || Array.isArray(schema)) {
-    throw new HelmError('invalid_config_schema', `plugin ${pluginId} configSchema must be object`, 400, { pluginId });
+    throw new HelmxError('invalid_config_schema', `plugin ${pluginId} configSchema must be object`, 400, { pluginId });
   }
   for (const [key, field] of Object.entries(schema)) {
     if (!field || typeof field !== 'object' || Array.isArray(field)) {
-      throw new HelmError('invalid_config_schema', `plugin ${pluginId} config field ${key} must be object`, 400, {
+      throw new HelmxError('invalid_config_schema', `plugin ${pluginId} config field ${key} must be object`, 400, {
         pluginId,
         field: key,
       });
@@ -79,7 +79,7 @@ function assertConfigSchemaDisplayCopy(
     for (const copyField of ['label', 'description'] as const) {
       const value = field[copyField];
       if (value !== undefined && parseNonEmptyLocalizedText(value) === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_config_schema',
           `Plugin ${pluginId} config field ${key} ${copyField} must be display copy (non-empty string or { en, 'zh-CN' } map with non-blank values)`,
           400,
@@ -90,7 +90,7 @@ function assertConfigSchemaDisplayCopy(
   }
 }
 
-export function createPluginContext(options: CreatePluginContextOptions): HelmPluginContext {
+export function createPluginContext(options: CreatePluginContextOptions): HelmxPluginContext {
   const {
     state,
     epoch,
@@ -110,7 +110,7 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmPl
   const assertOpen = (what: string) => {
     assertNotDisposed();
     if (epoch !== state.epoch || state.phase !== 'defining') {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_context_closed',
         `Plugin ${pluginId} definePlugin context has closed (disabled or entered a new enablement cycle); cannot ${what}`,
         409,
@@ -138,14 +138,14 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmPl
 
   const host = wrapHostApi(state, epoch, hostDeps);
 
-  const ctx: HelmPluginContext = {
+  const ctx: HelmxPluginContext = {
     pluginId,
     dataDir: state.dataDir,
     getConfig: () => (configStore ? configStore.get(pluginId) : {}) as never,
     configSchema: (schema) => {
       assertOpen('declare configSchema');
       if (state.configSchema) {
-        throw new HelmError('duplicate_config_schema', `Plugin ${pluginId} declared duplicate configSchema`, 409);
+        throw new HelmxError('duplicate_config_schema', `Plugin ${pluginId} declared duplicate configSchema`, 409);
       }
       assertConfigSchemaDisplayCopy(pluginId, schema);
       state.configSchema = schema;
@@ -190,7 +190,7 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmPl
       assertOpen(`declare service ${spec.id}`);
       assertValidId('service', spec.id);
       if (spec.liveTasks !== undefined && typeof spec.liveTasks !== 'function') {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_service_spec',
           `Plugin ${pluginId} service ${spec.id} liveTasks must be a function returning a string array`,
           400,
@@ -198,7 +198,7 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmPl
         );
       }
       if (spec.prepare !== undefined && typeof spec.prepare !== 'function') {
-        throw new HelmError(
+        throw new HelmxError(
           'invalid_service_spec',
           `Plugin ${pluginId} service ${spec.id} prepare must be a function`,
           400,
@@ -206,7 +206,7 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmPl
         );
       }
       if (state.services.some((s) => s.id === spec.id)) {
-        throw new HelmError('duplicate_service', `Plugin ${pluginId} declared duplicate service ${spec.id}`, 409);
+        throw new HelmxError('duplicate_service', `Plugin ${pluginId} declared duplicate service ${spec.id}`, 409);
       }
       state.services.push({ ...spec, pluginId, started: false, prepared: false });
     },
@@ -215,7 +215,7 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmPl
       assertOpen(`declare provider ${(provider as { id?: unknown })?.id ?? '<unknown>'}`);
       assertValidProviderShape(pluginId, provider);
       if (state.providers.some((p) => p.provider.id === provider.id)) {
-        throw new HelmError('duplicate_provider', `Plugin ${pluginId} declared duplicate provider ${provider.id}`, 409);
+        throw new HelmxError('duplicate_provider', `Plugin ${pluginId} declared duplicate provider ${provider.id}`, 409);
       }
       state.providers.push({ provider, unregister: null });
     },
@@ -281,7 +281,7 @@ export function createPluginContext(options: CreatePluginContextOptions): HelmPl
         assertOpen(`declare ui.action(${spec.target})`);
         const surface = UI_ACTION_SURFACES[spec.target];
         if (surface === undefined) {
-          throw new HelmError(
+          throw new HelmxError(
             'invalid_ui_spec',
             `Plugin ${pluginId} ui.action target is invalid (${String(spec.target)}; allowed: conversation:header | conversation:row | timeline:entry)`,
             400,

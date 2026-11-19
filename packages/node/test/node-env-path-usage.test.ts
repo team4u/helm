@@ -10,7 +10,7 @@
  *   (`/a` does not match `/ab`);
  * - Non-Linux platform injection returns explicit `not_supported` (no fabricated results);
  * - Strict input validation: unknown fields / relative paths / NUL / non-objects -> `invalid`;
- * - Managed env var stripping: `HELM_TOKEN` / `HELM_EXECUTION_SCOPE` from daemon host env
+ * - Managed env var stripping: `HELMX_TOKEN` / `HELMX_EXECUTION_SCOPE` from daemon host env
  *   never leak into child commands via either `envExec` or direct `LocalExecutionEnv.exec`,
  *   while caller-supplied values take effect per call.
  *
@@ -23,7 +23,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { mkdirSync, symlinkSync, openSync, closeSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { cleanupDir, makeTempDir } from '@helm/test-kit/node'
+import { cleanupDir, makeTempDir } from '@helmx/test-kit/node'
 import { createNodeEnvRpcServer, type NodeEnvRpcServer } from '../src/index.js'
 import { LocalExecutionEnv } from '../src/daemon/local-env.js'
 
@@ -31,7 +31,7 @@ let rootDir: string
 let server: NodeEnvRpcServer
 
 before(async () => {
-  rootDir = await makeTempDir('helm-node-pathusage-')
+  rootDir = await makeTempDir('helmx-node-pathusage-')
   server = createNodeEnvRpcServer({ defaultCwd: rootDir })
 })
 
@@ -187,19 +187,19 @@ describe('envPathUsage: fixture procRoot and boundaries', { timeout: 60_000 }, (
   })
 })
 
-describe('managed env var stripping (HELM_TOKEN / HELM_EXECUTION_SCOPE)', { timeout: 60_000 }, () => {
+describe('managed env var stripping (HELMX_TOKEN / HELMX_EXECUTION_SCOPE)', { timeout: 60_000 }, () => {
   /** Probe child process env using Node itself (shell-independent, cross-platform). */
   const probeEnvCommand = (): string[] => [
     process.execPath,
     '-e',
-    "console.log(JSON.stringify({t: process.env.HELM_TOKEN ?? '', s: process.env.HELM_EXECUTION_SCOPE ?? ''}))",
+    "console.log(JSON.stringify({t: process.env.HELMX_TOKEN ?? '', s: process.env.HELMX_EXECUTION_SCOPE ?? ''}))",
   ]
 
   it('envExec strips daemon host managed env vars while applying explicit caller injections', { timeout: 60_000 }, async () => {
-    const prevToken = process.env.HELM_TOKEN
-    const prevScope = process.env.HELM_EXECUTION_SCOPE
-    process.env.HELM_TOKEN = 'daemon-own-secret'
-    process.env.HELM_EXECUTION_SCOPE = 'stale-daemon-scope'
+    const prevToken = process.env.HELMX_TOKEN
+    const prevScope = process.env.HELMX_EXECUTION_SCOPE
+    process.env.HELMX_TOKEN = 'daemon-own-secret'
+    process.env.HELMX_EXECUTION_SCOPE = 'stale-daemon-scope'
     const chunks: string[] = []
     const echoServer = createNodeEnvRpcServer({
       defaultCwd: rootDir,
@@ -212,8 +212,8 @@ describe('managed env var stripping (HELM_TOKEN / HELM_EXECUTION_SCOPE)', { time
       })
       assert.equal(r.ok, true, r.ok ? '' : r.error.message)
       const parsed = JSON.parse(chunks.join('').trim()) as { t?: string; s?: string }
-      assert.equal(parsed.t, '', `HELM_TOKEN must not be inherited (got ${parsed.t})`)
-      assert.equal(parsed.s, '', `HELM_EXECUTION_SCOPE must not be inherited (got ${parsed.s})`)
+      assert.equal(parsed.t, '', `HELMX_TOKEN must not be inherited (got ${parsed.t})`)
+      assert.equal(parsed.s, '', `HELMX_EXECUTION_SCOPE must not be inherited (got ${parsed.s})`)
 
       // Caller-supplied explicit overrides (synthesized per call by Hub) apply per call.
       const chunks2: string[] = []
@@ -225,7 +225,7 @@ describe('managed env var stripping (HELM_TOKEN / HELM_EXECUTION_SCOPE)', { time
         const r2 = await echoServer2.envExec({
           execId: 'strip-2',
           command: probeEnvCommand(),
-          env: { HELM_EXECUTION_SCOPE: 'worktree:node-x:/wt' },
+          env: { HELMX_EXECUTION_SCOPE: 'worktree:node-x:/wt' },
         })
         assert.equal(r2.ok, true)
         const parsed2 = JSON.parse(chunks2.join('').trim()) as { s?: string }
@@ -235,18 +235,18 @@ describe('managed env var stripping (HELM_TOKEN / HELM_EXECUTION_SCOPE)', { time
       }
     } finally {
       await echoServer.dispose().catch(() => undefined)
-      if (prevToken === undefined) delete process.env.HELM_TOKEN
-      else process.env.HELM_TOKEN = prevToken
-      if (prevScope === undefined) delete process.env.HELM_EXECUTION_SCOPE
-      else process.env.HELM_EXECUTION_SCOPE = prevScope
+      if (prevToken === undefined) delete process.env.HELMX_TOKEN
+      else process.env.HELMX_TOKEN = prevToken
+      if (prevScope === undefined) delete process.env.HELMX_EXECUTION_SCOPE
+      else process.env.HELMX_EXECUTION_SCOPE = prevScope
     }
   })
 
   it('direct LocalExecutionEnv.exec (inheritEnv enabled by default) also strips managed vars from baseline', { timeout: 60_000 }, async () => {
-    const prevToken = process.env.HELM_TOKEN
-    const prevScope = process.env.HELM_EXECUTION_SCOPE
-    process.env.HELM_TOKEN = 'daemon-own-secret'
-    process.env.HELM_EXECUTION_SCOPE = 'stale-daemon-scope'
+    const prevToken = process.env.HELMX_TOKEN
+    const prevScope = process.env.HELMX_EXECUTION_SCOPE
+    process.env.HELMX_TOKEN = 'daemon-own-secret'
+    process.env.HELMX_EXECUTION_SCOPE = 'stale-daemon-scope'
     const env = new LocalExecutionEnv({ cwd: rootDir })
     let out = ''
     try {
@@ -256,13 +256,13 @@ describe('managed env var stripping (HELM_TOKEN / HELM_EXECUTION_SCOPE)', { time
       )
       assert.equal(r.ok, true, r.ok ? '' : r.error.message)
       const parsed = JSON.parse(out.trim()) as { t?: string; s?: string }
-      assert.equal(parsed.t, '', `HELM_TOKEN must not be inherited (got ${parsed.t})`)
-      assert.equal(parsed.s, '', `HELM_EXECUTION_SCOPE must not be inherited (got ${parsed.s})`)
+      assert.equal(parsed.t, '', `HELMX_TOKEN must not be inherited (got ${parsed.t})`)
+      assert.equal(parsed.s, '', `HELMX_EXECUTION_SCOPE must not be inherited (got ${parsed.s})`)
     } finally {
-      if (prevToken === undefined) delete process.env.HELM_TOKEN
-      else process.env.HELM_TOKEN = prevToken
-      if (prevScope === undefined) delete process.env.HELM_EXECUTION_SCOPE
-      else process.env.HELM_EXECUTION_SCOPE = prevScope
+      if (prevToken === undefined) delete process.env.HELMX_TOKEN
+      else process.env.HELMX_TOKEN = prevToken
+      if (prevScope === undefined) delete process.env.HELMX_EXECUTION_SCOPE
+      else process.env.HELMX_EXECUTION_SCOPE = prevScope
     }
   })
 })

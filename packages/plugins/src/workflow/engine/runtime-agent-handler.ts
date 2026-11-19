@@ -13,7 +13,7 @@
  */
 
 import { extractWorkflowExecutionMeta } from '../../contracts.js'
-import type { AgentExecutionInfo } from '@helm/protocol'
+import type { AgentExecutionInfo } from '@helmx/protocol'
 import type { WorkflowEntry } from './progress.js'
 import type { JournalReplay } from './replay.js'
 import type { AgentCallPayload, CompletedChild, WorkflowHost, WorkflowSpawnRequest, WorkflowSpawnResult } from './runtime-types.js'
@@ -108,7 +108,7 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
       currentReattach !== undefined
         ? currentReattach.requestId
         : ctx.runId !== undefined
-          ? `helm:spawn:${ctx.runId}:${scope.scopePath}:${scope.scopeCallIndex}:${attempt}`
+          ? `helmx:spawn:${ctx.runId}:${scope.scopePath}:${scope.scopeCallIndex}:${attempt}`
           : undefined
     let pendingStartedWrite: Promise<void> | undefined
 

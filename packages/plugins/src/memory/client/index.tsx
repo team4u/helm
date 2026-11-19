@@ -15,8 +15,8 @@
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ProfileDetailSlotProps } from '@helm/protocol'
-import { Switch, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
+import type { ProfileDetailSlotProps } from '@helmx/protocol'
+import { Switch, usePluginContext, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
 
 import { Loader2, Save } from 'lucide-react'
 import {

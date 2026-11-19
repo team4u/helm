@@ -1,6 +1,6 @@
 /**
  * Windows config.json rename EPERM protection and AuthService zero-read cache regression tests:
- * 1. atomicWriteFile / copyFilePrivate (delegating to the shared `@helm/env-io` primitive) perform bounded
+ * 1. atomicWriteFile / copyFilePrivate (delegating to the shared `@helmx/env-io` primitive) perform bounded
  *    backoff retries on transient EPERM/EACCES/EBUSY on every platform (merged unified semantics); when
  *    exhausted, they preserve the original errno code, attach retry count diagnostics, clean tmp files,
  *    and keep the old target intact; non-retryable codes fail immediately without retries.
@@ -13,7 +13,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import fsp from 'node:fs/promises'
 import { join } from 'node:path'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHubHandler, type EventHub, type KernelRuntimeLike } from '../src/http/index.js'
 import { PluginHost } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
@@ -25,7 +25,7 @@ import {
   atomicWriteJson,
   copyFilePrivate,
 } from '../src/services/index.js'
-import { HelmPluginConfigStore } from '../src/runtime/plugin-config-store.js'
+import { HelmxPluginConfigStore } from '../src/runtime/plugin-config-store.js'
 import { MemoryDocStore, cleanupDir, makeTempDir } from './helpers.js'
 
 function errnoError(code: string, message = `simulated system error (${code})`): NodeJS.ErrnoException {
@@ -64,7 +64,7 @@ test('atomicWriteJson backs off on transient EPERM/EACCES/EBUSY and commits clea
     return realRename(...args)
   })
   try {
-    await withTempDir('helm-atomic-retry-', async (dir) => {
+    await withTempDir('helmx-atomic-retry-', async (dir) => {
       const target = join(dir, 'config.json')
       await fsp.writeFile(target, JSON.stringify({ keep: 1 }), 'utf8')
       await atomicWriteJson(target, { keep: 1, updated: true })
@@ -85,7 +85,7 @@ test('atomicWriteFile and copyFilePrivate bounded exhaustion on persistent EPERM
   })
   const startedAt = Date.now()
   try {
-    await withTempDir('helm-atomic-exhaust-', async (dir) => {
+    await withTempDir('helmx-atomic-exhaust-', async (dir) => {
       const target = join(dir, 'config.json')
       await fsp.writeFile(target, '{"stable":true}\n', 'utf8')
       await assert.rejects(
@@ -132,7 +132,7 @@ test('POSIX persistent EPERM (unified all-platform retry) still fails honestly a
   })
   const startedAt = Date.now()
   try {
-    await withTempDir('helm-atomic-posix-', async (dir) => {
+    await withTempDir('helmx-atomic-posix-', async (dir) => {
       const target = join(dir, 'config.json')
       await assert.rejects(
         atomicWriteFile(target, 'abc'),
@@ -185,7 +185,7 @@ test('ConfigService.get and update share file lock without re-entrant deadlock, 
   })
 
   try {
-    await withTempDir('helm-config-rw-lock-', async (dir) => {
+    await withTempDir('helmx-config-rw-lock-', async (dir) => {
       const cfg = new ConfigService(dir)
       const cfgOther = new ConfigService(dir)
       const writePromise = cfg.update({ step: 1 })
@@ -205,7 +205,7 @@ test('ConfigService.get and update share file lock without re-entrant deadlock, 
 })
 
 test('AuthService in-process snapshot: steady-state zero readFile, cross-instance & symlink sync, invalidateCache works, corrupt not cached', { timeout: 60_000 }, async (t) => {
-  await withTempDir('helm-auth-cache-', async (root) => {
+  await withTempDir('helmx-auth-cache-', async (root) => {
     const dataDir = join(root, 'data')
     const linkDir = join(root, 'data-link')
     await fsp.mkdir(dataDir, { recursive: true })
@@ -275,7 +275,7 @@ test('AuthService in-process snapshot: steady-state zero readFile, cross-instanc
 })
 
 test('AuthService cold-read vs concurrent setup race (prevent ABA stale backfill): cache never preserves stale unconfigured state', { timeout: 60_000 }, async (t) => {
-  await withTempDir('helm-auth-aba-', async (dir) => {
+  await withTempDir('helmx-auth-aba-', async (dir) => {
     const auth = new AuthService(dir)
     const realReadFile = fsp.readFile.bind(fsp)
     let injectedSetup = false
@@ -328,12 +328,12 @@ test('Windows handle contention simulation: high-frequency verifyToken/status co
   })
 
   try {
-    await withTempDir('helm-concurrent-win-', async (dir) => {
+    await withTempDir('helmx-concurrent-win-', async (dir) => {
       const auth = new AuthService(dir)
       const { token } = await auth.setup('win-concurrent-pw-123')
       const cfg = new ConfigService(dir)
       const cred = new CredentialService(dir)
-      const store = new HelmPluginConfigStore({ config: cfg, credentials: cred })
+      const store = new HelmxPluginConfigStore({ config: cfg, credentials: cred })
       await store.load()
 
       const toggles = Array.from({ length: 15 }, (_, i) =>
@@ -394,12 +394,12 @@ test('HTTP E2E reproduction: under Windows handle contention, concurrent GET /ap
   })
 
   try {
-    await withTempDir('helm-http-win-toggle-', async (dir) => {
+    await withTempDir('helmx-http-win-toggle-', async (dir) => {
       const auth = new AuthService(dir)
       const { token } = await auth.setup('http-e2e-password-123')
       const cfg = new ConfigService(dir)
       const cred = new CredentialService(dir)
-      const configStore = new HelmPluginConfigStore({ config: cfg, credentials: cred })
+      const configStore = new HelmxPluginConfigStore({ config: cfg, credentials: cred })
       await configStore.load()
 
       const fixture = createPluginHostBackendFixture()

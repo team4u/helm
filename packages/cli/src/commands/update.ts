@@ -1,5 +1,5 @@
 import path from 'node:path'
-import { isStrictSemver } from '@helm/protocol'
+import { isStrictSemver } from '@helmx/protocol'
 import { flagValue, parseFlags, type FlagSpec } from '../args.js'
 import { CliError } from '../errors.js'
 import { assertNoExtraPositionals, parsePositiveInt, type CommandSpec } from './shared.js'
@@ -35,7 +35,7 @@ const allowedOptions = {
 
 export const updateCommand: CommandSpec = {
   path: ['update'],
-  description: 'Install or update the local Helm Hub (works while the Hub is stopped)',
+  description: 'Install or update the local Helmx Hub (works while the Hub is stopped)',
   flags,
   async run(ctx) {
     const parsed = parseFlags(flags, ctx.args)

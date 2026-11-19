@@ -8,7 +8,7 @@ import {
   resolveEffectiveProfileModel,
   summarizeProfileActivity,
 } from './profile-center-model.js'
-import { HelmIcon, StatusLight } from '@helm/plugin-client'
+import { HelmxIcon, StatusLight } from '@helmx/plugin-client'
 import {
   useOptionalConversations,
   useOptionalPlugins,
@@ -126,7 +126,7 @@ export function ProfileCard({
             </span>
             {isSystem && (
               <span className="primary-card-pill mono" title={t('profiles.card.systemPillTitle')}>
-                <HelmIcon name="lock" size={10} />
+                <HelmxIcon name="lock" size={10} />
                 <span>{t('profiles.card.systemPill')}</span>
               </span>
             )}
@@ -149,14 +149,14 @@ export function ProfileCard({
           className="flex-row primary-card-location text-subtle mono"
           title={t('profiles.card.locationTitle', { location: locationText })}
         >
-          <HelmIcon name={location.isRemoteNode ? 'server' : 'laptop'} size={11} />
+          <HelmxIcon name={location.isRemoteNode ? 'server' : 'laptop'} size={11} />
           <span className="break-word">{locationText}</span>
         </div>
 
         <div className="primary-card-pills">
           {shortModelName ? (
             <span className="primary-card-pill mono" title={modelTitle}>
-              <HelmIcon name="cpu" size={10} />
+              <HelmxIcon name="cpu" size={10} />
               <span className="primary-card-pill-label">{shortModelName}</span>
               {effectiveModel.thinkingLevel && (
                 <span className="primary-card-pill-suffix">· {effectiveModel.thinkingLevel}</span>
@@ -164,7 +164,7 @@ export function ProfileCard({
             </span>
           ) : (
             <span className="primary-card-pill" title={modelTitle}>
-              <HelmIcon name="cpu" size={10} />
+              <HelmxIcon name="cpu" size={10} />
               <span className="primary-card-pill-label">{t('profiles.card.followGlobalDefault')}</span>
             </span>
           )}
@@ -177,12 +177,12 @@ export function ProfileCard({
             </span>
           )}
           <span className="primary-card-pill" title={t('profiles.card.skillsTitle', { label: skillsLabel })}>
-            <HelmIcon name="wrench" size={10} />
+            <HelmxIcon name="wrench" size={10} />
             <span className="primary-card-pill-label">{skillsLabel}</span>
           </span>
           {isHerdr && (
             <span className="primary-card-pill" title={t('profiles.card.herdrRuntimeTitle')}>
-              <HelmIcon name="terminal" size={10} />
+              <HelmxIcon name="terminal" size={10} />
               <span>Herdr</span>
             </span>
           )}
@@ -208,7 +208,7 @@ export function ProfileCard({
             onClick={handleChatClick}
             onKeyDown={(e) => e.stopPropagation()}
           >
-            <HelmIcon name="message-square" size={12} />
+            <HelmxIcon name="message-square" size={12} />
             <span>{t('profiles.card.conversationAction')}</span>
           </button>
         )}

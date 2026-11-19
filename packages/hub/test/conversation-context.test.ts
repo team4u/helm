@@ -1,5 +1,5 @@
 /**
- * 会话上下文、跨平台 cwd 收口与多模态附件端到端集成测试（共享单实例 createHelm + startHub）：
+ * 会话上下文、跨平台 cwd 收口与多模态附件端到端集成测试（共享单实例 createHelmx + startHub）：
  * - 上下文操作：reset（handoff / 空重置 / 404）、compact（taskId / 404）、fork（继承链 / 标题 / 404 / 400）、
  *   withdraw（排队撤回 / 二次 settled / 404）及对应 HTTP 路由契约（含 replaceFromEntryId HTTP 透传）；
  * - cwd 平台收口：create / update 按目标节点可信平台（NodeRegistry WS 注册 win32 / 未知平台 / 本机）确定性归一与拒绝；
@@ -9,11 +9,11 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { fauxAssistantMessage, type FauxResponseStep } from '@earendil-works/pi-ai/providers/faux'
 import type { Harness } from '@earendil-works/pi-durable'
 import {
-  HelmError,
+  HelmxError,
   type NodeRegisterInput,
   type NodeRegisterResult,
   type PluginDefinition,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { createBirpc } from 'birpc'
 import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
@@ -79,7 +79,7 @@ async function registerFakeNode(
 
 before(async () => {
   env = await openHubHttpEnv({
-    prefix: 'helm-conv-ctx-',
+    prefix: 'helmx-conv-ctx-',
     swallowCloseError: true,
     hubPlatform: () => 'linux',
   })
@@ -159,7 +159,7 @@ test('reset：清空上下文、handoff 进入新上下文、seq 推进并广播
   assert.equal((await env.kernel.resetConversation(emptyConv.id)).id, emptyConv.id)
   await assert.rejects(
     env.kernel.resetConversation(999999),
-    (err: unknown) => err instanceof HelmError && err.status === 404 && err.code === 'not_found',
+    (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
   )
 })
 
@@ -178,7 +178,7 @@ test('compact：返回后台任务 ID 并进入 SDK 调度；未知会话 404', 
 
   await assert.rejects(
     env.kernel.compactConversation(424242),
-    (err: unknown) => err instanceof HelmError && err.status === 404,
+    (err: unknown) => err instanceof HelmxError && err.status === 404,
   )
 })
 
@@ -215,12 +215,12 @@ test('fork：从既有条目或省略 entryId 干净锚点分叉（继承父链/
   const emptyConv = await env.kernel.createConversation({ title: 'empty source' })
   await assert.rejects(
     env.kernel.forkConversation(emptyConv.id),
-    (err: unknown) => err instanceof HelmError && err.status === 409 && err.code === 'fork_empty_history',
+    (err: unknown) => err instanceof HelmxError && err.status === 409 && err.code === 'fork_empty_history',
   )
   await assert.rejects(
     env.kernel.forkConversation(emptyConv.id, { entryId: 99999 }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError && err.status === 404 && err.code === 'not_found')
+      assert.ok(err instanceof HelmxError && err.status === 404 && err.code === 'not_found')
       const details = err.details as { conversationId: number; entryId: number }
       assert.equal(details.conversationId, emptyConv.id)
       assert.equal(details.entryId, 99999)
@@ -229,15 +229,15 @@ test('fork：从既有条目或省略 entryId 干净锚点分叉（继承父链/
   )
   await assert.rejects(
     env.kernel.forkConversation(emptyConv.id, { entryId: -1 }),
-    (err: unknown) => err instanceof HelmError && err.status === 400 && err.code === 'validation_error',
+    (err: unknown) => err instanceof HelmxError && err.status === 400 && err.code === 'validation_error',
   )
   await assert.rejects(
     env.kernel.forkConversation(777777, { entryId: 1 }),
-    (err: unknown) => err instanceof HelmError && err.status === 404,
+    (err: unknown) => err instanceof HelmxError && err.status === 404,
   )
   await assert.rejects(
     env.kernel.forkConversation(777777),
-    (err: unknown) => err instanceof HelmError && err.status === 404 && err.code === 'not_found',
+    (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
   )
 })
 
@@ -288,7 +288,7 @@ test('withdraw：忙碌会话排队 followUp 可撤回并从 queuedInputs 消失
     assert.equal((await env.kernel.withdrawQueuedInput(conv.id, { submissionId })).status, 'settled')
     await assert.rejects(
       env.kernel.withdrawQueuedInput(conv.id, { submissionId: 999999 }),
-      (err: unknown) => err instanceof HelmError && err.status === 404 && err.code === 'not_found',
+      (err: unknown) => err instanceof HelmxError && err.status === 404 && err.code === 'not_found',
     )
   } finally {
     releaseFirst?.()
@@ -334,7 +334,7 @@ test('HTTP 上下文路由：reset / compact / fork / replaceFromEntryId / withd
   const rwConv = await env.kernel.createConversation({ title: 'HTTP heavy' })
   await env.kernel.submitInput(rwConv.id, 'http issue')
   await env.kernel.waitForIdle(rwConv.id)
-  const rwInput = (await sdkEntrySummaries(env.kernel, rwConv.id)).find((e) => e.kind === 'helm.input' && e.text === 'http issue')!
+  const rwInput = (await sdkEntrySummaries(env.kernel, rwConv.id)).find((e) => e.kind === 'helmx.input' && e.text === 'http issue')!
   assert.equal(
     (await env.call('POST', `/api/conversations/${rwConv.id}/input`, { text: 'http override heavy', replaceFromEntryId: rwInput.id })).status,
     202,
@@ -380,19 +380,19 @@ test('cwd 收口（create）：相对路径拒绝不入库；本机归一；远�
   for (const bad of ['relative/ws', './x', 'C:relative']) {
     await assert.rejects(
       env.kernel.createConversation({ cwd: bad }),
-      (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error',
     )
   }
   assert.equal(env.kernel.listConversations().length, beforeCount)
 
-  const localConv = await env.kernel.createConversation({ cwd: '/tmp/helm/a/./b/../c' })
-  assert.equal(localConv.cwd, '/tmp/helm/a/c')
-  assert.equal(env.kernel.getConversation(localConv.id).cwd, '/tmp/helm/a/c')
+  const localConv = await env.kernel.createConversation({ cwd: '/tmp/helmx/a/./b/../c' })
+  assert.equal(localConv.cwd, '/tmp/helmx/a/c')
+  assert.equal(env.kernel.getConversation(localConv.id).cwd, '/tmp/helmx/a/c')
 
   const conn: NodeConnection | undefined = env.kernel.envFabric.registry.get('win-build')
   assert.equal(conn?.platform, 'win32')
-  const wsl = await env.kernel.createConversation({ nodeId: 'win-build', cwd: '/mnt/c/work/helm' })
-  assert.equal(wsl.cwd, 'C:\\work\\helm')
+  const wsl = await env.kernel.createConversation({ nodeId: 'win-build', cwd: '/mnt/c/work/helmx' })
+  assert.equal(wsl.cwd, 'C:\\work\\helmx')
   const drive = await env.kernel.createConversation({ nodeId: 'win-build', cwd: '/e/git/repo' })
   assert.equal(drive.cwd, 'E:\\git\\repo')
 
@@ -400,7 +400,7 @@ test('cwd 收口（create）：相对路径拒绝不入库；本机归一；远�
   for (const bad of ['/home/user', '/tmp/build']) {
     await assert.rejects(
       env.kernel.createConversation({ nodeId: 'win-build', cwd: bad }),
-      (e: unknown) => e instanceof HelmError && e.code === 'unmappable_posix_root',
+      (e: unknown) => e instanceof HelmxError && e.code === 'unmappable_posix_root',
     )
   }
   assert.equal(env.kernel.listConversations().length, countBeforeWinReject)
@@ -418,11 +418,11 @@ test('cwd 收口（update）：显式 cwd 修改、仅迁移 nodeId 与仅改标
 
   await assert.rejects(
     env.kernel.updateConversation(conv.id, { cwd: '/home/nope' }),
-    (e: unknown) => e instanceof HelmError && e.code === 'unmappable_posix_root',
+    (e: unknown) => e instanceof HelmxError && e.code === 'unmappable_posix_root',
   )
   await assert.rejects(
     env.kernel.updateConversation(conv.id, { cwd: 'relative' }),
-    (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
+    (e: unknown) => e instanceof HelmxError && e.code === 'validation_error',
   )
 
   const migrated = await env.kernel.createConversation({ cwd: '/mnt/c/keep-me' })
@@ -431,9 +431,9 @@ test('cwd 收口（update）：显式 cwd 修改、仅迁移 nodeId 与仅改标
   assert.equal(afterNodeMove.nodeId, 'win-build')
   assert.equal(afterNodeMove.cwd, 'C:\\keep-me')
 
-  const localKeep = await env.kernel.createConversation({ cwd: '/tmp/helm/keep-me' })
+  const localKeep = await env.kernel.createConversation({ cwd: '/tmp/helmx/keep-me' })
   const renamed = await env.kernel.updateConversation(localKeep.id, { title: 'change name' })
-  assert.equal(renamed.cwd, '/tmp/helm/keep-me')
+  assert.equal(renamed.cwd, '/tmp/helmx/keep-me')
 })
 
 // ---------------------------------------------------------------------------
@@ -461,7 +461,7 @@ test('附件授权：本会话与父会话允许挂载、跨会话越权 403、�
   await assert.rejects(
     env.kernel.resolveAuthorizedAttachments(child.id, [otherId]),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError && err.code === 'artifact_forbidden' && err.status === 403)
+      assert.ok(err instanceof HelmxError && err.code === 'artifact_forbidden' && err.status === 403)
       const details = err.details as { conversationId: number; artifactConversationId: number }
       assert.equal(details.conversationId, child.id)
       assert.equal(details.artifactConversationId, other.id)
@@ -470,7 +470,7 @@ test('附件授权：本会话与父会话允许挂载、跨会话越权 403、�
   )
   await assert.rejects(
     env.kernel.resolveAuthorizedAttachments(child.id, ['no-such-artifact-id']),
-    (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
+    (err: unknown) => err instanceof HelmxError && err.code === 'not_found' && err.status === 404,
   )
   assert.equal((await env.kernel.resolveAuthorizedAttachments(child.id, [ownId, ownId])).length, 1)
 })
@@ -493,9 +493,9 @@ test('submitInput 附件：纯文本清单与 SQLite 零 base64 膨胀；图片�
   const txtContent = captured.at(-1)
   assert.equal(typeof txtContent, 'string')
   assert.ok((txtContent as string).includes('[Attached Files]'))
-  assert.ok((txtContent as string).includes(`helm artifacts get ${txtArtId} --output ./notes.md`))
+  assert.ok((txtContent as string).includes(`helmx artifacts get ${txtArtId} --output ./notes.md`))
 
-  const inputEntry = (await env.kernel.getConversationDetail(txtConv.id)).entries.find((e) => e.kind === 'helm.input')!
+  const inputEntry = (await env.kernel.getConversationDetail(txtConv.id)).entries.find((e) => e.kind === 'helmx.input')!
   const attData = (inputEntry.data as { attachments?: Array<Record<string, unknown>> }).attachments!
   assert.deepEqual(Object.keys(attData[0]!).sort(), ['id', 'mimeType', 'name', 'size'])
   const rawEntry = JSON.stringify(inputEntry)
@@ -521,7 +521,7 @@ test('submitInput 附件：纯文本清单与 SQLite 零 base64 膨胀；图片�
   const otherConv = await env.kernel.createConversation({ title: 'B' })
   await assert.rejects(
     env.kernel.submitInput(otherConv.id, 'exceeds right mount', { attachments: [txtArtId] }),
-    (err: unknown) => err instanceof HelmError && err.code === 'artifact_forbidden' && err.status === 403,
+    (err: unknown) => err instanceof HelmxError && err.code === 'artifact_forbidden' && err.status === 403,
   )
 
   const evil: PluginDefinition = {
@@ -547,7 +547,7 @@ test('submitInput 附件：纯文本清单与 SQLite 零 base64 膨胀；图片�
   try {
     await assert.rejects(
       env.kernel.submitInput(otherConv.id, 'trigger change write'),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found' && err.status === 404,
     )
   } finally {
     await env.kernel.plugins.disable('test:transform-attachments')
@@ -562,7 +562,7 @@ test('spawnAgent 附件：前置授权拒绝不建子会话；合法派生注入
   const beforeCount = env.kernel.listConversations().length
   await assert.rejects(
     env.kernel.spawnAgent({ parentConversationId: parent.id, prompt: 'exceeds right task', attachments: [otherArt] }),
-    (err: unknown) => err instanceof HelmError && err.code === 'artifact_forbidden' && err.status === 403,
+    (err: unknown) => err instanceof HelmxError && err.code === 'artifact_forbidden' && err.status === 403,
   )
   assert.equal(env.kernel.listConversations().length, beforeCount)
 

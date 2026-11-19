@@ -26,7 +26,7 @@ import {
   writeSync,
 } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type {
   SavedWorkflowDetail,
   SavedWorkflowSummary,
@@ -47,7 +47,7 @@ export function fileStatsOf(path: string): { updatedAt: number; size: number } {
     return { updatedAt: Math.trunc(stats.mtimeMs), size: stats.size }
   } catch (error) {
     const err = error as NodeJS.ErrnoException
-    throw new HelmError('io_error', `cannot read file facts ${path}: ${err.message}`, 500, {
+    throw new HelmxError('io_error', `cannot read file facts ${path}: ${err.message}`, 500, {
       path,
       code: err.code,
     })
@@ -113,7 +113,7 @@ export class WorkflowLibrary {
       const err = error as NodeJS.ErrnoException
       // Directory not yet present: an empty list is the fact, not a degradation.
       if (err.code === 'ENOENT') return []
-      throw new HelmError('io_error', `cannot read the workflows directory ${dir}: ${err.message}`, 500, {
+      throw new HelmxError('io_error', `cannot read the workflows directory ${dir}: ${err.message}`, 500, {
         path: dir,
         code: err.code,
       })
@@ -131,7 +131,7 @@ export class WorkflowLibrary {
         const err = error as NodeJS.ErrnoException
         // The list is a best-effort directory view: a single unreadable file is skipped but not concealed.
         if (err.code === 'ENOENT') continue
-        throw new HelmError('io_error', `cannot read workflow script ${path}: ${err.message}`, 500, {
+        throw new HelmxError('io_error', `cannot read workflow script ${path}: ${err.message}`, 500, {
           path,
           code: err.code,
         })
@@ -165,7 +165,7 @@ export class WorkflowLibrary {
   save(request: WorkflowSaveRequest): WorkflowSaveResult {
     const sources = [request.script, request.fromRunId].filter((v) => v !== undefined)
     if (sources.length !== 1) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         'save requires exactly one of script or fromRunId',
         400,
@@ -179,7 +179,7 @@ export class WorkflowLibrary {
     } else {
       const record = this.loadRunRecord(request.fromRunId!)
       if (record.kind === 'subagent') {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `run ${request.fromRunId} is a background subagent with no workflow script to save`,
           400,
@@ -191,7 +191,7 @@ export class WorkflowLibrary {
       } else if (record.scriptPath !== undefined) {
         script = this.readScriptFile(record.scriptPath)
       } else {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `run ${request.fromRunId} persisted no script source (no inline script or scriptPath); cannot save`,
           400,
@@ -205,12 +205,12 @@ export class WorkflowLibrary {
       meta = precheckScriptSyntax(script).meta
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      throw new HelmError('workflow_script_invalid', `workflow script validation failed: ${message}`, 400)
+      throw new HelmxError('workflow_script_invalid', `workflow script validation failed: ${message}`, 400)
     }
 
     const name = request.name ?? meta.name
     if (!SAFE_NAME.test(name)) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `workflow name "${name}" is invalid: must match ${SAFE_NAME.source} (path-traversal guard)`,
         400,
@@ -218,7 +218,7 @@ export class WorkflowLibrary {
       )
     }
     if (request.name !== undefined && request.name !== meta.name) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `save name ${request.name} disagrees with the script's meta.name "${meta.name}"; unify the names first`,
         400,
@@ -231,7 +231,7 @@ export class WorkflowLibrary {
     const target = join(dir, `${name}.js`)
     const existing = this.savedEntryStats(name, target)
     if (existing !== undefined && request.overwrite !== true) {
-      throw new HelmError(
+      throw new HelmxError(
         'workflow_already_exists',
         `a workflow named ${name} already exists (${target}); overwrite: true is required to overwrite`,
         409,
@@ -256,7 +256,7 @@ export class WorkflowLibrary {
         } catch (error) {
           const err = error as NodeJS.ErrnoException
           if (err.code === 'EEXIST') {
-            throw new HelmError(
+            throw new HelmxError(
               'workflow_already_exists',
               `a workflow named ${name} already exists (a concurrent write created it first); overwrite: true is required to overwrite`,
               409,
@@ -276,9 +276,9 @@ export class WorkflowLibrary {
       } catch {
         // already consumed by rename/link, or never existed
       }
-      if (error instanceof HelmError) throw error
+      if (error instanceof HelmxError) throw error
       const err = error as NodeJS.ErrnoException
-      throw new HelmError('io_error', `failed to write workflow definition ${target}: ${err.message}`, 500, {
+      throw new HelmxError('io_error', `failed to write workflow definition ${target}: ${err.message}`, 500, {
         path: target,
         code: err.code,
       })
@@ -295,7 +295,7 @@ export class WorkflowLibrary {
   /** Delete a saved workflow definition file (historical run records unaffected; explicit 404 when absent). */
   delete(name: string): WorkflowDeleteResult {
     if (!SAFE_NAME.test(name)) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `workflow name "${name}" is invalid: must match ${SAFE_NAME.source} (path-traversal guard)`,
         400,
@@ -310,9 +310,9 @@ export class WorkflowLibrary {
     } catch (error) {
       const err = error as NodeJS.ErrnoException
       if (err.code === 'ENOENT') {
-        throw new HelmError('not_found', `workflow ${name} does not exist`, 404, { name, path: target })
+        throw new HelmxError('not_found', `workflow ${name} does not exist`, 404, { name, path: target })
       }
-      throw new HelmError('io_error', `cannot read workflow definition entry ${target}: ${err.message}`, 500, {
+      throw new HelmxError('io_error', `cannot read workflow definition entry ${target}: ${err.message}`, 500, {
         path: target,
         code: err.code,
       })
@@ -323,7 +323,7 @@ export class WorkflowLibrary {
       const real = realpathSync(target)
       const expected = join(realpathSync(dir), `${name}.js`)
       if (real !== expected) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `workflow "${name}" is a symlink pointing outside the directory (${real}); deletion refused`,
           400,
@@ -331,7 +331,7 @@ export class WorkflowLibrary {
         )
       }
     } else if (!entry.isFile()) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `workflow definition entry ${target} is not a regular file; deletion refused`,
         400,
@@ -342,7 +342,7 @@ export class WorkflowLibrary {
       unlinkSync(target)
     } catch (error) {
       const err = error as NodeJS.ErrnoException
-      throw new HelmError('io_error', `failed to delete workflow definition ${target}: ${err.message}`, 500, {
+      throw new HelmxError('io_error', `failed to delete workflow definition ${target}: ${err.message}`, 500, {
         path: target,
         code: err.code,
       })
@@ -360,7 +360,7 @@ export class WorkflowLibrary {
       const resolved = this.resolveSavedName(name)
       const stats = statSync(resolved)
       if (!stats.isFile()) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `workflow definition entry ${target} is not a regular file; cannot overwrite`,
           400,
@@ -369,10 +369,10 @@ export class WorkflowLibrary {
       }
       return { updatedAt: Math.trunc(stats.mtimeMs), size: stats.size }
     } catch (error) {
-      if (error instanceof HelmError) throw error
+      if (error instanceof HelmxError) throw error
       const err = error as NodeJS.ErrnoException
       if (err.code === 'ENOENT') return undefined
-      throw new HelmError('io_error', `cannot stat workflow definition entry ${target}: ${err.message}`, 500, {
+      throw new HelmxError('io_error', `cannot stat workflow definition entry ${target}: ${err.message}`, 500, {
         path: target,
         code: err.code,
       })
@@ -381,7 +381,7 @@ export class WorkflowLibrary {
 
   resolveSavedName(name: string): string {
     if (!SAFE_NAME.test(name)) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `workflow name "${name}" is invalid: must match ${SAFE_NAME.source} (path-traversal guard)`,
         400,
@@ -396,7 +396,7 @@ export class WorkflowLibrary {
       const real = realpathSync(target)
       const realDir = realpathSync(dir)
       if (real !== join(realDir, `${name}.js`)) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `workflow "${name}" is a symlink pointing outside the directory (${real}); refused`,
           400,
@@ -405,10 +405,10 @@ export class WorkflowLibrary {
       }
       return target
     } catch (error) {
-      if (error instanceof HelmError) throw error
+      if (error instanceof HelmxError) throw error
       const err = error as NodeJS.ErrnoException
       if (err.code === 'ENOENT') return target // absent: readScriptFile reports not_found
-      throw new HelmError('io_error', `cannot resolve workflow path ${target}: ${err.message}`, 500, {
+      throw new HelmxError('io_error', `cannot resolve workflow path ${target}: ${err.message}`, 500, {
         path: target,
         code: err.code,
       })
@@ -425,19 +425,19 @@ export class WorkflowLibrary {
     try {
       const st = statSync(path)
       if (!st.isFile()) {
-        throw new HelmError('not_found', `workflow script is not a regular file: ${path}`, 404, { path })
+        throw new HelmxError('not_found', `workflow script is not a regular file: ${path}`, 404, { path })
       }
       source = readFileSync(path, 'utf-8')
     } catch (error) {
-      if (error instanceof HelmError) throw error
+      if (error instanceof HelmxError) throw error
       const err = error as NodeJS.ErrnoException
-      throw new HelmError('not_found', `workflow script file unreadable (${err.code ?? 'unknown'}): ${path}`, 404, {
+      throw new HelmxError('not_found', `workflow script file unreadable (${err.code ?? 'unknown'}): ${path}`, 404, {
         path,
         code: err.code,
       })
     }
     if (source.length > MAX_SCRIPT_LENGTH) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `workflow script is ${source.length} chars, over the cap of ${MAX_SCRIPT_LENGTH}`,
         400,

@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { SkillSummary } from '@helm/protocol'
+import type { SkillSummary } from '@helmx/protocol'
 import {
   buildProfileSavePayload,
   createDraft,

@@ -17,10 +17,10 @@
  * `estimateMessageTokens` uses CHARS_PER_TOKEN=3.5 with different system accounting, so it cannot impersonate the same source.
  * Extracted line-by-line with provenance comments; `calculateContextTokens` and `getCurrentSystemMessage` still reuse pi-ai exports.
  *
- * Helm semantic mapping (pi branch entries -> pi-durable ContextView):
+ * Helmx semantic mapping (pi branch entries -> pi-durable ContextView):
  * - Both compaction and context edits are context invalidations: the former is a head marker (pi.compaction / pi.reset),
- *   and the latter is an entry with non-empty `edits` (e.g., helm.rewind omit/replace); anchors are trusted only when strictly newer
- *   than the max of head boundary and latest non-empty edits entry ID (generalized on entry.edits without hardcoding helm.rewind);
+ *   and the latter is an entry with non-empty `edits` (e.g., helmx.rewind omit/replace); anchors are trusted only when strictly newer
+ *   than the max of head boundary and latest non-empty edits entry ID (generalized on entry.edits without hardcoding helmx.rewind);
  * - contributions already reflect applied edits (omitted entries contribute []), so checking post-compaction valid assistants
  *   naturally inspects only messages still present in projection.
  */
@@ -28,7 +28,7 @@
 import type { ContextView } from '@earendil-works/pi-durable'
 import { getCurrentSystemMessage, type Message } from '@earendil-works/pi-ai'
 import { calculateContextTokens } from '@earendil-works/pi-ai/utils/estimate'
-import type { ConversationContextUsage } from '@helm/protocol'
+import type { ConversationContextUsage } from '@helmx/protocol'
 
 /** Valid assistant usage message shape (subset of pi getAssistantUsage predicate). */
 type MeasuredAssistant = {
@@ -64,7 +64,7 @@ function textAndImageContentChars(content: unknown): number {
 
 /**
  * Conservative message token estimate (chars/4), matching pi-agent compaction.js `estimateTokens`;
- * covers all four Message roles in Helm context (system / user / assistant / toolResult), returning 0 for unknown roles:
+ * covers all four Message roles in Helmx context (system / user / assistant / toolResult), returning 0 for unknown roles:
  * - system: content + section values + JSON-serialized toolsAdded char lengths;
  * - user / toolResult: text and image char lengths (images count as 4800);
  * - assistant: text / thinking block char lengths + toolCall name and JSON arguments char lengths.

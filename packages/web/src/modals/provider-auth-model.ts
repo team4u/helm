@@ -1,4 +1,4 @@
-import type { CredentialSummary, ModelProviderSummary, ProviderConfig } from '@helm/protocol/browser'
+import type { CredentialSummary, ModelProviderSummary, ProviderConfig } from '@helmx/protocol/browser'
 import type { ModelDescriptor } from '../lib/api.js'
 
 /** Provider list entry: passes through catalog metadata like dynamic/baseUrl verbatim; never re-attributes providers to plugins. */

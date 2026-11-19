@@ -40,11 +40,11 @@ import {
 
 const LAUNCHER_POLL_MS = 2_000;
 
-/** Parse `{ type: 'helm-node.ready', pid, instanceId, state }` over native Node stdio IPC. */
+/** Parse `{ type: 'helmx-node.ready', pid, instanceId, state }` over native Node stdio IPC. */
 function parseReadyMessage(message: unknown, instanceId: string): DaemonReadyState | null {
   if (typeof message !== 'object' || message === null) return null;
   const record = message as Record<string, unknown>;
-  if (record['type'] !== 'helm-node.ready' || record['instanceId'] !== instanceId) return null;
+  if (record['type'] !== 'helmx-node.ready' || record['instanceId'] !== instanceId) return null;
   return record['state'] === 'registered' ? 'registered' : 'starting';
 }
 
@@ -80,7 +80,7 @@ export async function defaultSpawnDaemon(options: {
   let child: ReturnType<typeof spawn>;
   try {
     const childEnv = { ...env };
-    for (const key of Object.keys(childEnv)) if (key.toUpperCase() === 'HELM_TOKEN') delete childEnv[key];
+    for (const key of Object.keys(childEnv)) if (key.toUpperCase() === 'HELMX_TOKEN') delete childEnv[key];
     child = spawn(nodePath, [...execArgv, ...args], {
       detached: true,
       stdio: ['ignore', logHandle.fd, logHandle.fd, 'ipc'],
@@ -152,7 +152,7 @@ export async function defaultSpawnDaemon(options: {
       ? `background process failed to start (spawn error): ${outcome.error.message}`
       : outcome.kind === 'exit'
         ? `background process exited immediately after startup (code=${outcome.code ?? 'null'})`
-        : `background process did not report ready (helm-node.ready) within ${readyTimeoutMs}ms`;
+        : `background process did not report ready (helmx-node.ready) within ${readyTimeoutMs}ms`;
   const tail = await readLogTail(logFile, 40);
   throw new Error(`${reason}${tail !== '' ? `\n--- ${logFile} last 40 lines ---\n${tail}` : ''}`);
 }
@@ -170,7 +170,7 @@ async function withStartLock<T>(dataDir: string, fn: () => Promise<T>): Promise<
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
       throw new Error(
-        `concurrent start conflict: ${lockPath} already exists (another helm-node start is in progress, or a previous start crashed); confirm no start is running and remove the lock file before retrying`,
+        `concurrent start conflict: ${lockPath} already exists (another helmx-node start is in progress, or a previous start crashed); confirm no start is running and remove the lock file before retrying`,
       );
     }
     throw error;
@@ -227,13 +227,13 @@ async function assertNoLiveInstance(io: NodeCliIo, dataDir: string): Promise<voi
   const response = await controlRequest(existing.endpoint, { type: 'status', instanceId: existing.instanceId });
   if (response !== null && response.ok === true) {
     throw new UsageError(
-      `daemon is already running (pid ${response.pid}, state ${response.state ?? 'unknown'}, pid file ${pidPath(dataDir)}); use helm-node restart instead`,
+      `daemon is already running (pid ${response.pid}, state ${response.state ?? 'unknown'}, pid file ${pidPath(dataDir)}); use helmx-node restart instead`,
       'already_running',
     );
   }
   if (isAlive(existing.pid)) {
     throw new UsageError(
-      `pid ${existing.pid} is alive, but control channel is unreachable (endpoint ${existing.endpoint}): cannot verify identity safely; run helm-node stop or verify the process manually and remove ${pidPath(dataDir)}`,
+      `pid ${existing.pid} is alive, but control channel is unreachable (endpoint ${existing.endpoint}): cannot verify identity safely; run helmx-node stop or verify the process manually and remove ${pidPath(dataDir)}`,
       'control_unreachable',
     );
   }
@@ -263,9 +263,9 @@ export async function startDaemon(
       env: {
         ...process.env,
         ...(io.env ?? {}),
-        HELM_NODE_INSTANCE_ID: instanceId,
-        HELM_NODE_CONTROL_ENDPOINT: endpoint,
-        ...(target.cliBinDir !== undefined ? { HELM_CLI_BIN_DIR: target.cliBinDir } : {}),
+        HELMX_NODE_INSTANCE_ID: instanceId,
+        HELMX_NODE_CONTROL_ENDPOINT: endpoint,
+        ...(target.cliBinDir !== undefined ? { HELMX_CLI_BIN_DIR: target.cliBinDir } : {}),
       },
       instanceId,
       endpoint,
@@ -300,7 +300,7 @@ async function stopTrackedInstance(io: NodeCliIo, dataDir: string, record: PidRe
   if (response === null || response.ok !== true) {
     return `failed to stop daemon (pid ${record.pid}, endpoint ${record.endpoint}): ${
       response === null ? 'control channel unreachable' : response.error ?? 'unknown'
-    }; daemon may still be running — use helm-node stop`;
+    }; daemon may still be running — use helmx-node stop`;
   }
   if (!(await waitForExit(record.pid, STOP_EXIT_TIMEOUT_MS, isAliveOf(io)))) {
     return `pid ${record.pid} did not exit within ${STOP_EXIT_TIMEOUT_MS}ms; pid file retained for diagnostics`;
@@ -320,11 +320,11 @@ export async function runForegroundLauncher(
   json: boolean,
 ): Promise<number> {
   const isAlive = isAliveOf(io);
-  const envPollMs = Number(io.env?.HELM_NODE_LAUNCHER_POLL_MS ?? '');
+  const envPollMs = Number(io.env?.HELMX_NODE_LAUNCHER_POLL_MS ?? '');
   const pollMs = Number.isFinite(envPollMs) && envPollMs > 0 ? envPollMs : (io.launcherPollMs ?? LAUNCHER_POLL_MS);
   const started = await startDaemon(io, dataDir, effectiveHub);
   if (!json) {
-    io.out(`helm-node launcher: daemon pid ${started.pid}; tracking instance (Ctrl+C to stop)\n`);
+    io.out(`helmx-node launcher: daemon pid ${started.pid}; tracking instance (Ctrl+C to stop)\n`);
   }
   let stopError: string | undefined;
   let shutdownPromise: Promise<void> | undefined;
@@ -371,7 +371,7 @@ export async function runForegroundLauncher(
         { pid: record.pid, instanceId: record.instanceId },
       ).catch(() => null);
       if (response === null || response.ok !== true) {
-        stopError = `daemon pid ${record.pid} exited and control channel could not be verified; launcher exiting (run helm-node start to restart)`;
+        stopError = `daemon pid ${record.pid} exited and control channel could not be verified; launcher exiting (run helmx-node start to restart)`;
         break;
       }
     }

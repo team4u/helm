@@ -1,6 +1,6 @@
 /**
  * 按根会话树独立结算的后台浏览器通知装配 hook：订阅全局实时状态 → 纯函数
- * 快照 → 防抖确认后经 DOM 边界投递。App 根（HelmShellInner）挂载一次。
+ * 快照 → 防抖确认后经 DOM 边界投递。App 根（HelmxShellInner）挂载一次。
  *
  * - 自洽发现所需 badge doc：复用 collectBackgroundBadgeDocs 找出启用面板的
  *   按会话角标 doc，经 store.ensurePluginDoc 按需加载（幂等去重，与侧栏共用
@@ -9,8 +9,8 @@
  *   根会话树误报「已完成」（blocked 通知不受未知门控阻滞，独立及时提醒）；
  * - 按根会话树独立结算完成通知：树 A 仍在运行不阻塞树 B 结算完成；每棵树在
  *   周期内持续累计参与会话（含被归并的派生子会话），跨被本树活动取消的防抖
- *   窗口保留；结算时无 error 报「Helm 会话已完成」，有 error 报「Helm 会话已结束」
- *   （附「有失败」），tag 为 `helm-conv-${rootId}`，点击跳转 rootId（仍存在时）；
+ *   窗口保留；结算时无 error 报「Helmx 会话已完成」，有 error 报「Helmx 会话已结束」
+ *   （附「有失败」），tag 为 `helmx-conv-${rootId}`，点击跳转 rootId（仍存在时）；
  * - 等待处理（blocked）独立立即通道：树内任意会话新进入 blocked 或水位推进
  *   （stateChangeSeq:pendingAskCount 变化），即使同树仍有后台任务或 badge doc
  *   尚未就绪，经短防抖 blockedSettleMs 确认仍处 blocked 即处理一次；挂载/开启/
@@ -22,8 +22,8 @@
  * - 权限、连接与页面非前台活跃（!isPageActive()）在触发当刻逐项现场复核。
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react'
-import type { ConversationSummary } from '@helm/protocol/browser'
-import { resolveLocalizedText, type LocaleTranslator, type LocalizedText } from '@helm/protocol/browser'
+import type { ConversationSummary } from '@helmx/protocol/browser'
+import { resolveLocalizedText, type LocaleTranslator, type LocalizedText } from '@helmx/protocol/browser'
 import {
   isPageActive,
   readBrowserNotificationPermission,
@@ -60,7 +60,7 @@ export const quietNotifyTimings = {
 }
 
 /** 按根会话树去重 tag：同树新状态互相替换不堆积，不同根会话互不覆盖。 */
-const treeNotificationTag = (rootId: number): string => `helm-conv-${rootId}`
+const treeNotificationTag = (rootId: number): string => `helmx-conv-${rootId}`
 
 // ---------------------------------------------------------------------------
 // 通知展示文案本地化（en/zh-CN）
@@ -76,9 +76,9 @@ const treeNotificationTag = (rootId: number): string => `helm-conv-${rootId}`
 
 /** 三个规范标题常量 → 双语文案（恒等匹配，杜绝误翻）。 */
 const NOTIFICATION_TITLE_COPY: ReadonlyMap<string, LocalizedText> = new Map([
-  [COMPLETED_NOTIFICATION_TITLE, { en: COMPLETED_NOTIFICATION_TITLE, 'zh-CN': 'Helm 会话已完成' }],
-  [ENDED_NOTIFICATION_TITLE, { en: ENDED_NOTIFICATION_TITLE, 'zh-CN': 'Helm 会话已结束' }],
-  [WAITING_NOTIFICATION_TITLE, { en: WAITING_NOTIFICATION_TITLE, 'zh-CN': 'Helm 等待你的处理' }],
+  [COMPLETED_NOTIFICATION_TITLE, { en: COMPLETED_NOTIFICATION_TITLE, 'zh-CN': 'Helmx 会话已完成' }],
+  [ENDED_NOTIFICATION_TITLE, { en: ENDED_NOTIFICATION_TITLE, 'zh-CN': 'Helmx 会话已结束' }],
+  [WAITING_NOTIFICATION_TITLE, { en: WAITING_NOTIFICATION_TITLE, 'zh-CN': 'Helmx 等待你的处理' }],
 ])
 
 /** blocked 正文前缀（模型固定输出，position-0 锚定）。 */

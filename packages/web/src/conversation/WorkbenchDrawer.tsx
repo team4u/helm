@@ -1,6 +1,6 @@
 import { useEffect, useId, useMemo, useState } from 'react'
-import type { ArtifactMetadata, ConversationSummary } from '@helm/protocol/browser'
-import { HelmIcon, Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Tabs, TabsList, TabsTrigger } from '@helm/plugin-client'
+import type { ArtifactMetadata, ConversationSummary } from '@helmx/protocol/browser'
+import { HelmxIcon, Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
 import {
   useConversationArtifacts,
   useConversationDetail,
@@ -58,7 +58,7 @@ function ArtifactThumb({ artifactId, filename }: { artifactId: string; filename:
   if (thumbUrl !== null) {
     return <img src={thumbUrl} alt={filename} className="artifact-card-img" loading="lazy" />
   }
-  return <HelmIcon name="file" size={16} />
+  return <HelmxIcon name="file" size={16} />
 }
 
 interface ArtifactCardProps {
@@ -92,7 +92,7 @@ function ArtifactCard({
         {!compact && isImageArtifact(artifact.mimeType) ? (
           <ArtifactThumb artifactId={artifact.id} filename={artifact.name} />
         ) : (
-          <HelmIcon name={artifactIconName(artifact.mimeType, artifact.kind)} size={compact ? 14 : 16} />
+          <HelmxIcon name={artifactIconName(artifact.mimeType, artifact.kind)} size={compact ? 14 : 16} />
         )}
       </div>
       <div className="artifact-card-main">
@@ -133,7 +133,7 @@ function ArtifactCard({
           title={t('conv.workbench.preview')}
           onClick={() => onPreview(artifact)}
         >
-          <HelmIcon name="eye" size={12} />
+          <HelmxIcon name="eye" size={12} />
           <span>{t('conv.workbench.preview')}</span>
         </button>
         <button
@@ -144,7 +144,7 @@ function ArtifactCard({
           disabled={isDownloading}
           onClick={() => onDownload(artifact)}
         >
-          <HelmIcon name={isDownloading ? 'loader' : 'download'} size={12} />
+          <HelmxIcon name={isDownloading ? 'loader' : 'download'} size={12} />
           <span>{isDownloading ? t('conv.workbench.downloading') : t('common.download')}</span>
         </button>
       </div>
@@ -223,7 +223,7 @@ function ArtifactsTab({ conversationId }: { conversationId: number }) {
             aria-controls={spillPanelId}
             onClick={() => setSpillExpanded((v) => !v)}
           >
-            <HelmIcon name={spillExpanded ? 'chevron-down' : 'chevron-right'} size={13} />
+            <HelmxIcon name={spillExpanded ? 'chevron-down' : 'chevron-right'} size={13} />
             <span className="artifact-spill-title">{t('conv.workbench.spillTitle')}</span>
             <span className="badge badge-neutral tabular-nums">{spills.length}</span>
             <span className="artifact-spill-hint">{spillExpanded ? t('common.collapse') : t('conv.workbench.clickToExpand')}</span>
@@ -288,7 +288,7 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
     <Dialog open inline={inline} onOpenChange={(open) => { if (!open) setWorkbenchOpen(false) }}>
       <DialogPortal inline={inline}>
         <DialogOverlay className="workbench-backdrop" aria-label={t('conv.workbench.close')}>
-          <DialogContent className="helm-workbench" aria-label={t('conv.workbench.drawerAria')}>
+          <DialogContent className="helmx-workbench" aria-label={t('conv.workbench.drawerAria')}>
             <DialogTitle style={{ display: 'none' }}>{t('conv.pane.workbench')}</DialogTitle>
             <Tabs
         value={activeTab}
@@ -322,7 +322,7 @@ export function WorkbenchDrawer(props: WorkbenchDrawerProps) {
                 title={t('conv.workbench.close')}
                 onClick={() => setWorkbenchOpen(false)}
               >
-                <HelmIcon name="x" size={14} />
+                <HelmxIcon name="x" size={14} />
               </button>
             </Tooltip>
           </div>

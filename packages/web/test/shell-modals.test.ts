@@ -9,7 +9,7 @@ import type {
   SidebarItemSpec,
   SidebarSectionSpec,
   SkillSummary,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { resolveTargetString } from '../src/lib/types.js'
 import {
   type AgentStanding,
@@ -46,7 +46,7 @@ import {
 } from '../src/shell/sidebar-model.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { makeTestStore as makeHostTestStore, type TestStoreOverrides } from './helpers/store.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 
 
 const e = React.createElement
@@ -75,8 +75,8 @@ function conv(partial: Partial<ConversationSummary> & { id: number }): Conversat
 
 const conversations: ConversationSummary[] = [
   conv({ id: 1, title: '个人助理', profileId: 'assistant' }),
-  conv({ id: 2, title: 'SuperAgent 中枢', profileId: 'superagent', ownedBy: 'helm' }),
-  conv({ id: 3, title: '巡检看门狗', profileId: 'watchdog', ownedBy: 'helm' }),
+  conv({ id: 2, title: 'SuperAgent 中枢', profileId: 'superagent', ownedBy: 'helmx' }),
+  conv({ id: 3, title: '巡检看门狗', profileId: 'watchdog', ownedBy: 'helmx' }),
   conv({ id: 10, title: '周末计划', profileId: 'assistant' }),
   conv({ id: 11, title: '代码审查随手记', profileId: 'assistant' }),
   conv({ id: 20, title: 'Worker: 重构内核', profileId: 'coder', tags: ['worker'], ownedBy: 'bot', status: 'working' }),
@@ -186,7 +186,7 @@ test('buildAgentStandings：人类在 assistant 下新建的对话归集到其�
   assert.equal(assistant.primaryConversation?.id, 1)
 })
 
-test('buildAgentStandings：中枢/看门狗常驻会话（ownedBy=helm）挂在各自单例站位下', { timeout: 60_000 }, () => {
+test('buildAgentStandings：中枢/看门狗常驻会话（ownedBy=helmx）挂在各自单例站位下', { timeout: 60_000 }, () => {
   const standings = buildAgentStandings(standingsInput())
   assert.deepEqual(
     standings.find((s) => s.profileId === 'superagent')!.conversations.map((c) => c.id),
@@ -221,7 +221,7 @@ test('buildAgentStandings：screen: 类型 sidebar.item 不混入 Agent 站位',
   assert.equal(standings.some((s) => s.label === 'Herdr 终端'), false)
 })
 
-test('buildAgentStandings：插件停用后其 managedByPlugin 站位与 ownedBy=helm/bot 会话自动隐藏', { timeout: 60_000 }, () => {
+test('buildAgentStandings：插件停用后其 managedByPlugin 站位与 ownedBy=helmx/bot 会话自动隐藏', { timeout: 60_000 }, () => {
   const standings = buildAgentStandings(
     standingsInput({
       plugins: [
@@ -232,7 +232,7 @@ test('buildAgentStandings：插件停用后其 managedByPlugin 站位与 ownedBy
       sidebarSections: [],
     }),
   )
-  // superagent 停用：中枢/看门狗 Profile 不可见 -> 站位消失，其 ownedBy=helm 常驻会话与
+  // superagent 停用：中枢/看门狗 Profile 不可见 -> 站位消失，其 ownedBy=helmx 常驻会话与
   // ownedBy=bot 的 Worker 会话也不泄露；assistant/coder 保留。
   assert.deepEqual(
     standings.map((s) => s.profileId),
@@ -296,7 +296,7 @@ test('buildAgentStandings：子代理派生会话（有父链）不挂 Agent 站
   const standings = buildAgentStandings(
     standingsInput({
       conversations: [
-        conv({ id: 2, title: 'SuperAgent 中枢', profileId: 'superagent', ownedBy: 'helm' }),
+        conv({ id: 2, title: 'SuperAgent 中枢', profileId: 'superagent', ownedBy: 'helmx' }),
         conv({ id: 21, profileId: 'superagent', parentConversationId: 2, tags: ['worker'], ownedBy: 'bot' }),
         conv({ id: 22, profileId: 'assistant', parentConversationId: 1 }),
       ],
@@ -312,7 +312,7 @@ test('buildAgentStandings：子代理派生会话（有父链）不挂 Agent 站
 
 test('人工归档 tags 幂等保留其他标签，恢复只移除 archived', { timeout: 60_000 }, () => {
   const tags = ['important', 'worker-note']
-  assert.equal(ARCHIVED_TAG, 'helm:archived')
+  assert.equal(ARCHIVED_TAG, 'helmx:archived')
   assert.deepEqual(archiveConversationTags(tags), [...tags, ARCHIVED_TAG])
   assert.deepEqual(archiveConversationTags([...tags, ARCHIVED_TAG]), [...tags, ARCHIVED_TAG])
   assert.deepEqual(restoreConversationTags([...tags, ARCHIVED_TAG, ARCHIVED_TAG]), tags)
@@ -615,7 +615,7 @@ test('isConversationDeletable 正确判定会话是否允许人类删除', { tim
 
   // 机器/插件托管会话禁止删除
   assert.equal(isConversationDeletable({ id: 2, ownedBy: 'bot' }), false)
-  assert.equal(isConversationDeletable({ id: 3, ownedBy: 'helm' }), false)
+  assert.equal(isConversationDeletable({ id: 3, ownedBy: 'helmx' }), false)
 
   // 普通人类会话（无 ownedBy 或 ownedBy === 'human'）允许删除
   assert.equal(isConversationDeletable({ id: 10 }), true)
@@ -625,7 +625,7 @@ test('isConversationDeletable 正确判定会话是否允许人类删除', { tim
 test('filterDeletableConversations 过滤出可删除会话', { timeout: 60_000 }, () => {
   const sample = [
     conv({ id: 1, title: '初始会话' }), // 无 id 级豁免 -> true
-    conv({ id: 2, title: '中枢', ownedBy: 'helm' }), // ownedBy: 'helm' -> false
+    conv({ id: 2, title: '中枢', ownedBy: 'helmx' }), // ownedBy: 'helmx' -> false
     conv({ id: 20, title: 'Worker', ownedBy: 'bot' }), // ownedBy: 'bot' -> false
     conv({ id: 10, title: '人类会话1' }), // true
     conv({ id: 11, title: '人类会话2', ownedBy: 'human' }), // true
@@ -922,7 +922,7 @@ test('activeProfileIdsOf / activeProfileIdOf / activeConversationIdsOf 收集主
 // ---------------------------------------------------------------------------
 
 /** 批量管理用宿主 store（真实 external store；沿用本文件历史默认数据）。 */
-function makeTestStore(partial: TestStoreOverrides = {}): HelmExternalStore {
+function makeTestStore(partial: TestStoreOverrides = {}): HelmxExternalStore {
   return makeHostTestStore({
     conversations: [
       conv({ id: 1, title: '个人助理', profileId: 'assistant' }),
@@ -956,7 +956,7 @@ test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_
       conv({ id: 10, title: '会话 10', profileId: 'assistant' }),
       conv({ id: 11, title: '会话 11', profileId: 'assistant' }),
       conv({ id: 20, title: 'Worker', profileId: 'coder', ownedBy: 'bot' }),
-      conv({ id: 21, title: '系统中枢', profileId: 'coder', ownedBy: 'helm' }),
+      conv({ id: 21, title: '系统中枢', profileId: 'coder', ownedBy: 'helmx' }),
       conv({ id: 22, title: '会话 22', profileId: 'coder' }),
     ],
     plugins: [{ id: 'builtin:profile', enabled: true }],
@@ -968,7 +968,7 @@ test('批量选择状态计算：全选、反选与单选切换', { timeout: 60_
   const allConvs = standings.flatMap((a) => a.conversations)
   const allDeletableIds = filterDeletableConversations(allConvs).map((c) => c.id)
 
-  // 应该包含 1, 10, 11, 22（初始会话无豁免；排除 bot 和 helm 拥有的会话）
+  // 应该包含 1, 10, 11, 22（初始会话无豁免；排除 bot 和 helmx 拥有的会话）
   assert.deepEqual(allDeletableIds.sort((a, b) => a - b), [1, 10, 11, 22])
 
   let selectedIds = new Set<number>()

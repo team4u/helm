@@ -5,7 +5,7 @@
  * paths with spaces + baseline resolution precedence and missing-baseline rejection), affected package
  * reverse closure and full-tier triggers, hygiene AST analysis (default/named/aliased/namespace imports,
  * multiline options, shared const options, describe timeout inheritance, skip reasons, todo exemption,
- * HELM_TEST_SUITE_TIMEOUT_MS assignment), CLI exit code propagation (including missing executables),
+ * HELMX_TEST_SUITE_TIMEOUT_MS assignment), CLI exit code propagation (including missing executables),
  * child process-tree signal forwarding without orphan processes, and PACKAGE_TIERS / test-suites.mjs
  * SUITES mirror synchronization.
  *
@@ -59,7 +59,7 @@ let cachedTemplateRepo: string | undefined
 
 function getTemplateRepo(): string {
   if (cachedTemplateRepo) return cachedTemplateRepo
-  const dir = mkdtempSync(path.join(tmpdir(), 'helm-check-changed-tpl-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'helmx-check-changed-tpl-'))
   git(dir, 'init', '-b', 'main')
   write(dir, 'base.txt', 'v1')
   write(dir, 'space dir/f.txt', 'v1')
@@ -91,7 +91,7 @@ after(() => {
 
 /** Complete fixture combining multi-commit + dirty worktree + untracked + deletions + renames + space paths (cloned from cached template repo). */
 function makeFixtureRepo(): string {
-  const dir = mkdtempSync(path.join(tmpdir(), 'helm-check-changed-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'helmx-check-changed-'))
   cpSync(getTemplateRepo(), dir, { recursive: true })
   return dir
 }
@@ -168,14 +168,14 @@ test('parseNameStatusZ: splits -z stream by NUL and expands both sides of rename
 
 /** Synthetic workspace graph mirroring the real repo topology (including transitive chains). */
 const SYNTH_PKGS = [
-  { name: '@helm/protocol', dir: 'protocol', workspaceDeps: [] },
-  { name: '@helm/kernel', dir: 'kernel', workspaceDeps: ['@helm/protocol', '@helm/node'] },
-  { name: '@helm/plugins', dir: 'plugins', workspaceDeps: ['@helm/protocol', '@helm/kernel'] },
-  { name: '@helm/hub', dir: 'hub', workspaceDeps: ['@helm/protocol', '@helm/kernel', '@helm/plugins'] },
-  { name: '@helm/node', dir: 'node', workspaceDeps: ['@helm/protocol'] },
-  { name: '@helm/cli', dir: 'cli', workspaceDeps: ['@helm/protocol'] },
-  { name: '@helm/web', dir: 'web', workspaceDeps: ['@helm/protocol'] },
-  { name: '@helm/payload', dir: 'payload', workspaceDeps: ['@helm/cli', '@helm/kernel', '@helm/plugins', '@helm/hub', '@helm/web'] },
+  { name: '@helmx/protocol', dir: 'protocol', workspaceDeps: [] },
+  { name: '@helmx/kernel', dir: 'kernel', workspaceDeps: ['@helmx/protocol', '@helmx/node'] },
+  { name: '@helmx/plugins', dir: 'plugins', workspaceDeps: ['@helmx/protocol', '@helmx/kernel'] },
+  { name: '@helmx/hub', dir: 'hub', workspaceDeps: ['@helmx/protocol', '@helmx/kernel', '@helmx/plugins'] },
+  { name: '@helmx/node', dir: 'node', workspaceDeps: ['@helmx/protocol'] },
+  { name: '@helmx/cli', dir: 'cli', workspaceDeps: ['@helmx/protocol'] },
+  { name: '@helmx/web', dir: 'web', workspaceDeps: ['@helmx/protocol'] },
+  { name: '@helmx/payload', dir: 'payload', workspaceDeps: ['@helmx/cli', '@helmx/kernel', '@helmx/plugins', '@helmx/hub', '@helmx/web'] },
 ]
 
 test('dependency closure: protocol changes fan out to all consumers; node changes propagate through kernel to hub/payload', { timeout: 60_000 }, () => {
@@ -344,7 +344,7 @@ test.todo('t')
 test('outer', { timeout: 60_000 }, async (t) => {
   await t.test('sub', () => {})
 })
-process.env.HELM_TEST_SUITE_TIMEOUT_MS = '999'`,
+process.env.HELMX_TEST_SUITE_TIMEOUT_MS = '999'`,
   )
   assert.deepEqual(report.violations.map((v) => v.rule), ['suite-timeout-env'])
   assert.equal(report.stats.todoCalls, 1)
@@ -364,7 +364,7 @@ function runScript(script: string, args: string[], opts: { cwd?: string } = {}) 
 
 test('check-test-hygiene CLI: exits 1 on violations, 0 on clean files, and 2 on unknown arguments', { timeout: 60_000 }, () => {
   // Fixture must live inside the repo (--files rejects outside paths); node_modules is gitignored so worktree stays clean.
-  const dir = path.join(repoRoot, 'node_modules', '.helm-hygiene-cli-fixtures')
+  const dir = path.join(repoRoot, 'node_modules', '.helmx-hygiene-cli-fixtures')
   mkdirSync(dir, { recursive: true })
   try {
     const bad = path.join(dir, 'bad.test.ts')
@@ -403,7 +403,7 @@ test('check-changed CLI: exits 2 on missing --base ref; --list prints selection 
 })
 
 test('check-test-hygiene CLI: exits 2 for out-of-repo paths and empty --files rather than falling back silently', { timeout: 60_000 }, () => {
-  const outside = path.join(tmpdir(), 'helm-outside-' + Date.now(), 'x.test.ts')
+  const outside = path.join(tmpdir(), 'helmx-outside-' + Date.now(), 'x.test.ts')
   const r1 = runScript('check-test-hygiene.mjs', ['--files', outside])
   assert.equal(r1.status, 2, `stderr: ${r1.stderr}`)
   assert.ok(r1.stderr.includes('[check-hygiene] Rejected path outside repository:'), 'must explicitly reject instead of silently inspecting another repository')
@@ -463,7 +463,7 @@ test('runManagedCommand: passes through failure exit codes and returns 127 when 
   )
   assert.equal(code, 3)
   const missing = await runManagedCommand(
-    { cmd: 'helm-no-such-cmd-xyz', args: [], label: 't-missing' },
+    { cmd: 'helmx-no-such-cmd-xyz', args: [], label: 't-missing' },
     { cwd: repoRoot },
   )
   assert.equal(missing, 127)
@@ -495,7 +495,7 @@ function pidAlive(pid: number): boolean {
  * Uses short injected timings so escalation occurs in hundreds of milliseconds.
  */
 async function runSignalTreeTest(signal: 'SIGTERM' | 'SIGINT', expectedCode: number): Promise<void> {
-  const dir = mkdtempSync(path.join(tmpdir(), 'helm-orphan-'))
+  const dir = mkdtempSync(path.join(tmpdir(), 'helmx-orphan-'))
   const marker = path.join(dir, 'grandchild.pid')
   const childScript = path.join(dir, 'child.mjs')
   const grandchildCode =
@@ -573,7 +573,7 @@ describe('process discipline and concurrent watchdog teardown', { concurrency: t
     // On outer cancel: run-tests (G1 leader) gets SIGTERM -> forwards to owned G2 -> tsx leader exits while
     // G2 grandchild remains alive -> run-tests must wait until G2 drains (5s SIGKILL escalation)
     // before exiting 143 -> outer G1 drains and exits 143. Uses production default timings to verify real topology.
-    const dir = path.join(repoRoot, 'node_modules', '.helm-runtests-regression')
+    const dir = path.join(repoRoot, 'node_modules', '.helmx-runtests-regression')
     rmSync(dir, { recursive: true, force: true })
     mkdirSync(dir, { recursive: true })
     const marker = path.join(dir, 'grandchild.pid')
@@ -655,7 +655,7 @@ process.exit(code)
   })
 
   test('process discipline: parent-death watchdog kills detached test process group when run-tests.mjs is killed with SIGKILL', { timeout: 60_000, skip: process.platform === 'win32' ? 'POSIX parent-death watchdog and process group signal semantics; Windows unsupported' : false }, async () => {
-    const dir = path.join(repoRoot, 'node_modules', '.helm-runtests-sigkill')
+    const dir = path.join(repoRoot, 'node_modules', '.helmx-runtests-sigkill')
     rmSync(dir, { recursive: true, force: true })
     mkdirSync(dir, { recursive: true })
     const marker = path.join(dir, 'grandchild.pid')

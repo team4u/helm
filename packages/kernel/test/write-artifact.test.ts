@@ -11,14 +11,14 @@ import {
   ensureDataDir,
 } from '../src/services/index.js'
 import { createWriteTool } from '../src/runtime/tools.js'
-import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
+import type { HelmxToolDeps } from '../src/runtime/tool-deps.js'
 import type { EnvFabric } from '../src/env/index.js'
 
 describe('write tool artifact registration behavior', { timeout: 60_000 }, () => {
   let rootDir: string
 
   before(() => {
-    rootDir = mkdtempSync(join(tmpdir(), 'helm-write-artifact-test-'))
+    rootDir = mkdtempSync(join(tmpdir(), 'helmx-write-artifact-test-'))
   })
 
   after(() => {
@@ -40,7 +40,7 @@ describe('write tool artifact registration behavior', { timeout: 60_000 }, () =>
     await ensureDataDir(dir)
     const stash = new SecretStash()
     const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
-    const deps: HelmToolDeps = {
+    const deps: HelmxToolDeps = {
       dataDir: dir,
       defaultCwd: dir,
       hubUrl: 'http://127.0.0.1:3202',
@@ -76,7 +76,7 @@ describe('write tool artifact registration behavior', { timeout: 60_000 }, () =>
     await ensureDataDir(dir)
     const stash = new SecretStash()
     const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
-    const deps: HelmToolDeps = {
+    const deps: HelmxToolDeps = {
       dataDir: dir,
       defaultCwd: dir,
       hubUrl: 'http://127.0.0.1:3202',
@@ -115,14 +115,14 @@ describe('write tool artifact registration behavior', { timeout: 60_000 }, () =>
     const dir = join(rootDir, 'no-write-uploaded')
     await ensureDataDir(dir)
     const stash = new SecretStash()
-    const artifacts: HelmToolDeps['artifacts'] = {
+    const artifacts: HelmxToolDeps['artifacts'] = {
       spill: async () => ({ text: '' }),
       get: async () => { throw new Error('not implemented') },
       readContent: async () => '',
       readBuffer: async () => Buffer.alloc(0),
       writeUploaded: undefined,
     }
-    const deps: HelmToolDeps = {
+    const deps: HelmxToolDeps = {
       dataDir: dir,
       defaultCwd: dir,
       hubUrl: 'http://127.0.0.1:3202',
@@ -181,7 +181,7 @@ describe('write tool artifact registration behavior', { timeout: 60_000 }, () =>
       dispose: () => Promise.resolve(),
     } as never
 
-    const deps: HelmToolDeps = {
+    const deps: HelmxToolDeps = {
       dataDir: dir,
       defaultCwd: '/remote/workspace',
       hubUrl: 'http://127.0.0.1:3202',

@@ -1,6 +1,6 @@
 /**
  * Hub-side foreground port forwarding (NodeForwardService + HTTP routes) integration tests:
- * real EnvFabric Hub + real @helm/node daemon + binary echo server.
+ * real EnvFabric Hub + real @helmx/node daemon + binary echo server.
  * Covers: start/stop lifecycle (listeners and tunnels destroyed on stop), explicit listen conflict failure,
  * event stream (started/connection), and lease/lifecycle behavior.
  */
@@ -12,14 +12,14 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { withTimeout } from '@helm/test-kit'
+import { withTimeout } from '@helmx/test-kit'
 import { attachNodeWsGateway, attachNodeTunnelGateway, createEnvFabric, NodeForwardService } from '../src/env/index.js'
-import { createNodeDaemon } from '@helm/node'
+import { createNodeDaemon } from '@helmx/node'
 
 let rootDir: string
 
 before(async () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-forward-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-forward-'))
 })
 
 after(async () => {

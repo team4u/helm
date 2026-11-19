@@ -1,5 +1,5 @@
 import React, { useState } from 'react'
-import { copyToClipboard, CopyButton, HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, PluginSlot } from '@helm/plugin-client'
+import { copyToClipboard, CopyButton, HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, PluginSlot } from '@helmx/plugin-client'
 import { nodesApi } from '../lib/api.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
@@ -16,7 +16,7 @@ import {
   isNodeOnline,
   type NodeInfo,
 } from './node-center-model.js'
-import { NODE_DETAIL_SECTION_SLOT, type NodeUpgradeCheckResult } from '@helm/protocol/browser'
+import { NODE_DETAIL_SECTION_SLOT, type NodeUpgradeCheckResult } from '@helmx/protocol/browser'
 
 export interface NodeDetailDrawerProps {
   node: NodeInfo | null
@@ -189,7 +189,7 @@ export function NodeDetailDrawer({
           <div className="primary-drawer-header">
             <div className="primary-drawer-header-left">
               <div className="primary-drawer-icon-wrap">
-                <HelmIcon name={iconName} size={22} />
+                <HelmxIcon name={iconName} size={22} />
               </div>
               <div className="primary-drawer-title-col">
                 <div className="primary-drawer-title-row">
@@ -200,7 +200,7 @@ export function NodeDetailDrawer({
                     <span
                       className={`badge ${isOnline ? 'badge-ok' : 'badge-neutral'}`}
                     >
-                      <HelmIcon name={isOnline ? 'check' : 'circle'} size={10} />
+                      <HelmxIcon name={isOnline ? 'check' : 'circle'} size={10} />
                       <span>{isOnline ? t('common.online') : t('common.offline')}</span>
                     </span>
                   )}
@@ -226,7 +226,7 @@ export function NodeDetailDrawer({
                 title={t('common.close')}
                 onClick={onClose}
               >
-                <HelmIcon name="x" size={14} />
+                <HelmxIcon name="x" size={14} />
               </button>
             </DialogClose>
           </div>
@@ -241,7 +241,7 @@ export function NodeDetailDrawer({
                 {!isNew && node && (
                   <section className="section-flat">
                     <div className="section-flat-header">
-                      <HelmIcon name="cpu" size={13} />
+                      <HelmxIcon name="cpu" size={13} />
                       <span className="section-flat-title">{t('nodes.drawer.overview')}</span>
                     </div>
 
@@ -301,7 +301,7 @@ export function NodeDetailDrawer({
                   <section className="section-flat">
                     <div className="section-flat-header flex-row-between">
                       <div className="flex-row">
-                        <HelmIcon name="activity" size={13} />
+                        <HelmxIcon name="activity" size={13} />
                         <span className="section-flat-title">{t('nodes.drawer.healthSection')}</span>
                       </div>
                       <button
@@ -310,7 +310,7 @@ export function NodeDetailDrawer({
                         disabled={checkingHealth}
                         onClick={() => void handleHealthCheck()}
                       >
-                        <HelmIcon name="activity" size={12} />
+                        <HelmxIcon name="activity" size={12} />
                         <span>{checkingHealth ? t('nodes.drawer.checking') : t('nodes.drawer.healthAction')}</span>
                       </button>
                     </div>
@@ -354,7 +354,7 @@ export function NodeDetailDrawer({
                         className={`callout ${healthResult.updateAvailable ? 'callout-warn' : 'callout-ok'}`}
                         role="status"
                       >
-                        <HelmIcon
+                        <HelmxIcon
                           name={healthResult.updateAvailable ? 'alert-triangle' : 'check'}
                           size={13}
                         />
@@ -368,7 +368,7 @@ export function NodeDetailDrawer({
 
                     {healthError && (
                       <div className="callout callout-error" role="alert">
-                        <HelmIcon name="alert-circle" size={13} />
+                        <HelmxIcon name="alert-circle" size={13} />
                         <span className="callout-text">{healthError}</span>
                       </div>
                     )}
@@ -379,7 +379,7 @@ export function NodeDetailDrawer({
                 {(!isLocal || isNew) && (
                   <section className="section-flat border-accent">
                     <div className="section-flat-header">
-                      <HelmIcon name="key" size={13} />
+                      <HelmxIcon name="key" size={13} />
                       <span className="section-flat-title">{t('nodes.drawer.enrollSection')}</span>
                     </div>
 
@@ -406,14 +406,14 @@ export function NodeDetailDrawer({
                         disabled={issuing || (isNew && !newNodeId.trim())}
                         onClick={() => void handleIssueToken()}
                       >
-                        <HelmIcon name="key" size={12} />
+                        <HelmxIcon name="key" size={12} />
                         <span>{issuedToken ? t('nodes.drawer.reissueToken') : t('nodes.drawer.issueToken')}</span>
                       </button>
                     </div>
 
                     {tokenError && (
                       <div className="callout callout-error" role="alert">
-                        <HelmIcon name="alert-circle" size={13} />
+                        <HelmxIcon name="alert-circle" size={13} />
                         <span className="callout-text">{tokenError}</span>
                       </div>
                     )}
@@ -431,7 +431,7 @@ export function NodeDetailDrawer({
                             onClick={() => void handleCopyToken()}
                             title={t('nodes.drawer.copyToken')}
                           >
-                            <HelmIcon name={copiedToken ? 'check' : 'copy'} size={12} />
+                            <HelmxIcon name={copiedToken ? 'check' : 'copy'} size={12} />
                             <span>{copiedToken ? t('nodes.drawer.copied') : t('nodes.drawer.copyToken')}</span>
                           </button>
                         </div>
@@ -451,7 +451,7 @@ export function NodeDetailDrawer({
                             onClick={() => void handleCopyCmd()}
                             title={t('nodes.drawer.copyCommandTitle')}
                           >
-                            <HelmIcon name={copiedCmd ? 'check' : 'copy'} size={12} />
+                            <HelmxIcon name={copiedCmd ? 'check' : 'copy'} size={12} />
                             <span>{copiedCmd ? t('nodes.drawer.copied') : t('nodes.drawer.copyCommand')}</span>
                           </button>
                         </div>
@@ -480,7 +480,7 @@ export function NodeDetailDrawer({
                 {!isNew && (
                   <section className="section-flat">
                     <div className="section-flat-header">
-                      <HelmIcon name="wrench" size={13} />
+                      <HelmxIcon name="wrench" size={13} />
                       <span className="section-flat-title">{t('nodes.drawer.toolsSection')}</span>
                     </div>
 
@@ -491,7 +491,7 @@ export function NodeDetailDrawer({
                           className="primary-card-pill mono"
                           title={t('nodes.drawer.toolTitle', { tool })}
                         >
-                          <HelmIcon name="terminal" size={11} />
+                          <HelmxIcon name="terminal" size={11} />
                           <span>{tool}</span>
                         </span>
                       ))}

@@ -29,8 +29,8 @@ import {
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createHubHandler } from '../src/http/index.js'
 import type { EventHub, KernelRuntimeLike } from '../src/http/index.js'
-import { HelmError, type ConversationSummary } from '@helm/protocol'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { HelmxError, type ConversationSummary } from '@helmx/protocol'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, cleanupDir, deferred, makeConversationSummary, makeTempDir } from './helpers.js'
 
 // ---------------------------------------------------------------------------
@@ -81,12 +81,12 @@ function makeKernel(): KernelRuntimeLike {
     },
     async getConversationDetail(id: number) {
       const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      if (found === undefined) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       return { ...found, entries: [] }
     },
     async getConversationEntry(id: number, entryId: number) {
-      if (!conversations.has(id)) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
-      throw new HelmError('not_found', `entry ${entryId} not found in conversation ${id}`, 404)
+      if (!conversations.has(id)) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
+      throw new HelmxError('not_found', `entry ${entryId} not found in conversation ${id}`, 404)
     },
     async createConversation(init) {
       const id = Math.max(0, ...conversations.keys()) + 1
@@ -153,7 +153,7 @@ async function call(
 }
 
 test.before(async () => {
-  dataDir = await makeTempDir('helm-upload-test-')
+  dataDir = await makeTempDir('helmx-upload-test-')
   stash = new SecretStash()
   artifacts = new ArtifactService(dataDir, new InMemoryArtifactRepository(), stash)
   conversations.set(1, summary(1, 'person assist'))
@@ -185,12 +185,12 @@ test('sanitizeUploadFilename: valid names pass; invalid names return 400 validat
   for (const bad of ['../etc/passwd', '..', '.', 'a/b', 'a\\b', 'a\0b', 'a\nb', '', '   ']) {
     assert.throws(
       () => sanitizeUploadFilename(bad),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
       `expected reject: ${JSON.stringify(bad)}`,
     )
   }
   const tooLong = 'a'.repeat(201)
-  assert.throws(() => sanitizeUploadFilename(tooLong), HelmError)
+  assert.throws(() => sanitizeUploadFilename(tooLong), HelmxError)
   assert.equal(sanitizeUploadFilename('a'.repeat(200)), 'a'.repeat(200), 'exact 200 chars is valid')
 })
 
@@ -245,7 +245,7 @@ test('writeUploaded: >15 MiB throws 413 artifact_too_large (with maxBytes/actual
   await assert.rejects(
     artifacts.writeUploaded(1, { name: 'big.bin', bytes: oversized }),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError)
+      assert.ok(err instanceof HelmxError)
       assert.equal(err.code, 'artifact_too_large')
       assert.equal(err.status, 413)
       const details = err.details as { maxBytes: number; actualBytes: number }
@@ -265,7 +265,7 @@ test('writeUploaded: >15 MiB throws 413 artifact_too_large (with maxBytes/actual
 test('writeUploaded: rejects invalid filenames and invalid conversation IDs', { timeout: 60_000 }, async () => {
   await assert.rejects(
     artifacts.writeUploaded(1, { name: '../evil', bytes: new Uint8Array(1) }),
-    (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
   )
   await assert.rejects(
     artifacts.writeUploaded(-1, { name: 'ok.txt', bytes: new Uint8Array(1) }),
@@ -274,7 +274,7 @@ test('writeUploaded: rejects invalid filenames and invalid conversation IDs', { 
 })
 
 test('writeUploaded vs deleteConversation serialization: upload passing its existence check cannot recreate a deleted conversation directory', { timeout: 60_000 }, async () => {
-  const dir = await makeTempDir('helm-artifact-chain-')
+  const dir = await makeTempDir('helmx-artifact-chain-')
   const service = new ArtifactService(dir, new InMemoryArtifactRepository())
   const conversationId = 42
   const conversationDir = join(dir, 'artifacts', String(conversationId))
@@ -438,7 +438,7 @@ test('HTTP text upload triggers redaction (no secret leaks); GET list includes u
 })
 
 test('artifact reads reject cross-conversation metadata and symlink escapes while preserving raw binary bytes', { timeout: 60_000 }, async () => {
-  const root = await makeTempDir('helm-artifact-boundary-')
+  const root = await makeTempDir('helmx-artifact-boundary-')
   try {
     await ensureDataDir(root)
     const repository = new InMemoryArtifactRepository()

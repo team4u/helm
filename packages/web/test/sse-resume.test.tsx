@@ -24,7 +24,7 @@ import { createRoot, type Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { sseClientTimings } from '../src/lib/live-state.js'
 import { getCachedClientComponent, getPluginClientCacheRevision, resetPluginClientCache, seedPluginClientModule } from '../src/lib/plugin-client.js'
-import type { HelmStoreValue } from '../src/lib/types.js'
+import type { HelmxStoreValue } from '../src/lib/types.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -141,7 +141,7 @@ interface Harness {
   fetchedUrls: string[]
   /** Register the SSE stream factory for the next /api/events connection (if the connection arrives first it waits for the registration; deterministic consumption). */
   nextEvents: (factory: StreamFactory) => void
-  store: () => HelmStoreValue
+  store: () => HelmxStoreValue
   waitFor: (predicate: (observed: Observed) => boolean, ms?: number) => Promise<void>
   close: () => Promise<void>
 }
@@ -153,8 +153,8 @@ async function mountProvider(options?: {
   if (options?.hash !== undefined) {
     window.history.replaceState(null, '', options.hash)
   }
-  const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
-  const { useHelmStore } = await import('../src/lib/store-context.js')
+  const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
+  const { useHelmxStore } = await import('../src/lib/store-context.js')
   const observed: Observed = { authenticated: false, sseConnected: false, connectionError: null, conversations: 0 }
   const eventsUrls: string[] = []
   const fetchedUrls: string[] = []
@@ -195,9 +195,9 @@ async function mountProvider(options?: {
     return new Response('[]', { status: 200, headers: { 'content-type': 'application/json' } })
   }) as typeof fetch
 
-  let storeRef: HelmStoreValue | undefined
+  let storeRef: HelmxStoreValue | undefined
   const Probe = (): React.ReactNode => {
-    const store = useHelmStore()
+    const store = useHelmxStore()
     storeRef = store
     observed.authenticated = store.authenticated
     observed.sseConnected = store.sseConnected
@@ -212,7 +212,7 @@ async function mountProvider(options?: {
   await act(async () => {
     const r = createRoot(host)
     root = r
-    r.render(React.createElement(HelmStoreProvider, null, React.createElement(Probe)))
+    r.render(React.createElement(HelmxStoreProvider, null, React.createElement(Probe)))
   })
   const waitFor = async (predicate: (observed: Observed) => boolean, ms = 15_000): Promise<void> => {
     const deadline = Date.now() + ms
@@ -238,7 +238,7 @@ async function mountProvider(options?: {
       if (r !== undefined) await act(async () => { r.unmount() })
       host.remove()
       globalThis.fetch = originalFetch
-      localStorage.removeItem('helm:token')
+      localStorage.removeItem('helmx:token')
       window.history.replaceState(null, '', '#/')
       resetPluginClientCache()
     },
@@ -266,7 +266,7 @@ function snapshotConnection(h: Harness, payload: object): { send: (text: string)
 // ---------------------------------------------------------------------------
 
 test('disconnect resume: dual-credential handshake, replay applied frame by frame, live only after reaching headSeq, no detail GETs', { timeout: 60_000 }, async () => {
-  localStorage.setItem('helm:token', 't1')
+  localStorage.setItem('helmx:token', 't1')
   const h = await mountProvider()
   try {
     // First connection: snapshot (bootId b1, seq 3), then held.
@@ -317,7 +317,7 @@ test('disconnect resume: dual-credential handshake, replay applied frame by fram
 })
 
 test('handshake mismatch: the server resumed frame differs from local credentials; credentials invalidated, next connection forced full', { timeout: 60_000 }, async () => {
-  localStorage.setItem('helm:token', 't1')
+  localStorage.setItem('helmx:token', 't1')
   const h = await mountProvider()
   try {
     const first = snapshotConnection(h, { bootId: 'b1', seq: 2, conversations: [], pendingAsks: [], plugins: [], ui: [] })
@@ -356,7 +356,7 @@ test('handshake mismatch: the server resumed frame differs from local credential
 })
 
 test('snapshot apply failure: credentials invalidated, next connection forced full (never repeatedly carrying a corrupt watermark)', { timeout: 60_000 }, async () => {
-  localStorage.setItem('helm:token', 't1')
+  localStorage.setItem('helmx:token', 't1')
   const h = await mountProvider()
   try {
     // Illegal snapshot (conversations not an array): applySnapshot must throw and the credentials must not land.
@@ -380,7 +380,7 @@ test('snapshot apply failure: credentials invalidated, next connection forced fu
 })
 
 test('logout/re-auth clears resume credentials: a new identity must not reuse the old authorization watermark', { timeout: 60_000 }, async () => {
-  localStorage.setItem('helm:token', 't1')
+  localStorage.setItem('helmx:token', 't1')
   const h = await mountProvider()
   try {
     const first = snapshotConnection(h, { bootId: 'b1', seq: 1, conversations: [], pendingAsks: [], plugins: [], ui: [] })
@@ -398,7 +398,7 @@ test('logout/re-auth clears resume credentials: a new identity must not reuse th
       return c
     })
     // Logout via the 401 path: credentials must be cleared together with logout.
-    window.dispatchEvent(new Event('helm:unauthorized'))
+    window.dispatchEvent(new Event('helmx:unauthorized'))
     await h.waitFor((o) => o.authenticated === false)
     // After re-auth (new identity), the new connection must not carry the old credentials.
     await act(async () => {
@@ -416,7 +416,7 @@ test('logout/re-auth clears resume credentials: a new identity must not reuse th
 })
 
 test('plugin.changed enabled-state hot reload invalidates the client module cache (both the live and resume-replay paths)', { timeout: 60_000 }, async () => {
-  localStorage.setItem('helm:token', 't1')
+  localStorage.setItem('helmx:token', 't1')
   const h = await mountProvider()
   try {
     const first = snapshotConnection(h, {
@@ -549,7 +549,7 @@ const scenarios: ProtocolFailureScenario[] = [
 
 for (const scenario of scenarios) {
   test(`protocol-boundary failure invalidates credentials for the next full sync: ${scenario.name}`, { timeout: 60_000 }, async () => {
-    localStorage.setItem('helm:token', 't1')
+    localStorage.setItem('helmx:token', 't1')
     const h = await mountProvider()
     try {
       await scenario.poison(h)
@@ -562,7 +562,7 @@ for (const scenario of scenarios) {
 }
 
 test('瞬态 conversation.live 不消耗 seq/afterSeq，resumed.conversationLives 对账实时视图', { timeout: 60_000 }, async () => {
-  localStorage.setItem('helm:token', 't1')
+  localStorage.setItem('helmx:token', 't1')
   const h = await mountProvider()
   try {
     const first = snapshotConnection(h, {
@@ -610,11 +610,11 @@ test('瞬态 conversation.live 不消耗 seq/afterSeq，resumed.conversationLive
 })
 
 test('snapshot 重连增量对账插件缓存与 loadErrors：保留未变更插件模块和样式，仅清变更/停用插件错误', { timeout: 60_000 }, async () => {
-  localStorage.setItem('helm:token', 't1')
+  localStorage.setItem('helmx:token', 't1')
   const KeepPanel = () => null
   const ChangePanel = () => null
-  seedPluginClientModule('keep:p', 'index.tsx', { Panel: KeepPanel, __helmClientCss: '.keep{}' }, 'hash-keep')
-  seedPluginClientModule('chg:p', 'index.tsx', { Panel: ChangePanel, __helmClientCss: '.old{}' }, 'hash-old')
+  seedPluginClientModule('keep:p', 'index.tsx', { Panel: KeepPanel, __helmxClientCss: '.keep{}' }, 'hash-keep')
+  seedPluginClientModule('chg:p', 'index.tsx', { Panel: ChangePanel, __helmxClientCss: '.old{}' }, 'hash-old')
   const keepRev0 = getPluginClientCacheRevision('keep:p')
   const chgRev0 = getPluginClientCacheRevision('chg:p')
 
@@ -671,12 +671,12 @@ test('snapshot 重连增量对账插件缓存与 loadErrors：保留未变更插
     await h.waitFor((o) => o.sseConnected === true && h.store().kernelBootId === 'b2')
 
     assert.equal(getCachedClientComponent('keep:p', 'index.tsx', 'Panel', 'hash-keep'), KeepPanel, '未变更插件缓存必须保留')
-    assert.ok(document.querySelector('style[data-helm-plugin-css="keep:p::index.tsx"]') !== null, '未变更插件样式必须保留')
+    assert.ok(document.querySelector('style[data-helmx-plugin-css="keep:p::index.tsx"]') !== null, '未变更插件样式必须保留')
     assert.equal(getPluginClientCacheRevision('keep:p'), keepRev0, '未变更插件 revision 不变')
     assert.ok(h.store().loadErrors['doc:keep:p/info'] !== undefined, '未变更插件的既有错误不得被清空')
 
     assert.equal(getCachedClientComponent('chg:p', 'index.tsx', 'Panel'), undefined, 'hash 变更插件缓存必须逐出')
-    assert.ok(document.querySelector('style[data-helm-plugin-css="chg:p::index.tsx"]') === null, 'hash 变更插件样式必须逐出')
+    assert.ok(document.querySelector('style[data-helmx-plugin-css="chg:p::index.tsx"]') === null, 'hash 变更插件样式必须逐出')
     assert.notEqual(getPluginClientCacheRevision('chg:p'), chgRev0, 'hash 变更插件 revision 必须递增')
     assert.equal(h.store().loadErrors['doc:chg:p/info'], undefined, 'hash 变更插件的旧 doc 错误必须被清理')
     second!.end()
@@ -687,7 +687,7 @@ test('snapshot 重连增量对账插件缓存与 loadErrors：保留未变更插
 })
 
 test('snapshot 重连 SWR 保活：未变更可见会话跳过详情/产物 GET；变更会话后台静默刷新不清空时间线', { timeout: 60_000 }, async () => {
-  localStorage.setItem('helm:token', 't1')
+  localStorage.setItem('helmx:token', 't1')
   let detailCalls = 0
   let artifactCalls = 0
   let failNextDetail = false
@@ -698,7 +698,7 @@ test('snapshot 重连 SWR 保活：未变更可见会话跳过详情/产物 GET�
     stateChangeSeq: serverStateChangeSeq,
     lastEntryId: serverLastEntryId,
     entries: [
-      { id: '1', kind: 'helm.input', data: { text: 'hello' } },
+      { id: '1', kind: 'helmx.input', data: { text: 'hello' } },
       ...(serverLastEntryId > 10 ? [{ id: String(serverLastEntryId), kind: 'pi.assistant' }] : []),
     ],
   })

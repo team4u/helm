@@ -6,19 +6,19 @@
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  HelmError,
+  HelmxError,
   encodeSessionDocSubParam,
-  type HelmEventFrame,
+  type HelmxEventFrame,
   type PluginSessionDocHandle,
   type PublicPluginSessionDoc,
   type SessionDocMultiplexFrame,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { SessionDocEventHub } from '../src/runtime/events.js'
 import { AuthService } from '../src/services/index.js'
 import { createHubHandler, startHub, type KernelRuntimeLike, type SessionDocEventPort } from '../src/http/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, cleanupDir, makeConversationSummary, makeTempDir, waitFor } from './helpers.js'
 
 function makeConversation(id: number) {
@@ -34,7 +34,7 @@ let closeHub: (() => Promise<void>) | undefined
 let token: string
 const existing = new Set<number>([1, 2])
 let metricsHandle: PluginSessionDocHandle<{ n: number }> | undefined
-let globalFrames: HelmEventFrame[] = []
+let globalFrames: HelmxEventFrame[] = []
 
 const backend: PluginHostBackend = {
   ...createPluginHostBackendFixture(),
@@ -43,7 +43,7 @@ const backend: PluginHostBackend = {
   createConversation: async () => makeConversation(42),
   listConversations: () => [...existing].map(makeConversation),
   getConversation: (id) => {
-    if (!existing.has(id)) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
+    if (!existing.has(id)) throw new HelmxError('not_found', `conversation missing: ${id}`, 404)
     return makeConversation(id)
   },
   updateConversation: async (id) => makeConversation(id),
@@ -54,13 +54,13 @@ const backend: PluginHostBackend = {
   registerAskSeqResolver: () => () => {},
   onEvent: () => () => {},
   abortConversation: async () => {},
-  getConversationOwnership(): 'helm' | 'bot' | 'human' {
+  getConversationOwnership(): 'helmx' | 'bot' | 'human' {
     return 'human'
   },
   spawnAgent: async () => ({}),
   runGate: async () => ({ ok: true, output: '' }),
   execEnv: async () => {
-    throw new HelmError('unsupported', 'this fixture does not execute node commands', 501)
+    throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501)
   },
   emitEvent: (type, payload) => {
     if (type === 'plugin.session_doc.updated') {
@@ -74,7 +74,7 @@ const backend: PluginHostBackend = {
 const memorySessionStore = new Map<string, string>()
 
 beforeEach(async () => {
-  dataDir = await makeTempDir('helm-http-sd-')
+  dataDir = await makeTempDir('helmx-http-sd-')
   sessionDocHub = new SessionDocEventHub()
   globalFrames = []
   metricsHandle = undefined
@@ -118,16 +118,16 @@ beforeEach(async () => {
     skills: new Proxy({}, { get: () => async () => [] }) as never,
     credentials: new Proxy({}, { get: () => async () => [] }) as never,
     providers: new Proxy({}, { get: () => async () => [] }) as never,
-    artifacts: new Proxy({}, { get: () => { throw new HelmError('not_found', 'x', 404) } }) as never,
+    artifacts: new Proxy({}, { get: () => { throw new HelmxError('not_found', 'x', 404) } }) as never,
     plugins: pluginHost,
     listConversations: async () => [...existing].map(makeConversation),
     getConversationDetail: async (id) => {
-      if (!existing.has(id)) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
+      if (!existing.has(id)) throw new HelmxError('not_found', `conversation missing: ${id}`, 404)
       return { ...makeConversation(id), entries: [] } as never
     },
     getConversationEntry: async (id, entryId) => {
-      if (!existing.has(id)) throw new HelmError('not_found', `conversation missing: ${id}`, 404)
-      throw new HelmError('not_found', `entry ${entryId} missing in conversation ${id}`, 404)
+      if (!existing.has(id)) throw new HelmxError('not_found', `conversation missing: ${id}`, 404)
+      throw new HelmxError('not_found', `entry ${entryId} missing in conversation ${id}`, 404)
     },
     createConversation: async () => makeConversation(3),
     updateConversation: async (id) => makeConversation(id),
@@ -148,7 +148,7 @@ beforeEach(async () => {
     issueNodeToken: async () => ({ nodeId: 'local', token: 't', createdAt: 0 }),
     removeNode: async () => {},
     execEnv: async () => {
-      throw new HelmError('unsupported', 'this fixture does not execute node commands', 501)
+      throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501)
     },
   }
   testKernel = kernel

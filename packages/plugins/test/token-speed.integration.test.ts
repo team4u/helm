@@ -1,16 +1,16 @@
 /**
- * builtin:token-speed 真实组合层集成测试（真 createHelm + 真 PluginHost /
+ * builtin:token-speed 真实组合层集成测试（真 createHelmx + 真 PluginHost /
  * Kernel / 瞬态内存 sessionDoc + faux provider 按真实时间节流流式，~500ms 生成）。
  *
  * 覆盖生命周期全景：
- * 1. 默认启用：createHelm 启动即启用，UI 插槽注册（COMPOSER_STATUS_SLOT）与 client 模块（index.tsx）真实编译产物就绪；
+ * 1. 默认启用：createHelmx 启动即启用，UI 插槽注册（COMPOSER_STATUS_SLOT）与 client 模块（index.tsx）真实编译产物就绪；
  * 2. 生成结束前：speed sessionDoc 已有非零实时 TPS（decoding 流式观测），且 HTTP / SSE 实时可达；
  * 3. 终态：provider usage 对账（outputTokens = 最终 usage.output，source 翻转），且零 SQLite 落盘；
  * 4. reset（pi.reset marker）与 conversation.deleted：上一回合 settled 文档彻底清空；
  * 5. 停用：文档读取 404、UI 贡献消失；重启用：瞬态内存已清空，绝不把旧实时态冒充当前；
  * 6. PluginSummary.publicConfig 实时投影与 secret 脱敏过滤 + external client.tsx 编译使用 usePluginConfig。
  *
- * 纪律：仅测试数据目录（tmpdir），不访问用户 ~/.helm；不起固定端口（纯
+ * 纪律：仅测试数据目录（tmpdir），不访问用户 ~/.helmx；不起固定端口（纯
  * kernel API / Web Standard handler）；不 kill 任何非本测试拥有的进程。
  */
 import { test } from 'node:test'
@@ -18,11 +18,11 @@ import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { createHubHandler } from '@helm/kernel'
-import { COMPOSER_STATUS_SLOT, HelmError, type PluginSummary } from '@helm/protocol'
-import { createPluginBuildProvider } from '@helm/plugin-build'
-import { createHelm } from '../../hub/src/app.js'
-import { openHelmDatabase } from '../../kernel/src/runtime/sqlite.js'
+import { createHubHandler } from '@helmx/kernel'
+import { COMPOSER_STATUS_SLOT, HelmxError, type PluginSummary } from '@helmx/protocol'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
+import { createHelmx } from '../../hub/src/app.js'
+import { openHelmxDatabase } from '../../kernel/src/runtime/sqlite.js'
 import { TOKEN_SPEED_DOC, TOKEN_SPEED_PLUGIN_ID, type TokenSpeedStatus } from '../src/token-speed/contracts.js'
 import { cleanupDir, makeFauxProvider, makeTempDir, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 
@@ -33,14 +33,14 @@ const STREAM_TOKENS = 120
 interface Env {
   dataDir: string
   faux: FauxProviderHandle
-  app: Awaited<ReturnType<typeof createHelm>>
+  app: Awaited<ReturnType<typeof createHelmx>>
   close(): Promise<void>
 }
 
 async function makeEnv(): Promise<Env> {
-  const dataDir = await makeTempDir('helm-token-speed-it-')
+  const dataDir = await makeTempDir('helmx-token-speed-it-')
   const faux = makeFauxProvider({ tokensPerSecond: 240 })
-  const app = await createHelm({
+  const app = await createHelmx({
     buildProvider: createPluginBuildProvider(),
     dataDir,
     cwd: dataDir,
@@ -199,7 +199,7 @@ test('token-speed 集成：默认启用 UI 就绪 → 全链路流式测量与�
     )
     assert.throws(
       () => env.app.kernel.plugins.getPublicSessionDoc(TOKEN_SPEED_PLUGIN_ID, TOKEN_SPEED_DOC, conv.id),
-      (error: unknown) => error instanceof HelmError && error.status === 404,
+      (error: unknown) => error instanceof HelmxError && error.status === 404,
       '停用后公共会话文档读取 404',
     )
     await env.app.kernel.plugins.enable(TOKEN_SPEED_PLUGIN_ID)
@@ -215,17 +215,17 @@ test('token-speed 集成：默认启用 UI 就绪 → 全链路流式测量与�
       '重启用后 UI 插槽恢复',
     )
 
-    // 关闭前刷新插件存储并检查 SQLite helm_plugin_session_docs：必须严格零写入！
+    // 关闭前刷新插件存储并检查 SQLite helmx_plugin_session_docs：必须严格零写入！
     await env.app.close()
     closedByTest = true
-    const db = await openHelmDatabase(env.dataDir)
+    const db = await openHelmxDatabase(env.dataDir)
     try {
       const rows = await db.db.all<{ conversation_id: number }>(
-        'SELECT conversation_id FROM helm_plugin_session_docs WHERE plugin_id = ? AND name = ?',
+        'SELECT conversation_id FROM helmx_plugin_session_docs WHERE plugin_id = ? AND name = ?',
         TOKEN_SPEED_PLUGIN_ID,
         TOKEN_SPEED_DOC,
       )
-      assert.equal(rows.length, 0, 'durable: false 全程零 SQLite helm_plugin_session_docs 写入')
+      assert.equal(rows.length, 0, 'durable: false 全程零 SQLite helmx_plugin_session_docs 写入')
     } finally {
       await db.close()
     }
@@ -315,7 +315,7 @@ test('token-speed 集成：PluginSummary.publicConfig 剥离 secret 字段且 ex
     await mkdir(clientRoot, { recursive: true })
     await writeFile(
       join(clientRoot, 'client.tsx'),
-      `import { usePluginConfig } from '@helm/plugin-client'
+      `import { usePluginConfig } from '@helmx/plugin-client'
 
 export function ConfigPanel() {
   const config = usePluginConfig<{ slidingWindowMs?: number; apiKey?: string; label?: string }>()

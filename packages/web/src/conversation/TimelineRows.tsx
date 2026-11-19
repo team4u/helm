@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ToolViewSpec } from '@helm/protocol/browser'
-import { HelmIcon } from '@helm/plugin-client'
+import type { ToolViewSpec } from '@helmx/protocol/browser'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { ToolExpandedBody, ToolRawBody } from './ToolExpandedBody.js'
 import { MarkdownView } from './MarkdownView.js'
@@ -46,7 +46,7 @@ export function TraceRow({
   conversationId: number
   defaultOpen: boolean
   /** 当前时间线内全部工具调用轻量摘要（透传给 tool.view 插件组件）。 */
-  siblingCalls: ReadonlyArray<import('@helm/protocol/browser').ToolViewSiblingCall>
+  siblingCalls: ReadonlyArray<import('@helmx/protocol/browser').ToolViewSiblingCall>
 }) {
   const [open, setOpen] = useState(defaultOpen)
   const { t } = useWebLocale()
@@ -109,7 +109,7 @@ export function TraceRow({
             }}
           >
             <span className="trace-row-left">
-              <HelmIcon
+              <HelmxIcon
                 name={rowIcon}
                 size={12}
                 className={tool.status === 'running' ? 'spin-slow' : undefined}
@@ -130,7 +130,7 @@ export function TraceRow({
             </span>
             <span className="trace-row-right">
               {right !== '' ? <span>{right}</span> : null}
-              <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} className="trace-row-chevron" />
+              <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={11} className="trace-row-chevron" />
             </span>
           </div>
           {toolView !== undefined ? (
@@ -167,7 +167,7 @@ export function StepGroup({
   steps: FoldableStep[]
   active: boolean
   conversationId: number
-  siblingCalls: ReadonlyArray<import('@helm/protocol/browser').ToolViewSiblingCall>
+  siblingCalls: ReadonlyArray<import('@helmx/protocol/browser').ToolViewSiblingCall>
   shortcutToggle?: ProcessShortcutCommand
 }) {
   const firstStep = steps[0]
@@ -209,7 +209,7 @@ function MultiStepGroup({
   steps: FoldableStep[]
   active: boolean
   conversationId: number
-  siblingCalls: ReadonlyArray<import('@helm/protocol/browser').ToolViewSiblingCall>
+  siblingCalls: ReadonlyArray<import('@helmx/protocol/browser').ToolViewSiblingCall>
   shortcutToggle?: ProcessShortcutCommand
 }) {
   const [userOverride, setUserOverride] = useState<boolean | null>(null)
@@ -272,8 +272,8 @@ function MultiStepGroup({
           title={showTime ? undefined : open ? t('conv.thinking.collapseExec') : t('conv.thinking.expandExec')}
         >
           <span className="trace-group-leading" aria-hidden="true">
-            <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
-            {active ? <HelmIcon name="loader" size={11} className="spin-slow" /> : null}
+            <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
+            {active ? <HelmxIcon name="loader" size={11} className="spin-slow" /> : null}
           </span>
           <span className="trace-group-title">{summaryTitle}</span>
           {showErrorBadge ? (
@@ -353,8 +353,8 @@ export function ThinkingRow({
         onClick={() => setUserOverride(!open)}
         title={open ? t('conv.thinking.collapseThinking') : t('conv.thinking.expandThinking')}
       >
-        <HelmIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
-        {active ? <HelmIcon name="loader" size={11} className="spin-slow" /> : null}
+        <HelmxIcon name={open ? 'chevron-down' : 'chevron-right'} size={12} />
+        {active ? <HelmxIcon name="loader" size={11} className="spin-slow" /> : null}
         {active ? t('conv.thinking.activeLabel') : t('conv.thinking.label')}
       </button>
       {open ? (

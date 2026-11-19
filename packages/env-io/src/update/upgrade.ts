@@ -17,7 +17,7 @@ import fs, { type FileHandle } from 'node:fs/promises';
 import path from 'node:path';
 import process from 'node:process';
 import { randomUUID } from 'node:crypto';
-import { isStrictSemver } from '@helm/protocol';
+import { isStrictSemver } from '@helmx/protocol';
 import { UpgradeCommitUnconfirmedError, UpgradeRejectedError } from './errors.js';
 import { compareSemver, normalizeTargetVersion } from './semver.js';
 import { fetchLatestVersion, resolveRegistryUrl } from './registry.js';
@@ -37,15 +37,15 @@ import { stageRelease, type ReleaseLayout, type StageExtractor, type StagedRelea
 const DRAIN_POLL_INTERVAL_MS = 50;
 const DEFAULT_DRAIN_TIMEOUT_MS = 30_000;
 
-/** Failure cooldown for a rejected version; overridable via `HELM_UPGRADE_BLOCK_COOLDOWN_MS`. */
+/** Failure cooldown for a rejected version; overridable via `HELMX_UPGRADE_BLOCK_COOLDOWN_MS`. */
 const UPGRADE_BLOCK_COOLDOWN_MS = (): number => {
-  const raw = Number(process.env.HELM_UPGRADE_BLOCK_COOLDOWN_MS);
+  const raw = Number(process.env.HELMX_UPGRADE_BLOCK_COOLDOWN_MS);
   return Number.isFinite(raw) && raw >= 0 ? raw : 30 * 60 * 1000;
 };
 
 /** What is being updated: which registry package decides `latest`, plus the staging layout. */
 export interface UpdateSource {
-  /** Registry package queried for the `latest` dist-tag (Node: `@helm/node`; Hub: the payload package). */
+  /** Registry package queried for the `latest` dist-tag (Node: `@helmx/node`; Hub: the payload package). */
   packageName: string;
   /**
    * Current-version fallback when `current.json` is absent and no explicit `currentVersion`
@@ -54,7 +54,7 @@ export interface UpdateSource {
   getFallbackVersion?: () => string;
   /**
    * Disk codec for `current.json`; defaults to the shared `entries` format. Consumers with a
-   * pre-existing on-disk contract (helm-node's flat `entryPath`/`cliBinDir` launcher format)
+   * pre-existing on-disk contract (helmx-node's flat `entryPath`/`cliBinDir` launcher format)
    * inject their own so already-installed binaries keep reading the records they know.
    */
   stateOps?: UpdateStateOps;

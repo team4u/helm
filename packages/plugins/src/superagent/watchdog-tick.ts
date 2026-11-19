@@ -15,7 +15,7 @@
  *   拦截（assertValidCollection），非法产物绝不进入规则表。
  */
 
-import { HelmError, type HelmPluginContext } from '@helm/protocol'
+import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import {
   assertValidCollection,
   DIAGNOSTICS_COLLECT_EVENT,
@@ -37,7 +37,7 @@ export interface TickOutcome {
 }
 
 interface WatchdogTickDeps {
-  ctx: HelmPluginContext
+  ctx: HelmxPluginContext
   activity: ConversationActivityTracker
   /** 采集成功后的规则表评估（原 watchdog_tick 处理器主体）。 */
   evaluate(collection: DiagnosticsCollection): Promise<void>
@@ -97,7 +97,7 @@ export class WatchdogTickController {
   private async runTick(): Promise<DiagnosticsCollection> {
     const { ctx, activity, isClosing } = this.deps
     if (isClosing() || ctx.host.isClosing) {
-      throw new HelmError('plugin_disabled', 'builtin:superagent 或内核正在关闭，拒绝启动巡检', 409)
+      throw new HelmxError('plugin_disabled', 'builtin:superagent 或内核正在关闭，拒绝启动巡检', 409)
     }
     const summaries = ctx.host.listConversations()
     const probes: WatchdogProbe[] = summaries.map((summary) => {
@@ -137,7 +137,7 @@ export class WatchdogTickController {
           timeoutTimer = setTimeout(
             () =>
               reject(
-                new HelmError(
+                new HelmxError(
                   'watchdog_collect_timeout',
                   `巡检外部采集超过 ${TICK_COLLECT_TIMEOUT_MS}ms 未收敛（diagnostics.collect 监听器挂死或过慢），本轮按采集失败放弃`,
                   500,

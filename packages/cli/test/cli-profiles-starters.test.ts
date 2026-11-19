@@ -1,5 +1,5 @@
 /**
- * Tests for `helm profiles --starters` semantic flag:
+ * Tests for `helmx profiles --starters` semantic flag:
  * - create/update sends starters array and update merge preserves untouched fields;
  * - [] clears starters explicitly (writes empty array rather than deleting key);
  * - invalid values (non-array / wrong shape / over limit) reject locally before sending HTTP requests.
@@ -14,7 +14,7 @@ import {
 } from './helpers/cli-harness.js'
 
 test('profiles create --starters: writes array to body and prints JSON', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-starters-')
+  const dir = useTempDir(t, 'helmx-cli-starters-')
   const hub = await startMockHub({ 'POST /api/profiles': (body) => ({ body }) }, { autoRegisterCleanup: t })
   const r = await runCliCaptured(
     [
@@ -31,7 +31,7 @@ test('profiles create --starters: writes array to body and prints JSON', { timeo
 })
 
 test('profiles update --starters: GET-merges while keeping runtime/nodeId/tags; [] clears explicitly', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-starters-')
+  const dir = useTempDir(t, 'helmx-cli-starters-')
   const existing = {
     id: 'worker',
     name: 'Worker',
@@ -80,7 +80,7 @@ test('profiles update --starters: GET-merges while keeping runtime/nodeId/tags; 
 })
 
 test('profiles --starters: invalid values reject locally before any HTTP calls', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-starters-')
+  const dir = useTempDir(t, 'helmx-cli-starters-')
   const hub = await startMockHub(
     {
       'GET /api/profiles/worker': () => ({ body: { id: 'worker' } }),

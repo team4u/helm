@@ -12,11 +12,11 @@ node scripts/herdr-smoke.mjs --timeout-ms 600000   # 放宽总超时（60000..18
 
 默认加载脚本同仓的 `packages/hub/dist/app.js`；可用 `HERDR_SMOKE_KERNEL_APP=/path/to/app.js` 指向其他编译产物（如另一 worktree 的 build）。
 
-退出码 0 = 全部验收项 PASS 且清理无失败；非 0 = 存在 FAIL（验收项失败或清理失败）。进度与 `PASS/FAIL` 逐项写 stderr；失败现场与日志保留在临时根。主干 `createHelm` 已注册默认停用的 `builtin:herdr`，脚本负责配置并启用；编译产物须与当前源码同步。
+退出码 0 = 全部验收项 PASS 且清理无失败；非 0 = 存在 FAIL（验收项失败或清理失败）。进度与 `PASS/FAIL` 逐项写 stderr；失败现场与日志保留在临时根。主干 `createHelmx` 已注册默认停用的 `builtin:herdr`，脚本负责配置并启用；编译产物须与当前源码同步。
 
 ## 验证内容（全部真实组件，零 mock / 零 skip）
 
-1. **真实编译产物**：`packages/hub/dist/app.js` 的 `createHelm`（未 build 即显式失败）。
+1. **真实编译产物**：`packages/hub/dist/app.js` 的 `createHelmx`（未 build 即显式失败）。
 2. **真实插件生命周期**：`plugins.setConfig('builtin:herdr', { session, socketPath, startupTimeoutMs: 30000 })` → `plugins.enable`。
 3. **真实 Profile API**：`kernel.profiles.save({ id: 'herdr-smoke-pi', runtime: { kind: 'herdr', agent: 'pi', args: [...] } })`。
 4. **真实 GLM 模型**：预检 `pi --list-models` 确认目标模型在列（凭据不可用则显式失败，绝不换默认模型），Profile args 传 `--provider magpie --model zhipu/glm-5.3 --thinking off -a --no-session`。
@@ -41,7 +41,7 @@ node scripts/herdr-smoke.mjs --timeout-ms 600000   # 放宽总超时（60000..18
 
 - 导入 `packages/plugins/dist/herdr/transport.js` 的 `createHerdrTransport`（生产实现）；
 - `createTracedTransport` 透明包装：仅按 `method` 计数 `agent.start` / `agent.prompt`，`call` 与其余方法完全透传，**绝不 mock 返回**；
-- 包装后的 transport 注入 `createHelm({ herdrTransport })`，脚本自身的 `session.snapshot` 每次调用带有限 `timeoutMs`（复用生产实现，无自制 raw socket 读取）。
+- 包装后的 transport 注入 `createHelmx({ herdrTransport })`，脚本自身的 `session.snapshot` 每次调用带有限 `timeoutMs`（复用生产实现，无自制 raw socket 读取）。
 
 ## 隔离与安全边界
 

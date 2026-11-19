@@ -25,19 +25,19 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness } from '@earendil-works/pi-durable'
 import { createModels, createProvider } from '@earendil-works/pi-ai/models'
 import { createFauxCore, fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/runtime.js'
 
 type ThinkingSummary = ConversationSummary & { thinkingLevelOverride?: string }
 
 let savedModel: string | undefined
 before(() => {
-  savedModel = process.env['HELM_MODEL']
-  delete process.env['HELM_MODEL']
+  savedModel = process.env['HELMX_MODEL']
+  delete process.env['HELMX_MODEL']
 })
 after(() => {
-  if (savedModel === undefined) delete process.env['HELM_MODEL']
-  else process.env['HELM_MODEL'] = savedModel
+  if (savedModel === undefined) delete process.env['HELMX_MODEL']
+  else process.env['HELMX_MODEL'] = savedModel
 })
 
 /**
@@ -119,7 +119,7 @@ async function open(dir: string): Promise<Fixture> {
 }
 
 async function fixture(t: TestContext): Promise<Fixture> {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-thinking-clamp-'))
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-thinking-clamp-'))
   const env = await open(dir)
   t.after(async () => {
     await env.kernel.close()

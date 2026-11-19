@@ -1,5 +1,5 @@
 /**
- * @helm/plugin-client 标准共享 hooks 测试（真实 React SSR 渲染 + HelmExternalStore）：
+ * @helmx/plugin-client 标准共享 hooks 测试（真实 React SSR 渲染 + HelmxExternalStore）：
  * - useConversations：返回宿主 store.conversations 同一引用（SSE 实时同步数据源）；
  * - useConversation：详情缺失且无失败时自动加载（loadConversationDetail 被真实调用）、
  *   已加载 / 加载失败 / undefined 三态不发请求；pendingAsks 按会话过滤；
@@ -13,7 +13,7 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
-import type { AskSpec, ConversationSummary, LocalizedText } from '@helm/protocol'
+import type { AskSpec, ConversationSummary, LocalizedText } from '@helmx/protocol'
 import { createPluginClientHostPort } from '../src/lib/plugin-client-host.js'
 import { makeTestStore, type TestStoreOverrides } from './helpers/store.js'
 import {
@@ -21,9 +21,9 @@ import {
   PluginClientContext,
   useConversation,
   useConversations,
-} from '@helm/plugin-client'
-import type { HelmStoreValue } from '../src/lib/types.js'
-import type { HelmExternalStore, HelmStoreActions } from '../src/lib/helm-store.js'
+} from '@helmx/plugin-client'
+import type { HelmxStoreValue } from '../src/lib/types.js'
+import type { HelmxExternalStore, HelmxStoreActions } from '../src/lib/helmx-store.js'
 import { getSessionDocState, subscribeSessionDoc } from '../src/lib/session-docs.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
@@ -72,13 +72,13 @@ interface LoadCall {
 }
 
 /** 构造真实 external store（状态覆写沿用历史字段名）。 */
-function makeStore(overrides: TestStoreOverrides = {}): HelmExternalStore {
+function makeStore(overrides: TestStoreOverrides = {}): HelmxExternalStore {
   return makeTestStore(overrides)
 }
 
 /** 在 actions 包上替换具名动作（挂载前替换；SDK hooks 的调用契约断言需要捕获入参）。 */
-function spyAction<K extends keyof HelmStoreActions>(store: HelmExternalStore, key: K, impl: HelmStoreActions[K]): void {
-  ;(store.actions as unknown as Record<K, HelmStoreActions[K]>)[key] = impl
+function spyAction<K extends keyof HelmxStoreActions>(store: HelmxExternalStore, key: K, impl: HelmxStoreActions[K]): void {
+  ;(store.actions as unknown as Record<K, HelmxStoreActions[K]>)[key] = impl
 }
 
 const stubCtx = {
@@ -100,7 +100,7 @@ const stubCtx = {
 }
 
 /** 在 PluginClientContext.Provider 内渲染消费 hooks 的探针组件，回传渲染结果 JSON。 */
-function renderProbe<T>(store: HelmExternalStore, use: () => T): { html: string; result: T | undefined } {
+function renderProbe<T>(store: HelmxExternalStore, use: () => T): { html: string; result: T | undefined } {
   let captured: T | undefined
   function Probe(): React.ReactNode {
     captured = use()
@@ -113,7 +113,7 @@ function renderProbe<T>(store: HelmExternalStore, use: () => T): { html: string;
 }
 
 /** 在 Provider 内真实挂载（createRoot + act，effects 真实执行）并捕获 hooks 结果。 */
-function mountProbe<T>(store: HelmExternalStore, use: () => T): { result: () => T | undefined; unmount: () => void } {
+function mountProbe<T>(store: HelmxExternalStore, use: () => T): { result: () => T | undefined; unmount: () => void } {
   let captured: T | undefined
   function Probe(): React.ReactNode {
     captured = use()

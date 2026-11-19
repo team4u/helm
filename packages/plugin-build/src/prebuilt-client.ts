@@ -2,14 +2,14 @@
  * Prebuilt client bundle builder (`buildPluginClientBundleDir`):
  * compiles a plugin's client entrypoint modules into a static, self-contained `dist-client/`
  * directory (entry `.mjs` + `.mjs.gz`, split chunks `.js` + `.js.gz`, and `manifest.json`)
- * sharing the exact `__helm_shared_*` and `__helm_import_chunk` ABI of `compilePluginClientModule`.
+ * sharing the exact `__helmx_shared_*` and `__helmx_import_chunk` ABI of `compilePluginClientModule`.
  */
 import { cpSync, mkdtempSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { gzipSync } from 'node:zlib';
 import {
-  HelmError,
+  HelmxError,
   PREBUILT_CLIENT_MANIFEST_FILE,
   PREBUILT_CLIENT_MANIFEST_VERSION,
   assertModuleRefShape,
@@ -19,8 +19,8 @@ import {
   type BuildPluginClientBundleDirResult,
   type PrebuiltClientManifest,
   type PrebuiltClientModuleEntry,
-} from '@helm/protocol';
-import { atomicWriteFileSync } from '@helm/env-io';
+} from '@helmx/protocol';
+import { atomicWriteFileSync } from '@helmx/env-io';
 import {
   compilePluginClientModule,
   realPathOrThrow,
@@ -61,11 +61,11 @@ export async function buildPluginClientBundleDir(
 ): Promise<BuildPluginClientBundleDirResult> {
   const { pluginId, clientRoot, outDir, npmRoots = [] } = options;
   if (typeof pluginId !== 'string' || pluginId.length === 0) {
-    throw new HelmError('invalid_plugin_definition', 'buildPluginClientBundleDir requires a non-empty pluginId', 400);
+    throw new HelmxError('invalid_plugin_definition', 'buildPluginClientBundleDir requires a non-empty pluginId', 400);
   }
   const rootReal = realPathOrThrow(clientRoot, `plugin ${pluginId} clientRoot is missing or inaccessible: ${clientRoot}`);
   if (!statSync(rootReal).isDirectory()) {
-    throw new HelmError('client_root_invalid', `plugin ${pluginId} clientRoot is not a directory: ${clientRoot}`, 400, {
+    throw new HelmxError('client_root_invalid', `plugin ${pluginId} clientRoot is not a directory: ${clientRoot}`, 400, {
       pluginId,
       clientRoot,
     });
@@ -74,7 +74,7 @@ export async function buildPluginClientBundleDir(
   let targetModules: string[];
   if (options.modules !== undefined) {
     if (options.modules.length === 0) {
-      throw new HelmError('invalid_client_module', `plugin ${pluginId} buildPluginClientBundleDir modules list cannot be empty`, 400, {
+      throw new HelmxError('invalid_client_module', `plugin ${pluginId} buildPluginClientBundleDir modules list cannot be empty`, 400, {
         pluginId,
       });
     }
@@ -90,7 +90,7 @@ export async function buildPluginClientBundleDir(
   } else {
     targetModules = discoverClientModules(rootReal);
     if (targetModules.length === 0) {
-      throw new HelmError(
+      throw new HelmxError(
         'client_root_invalid',
         `plugin ${pluginId} has no .ts/.tsx entry modules in clientRoot: ${clientRoot}`,
         400,
@@ -99,7 +99,7 @@ export async function buildPluginClientBundleDir(
     }
   }
 
-  const workDir = mkdtempSync(join(tmpdir(), 'helm-prebuilt-build-'));
+  const workDir = mkdtempSync(join(tmpdir(), 'helmx-prebuilt-build-'));
   const cacheDir = join(workDir, 'cache');
   const stagingOut = join(workDir, 'out');
   mkdirSync(stagingOut, { recursive: true });

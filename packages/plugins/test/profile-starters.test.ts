@@ -14,15 +14,15 @@ import { readFileSync } from 'node:fs'
 import { ProfileService } from '../../kernel/src/services/profiles-skills.js'
 import { AuthService } from '../../kernel/src/services/auth.js'
 import { createHubHandler, type KernelRuntimeLike } from '../../kernel/src/http/index.js'
-import { PROFILE_STARTERS_MAX_ITEMS } from '@helm/protocol'
+import { PROFILE_STARTERS_MAX_ITEMS } from '@helmx/protocol'
 import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { createProfilePlugin } from '../src/profile.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, makeTempDir } from './helpers/plugin-test-env.js'
 
-const freshDir = () => makeTempDir('helm-starters-')
+const freshDir = () => makeTempDir('helmx-starters-')
 
 test('profiles starters：合法输入持久化、label trim、prompt 保留原文、空数组显式保留', { timeout: 60_000 }, async () => {
   const dataDir = await freshDir()

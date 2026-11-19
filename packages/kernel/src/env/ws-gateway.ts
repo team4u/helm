@@ -3,7 +3,7 @@ import type { Server as HttpServer, IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, type WebSocket } from 'ws'
 import { createBirpc } from 'birpc'
-import type { NodeHeartbeatInput, NodeRegisterInput, NodeRegisterResult } from '@helm/protocol'
+import type { NodeHeartbeatInput, NodeRegisterInput, NodeRegisterResult } from '@helmx/protocol'
 import type { HubConnectionLocal, NodeRegistry, NodeSideFunctions } from './registry.js'
 
 export interface NodeWsGatewayOptions {
@@ -21,7 +21,7 @@ export function attachNodeWsGateway(server: HttpServer, options: NodeWsGatewayOp
     registerTimeoutMs = 10_000,
     // Never swallow single-send/dispatch errors silently (honest discipline): defaults to console.error;
     // only terminates the connection when the socket is already non-OPEN (send failure caused by disconnect).
-    log = (message: string) => console.error(`[helm] node gateway: ${message}`),
+    log = (message: string) => console.error(`[helmx] node gateway: ${message}`),
   } = options
   const wss = new WebSocketServer({ noServer: true })
   let closing: Promise<void> | undefined

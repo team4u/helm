@@ -4,9 +4,9 @@
  * Pure Web Request API with no Node builtin dependencies. Exceeding the limit must cancel the reader
  * (otherwise the connection hangs) and explicitly throw 413; never silently truncate and pretend success.
  */
-import { HelmError } from './error.js'
+import { HelmxError } from './error.js'
 
-export class BodyError extends HelmError {
+export class BodyError extends HelmxError {
   constructor(code: string, message: string, status = 400) {
     super(code, message, status)
   }

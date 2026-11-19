@@ -1,10 +1,10 @@
 /**
- * Tests for `helm-node doctor`, health snapshots, and hard stdio drain timeout protection:
+ * Tests for `helmx-node doctor`, health snapshots, and hard stdio drain timeout protection:
  * - `collectNodeHealth`: valid base metrics and disk fields, with homedir fallback when target dir is missing;
  * - `createNodeDaemon`: `register` and `heartbeat` include real health snapshots;
  * - `NodeEnvRpcServer`: when a detached descendant continuously writes to inherited stdout,
  *   `envAbortExec` / timeout forces `execOnce` to settle within `abortDrainGraceMs` so `dispose()` never hangs;
- * - `helm-node doctor [--json]`: unbound identity / 0644 permissions / root warning / read-only
+ * - `helmx-node doctor [--json]`: unbound identity / 0644 permissions / root warning / read-only
  *   WS Hub probe `rttMs` and zero secret leakage.
  */
 import test from 'node:test';
@@ -14,8 +14,8 @@ import path from 'node:path';
 import http from 'node:http';
 import net from 'node:net';
 import process from 'node:process';
-import { sleep as delay } from '@helm/test-kit';
-import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helm/test-kit/node';
+import { sleep as delay } from '@helmx/test-kit';
+import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helmx/test-kit/node';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createBirpc } from 'birpc';
 import type {
@@ -23,7 +23,7 @@ import type {
   NodeHeartbeatInput,
   NodeRegisterInput,
   NodeRegisterResult,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import { createNodeEnvRpcServer } from '../src/daemon/env-rpc-server.js';
 import { collectNodeHealth, createNodeDaemon, writeNodeIdentity } from '../src/daemon/index.js';
 import { runNodeDoctor } from '../src/daemon/doctor.js';
@@ -60,7 +60,7 @@ test('collectNodeHealth returns valid base metrics and disk space fields', { tim
     assert.ok(snapshot.diskFreeBytes <= snapshot.diskTotalBytes);
   }
   // Target directory exists: collect from its mount point
-  const dir = await tempDir('helm-node-health-');
+  const dir = await tempDir('helmx-node-health-');
   try {
     const targeted = await collectNodeHealth(dir);
     assert.ok(targeted.collectedAt > 0);
@@ -156,7 +156,7 @@ async function startDoctorHub(expectedToken: string): Promise<DoctorHubFixture> 
 }
 
 test('createNodeDaemon: register and heartbeat include real health snapshots', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-daemon-health-');
+  const dir = await tempDir('helmx-node-daemon-health-');
   const token = 'health-node:secret-1';
   const hub = await startDoctorHub(token);
   const daemon = await createNodeDaemon({
@@ -208,7 +208,7 @@ const ORPHAN_PROGRAM = [
 ].join(' ');
 
 test('envAbortExec 500ms drain guard does not hang when grandchild holds stdout open', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-drain-abort-');
+  const dir = await tempDir('helmx-node-drain-abort-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir, abortDrainGraceMs: 200 });
   try {
     const start = Date.now();
@@ -240,7 +240,7 @@ test('envAbortExec 500ms drain guard does not hang when grandchild holds stdout 
 });
 
 test('command timeout drain guard forces timeout settlement without hanging dispose', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-drain-timeout-');
+  const dir = await tempDir('helmx-node-drain-timeout-');
   const server = createNodeEnvRpcServer({ defaultCwd: dir, abortDrainGraceMs: 200 });
   try {
     const start = Date.now();
@@ -266,7 +266,7 @@ test('command timeout drain guard forces timeout settlement without hanging disp
 });
 
 // ---------------------------------------------------------------------------
-// 4. helm-node doctor [--json]
+// 4. helmx-node doctor [--json]
 // ---------------------------------------------------------------------------
 
 interface Captured {
@@ -279,7 +279,7 @@ async function runCli(argv: string[], env: NodeJS.ProcessEnv = {}): Promise<Capt
   let out = '';
   let err = '';
   const code = await runNodeCli(argv, {
-    // Strip host-managed HELM_* variables so doctor's Hub target (HELM_HUB_URL overrides
+    // Strip host-managed HELMX_* variables so doctor's Hub target (HELMX_HUB_URL overrides
     // identity file) and token come strictly from the test fixture.
     env: { ...sanitizedHostEnv(), ...env },
     out: (t) => (out += t),
@@ -289,7 +289,7 @@ async function runCli(argv: string[], env: NodeJS.ProcessEnv = {}): Promise<Capt
 }
 
 test('doctor reports ok=false with exit code 1 when identity is unbound', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-doctor-none-');
+  const dir = await tempDir('helmx-node-doctor-none-');
   try {
     // Point Herdr IPC probe to an isolated path instead of real ~/.config/herdr
     const result = await runCli(['doctor', '--data-dir', dir, '--json'], { HERDR_SOCKET_PATH: path.join(dir, 'no.sock') });
@@ -306,7 +306,7 @@ test('doctor reports ok=false with exit code 1 when identity is unbound', { time
 
 test('doctor reports error when node.json has 0644 permissions (exit code 1; skipped on Windows without POSIX modes)', { timeout: 60_000 }, async () => {
   if (process.platform === 'win32') return; // NTFS uses ACLs rather than stat.mode 0644; production check exempts win32
-  const dir = await tempDir('helm-node-doctor-mode-');
+  const dir = await tempDir('helmx-node-doctor-mode-');
   try {
     await writeNodeIdentity(dir, { nodeId: 'mode-node', token: 'mode-node:secret-1', hubUrl: 'http://127.0.0.1:3202' });
     await fs.chmod(path.join(dir, 'node.json'), 0o644);
@@ -327,7 +327,7 @@ test('doctor reports error when node.json has 0644 permissions (exit code 1; ski
 });
 
 test('doctor warns on root privilege while remaining ok=true (exit code 0) when identity and Hub pass', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-doctor-root-');
+  const dir = await tempDir('helmx-node-doctor-root-');
   const token = 'doctor-ok-node:secret-1';
   const hub = await startDoctorHub(token);
   try {
@@ -346,7 +346,7 @@ test('doctor warns on root privilege while remaining ok=true (exit code 0) when 
 
     const result = await runCli(
       ['doctor', '--data-dir', dir, '--json'],
-      { HERDR_SOCKET_PATH: path.join(dir, 'no.sock'), HELM_DOCTOR_TEST: '1' },
+      { HERDR_SOCKET_PATH: path.join(dir, 'no.sock'), HELMX_DOCTOR_TEST: '1' },
     );
     // CLI cannot mock checkPrivilege: hub check uses a real WS probe with valid identity and Hub.
     // This verifies the CLI exit code matches overall ok even with warnings.
@@ -358,7 +358,7 @@ test('doctor warns on root privilege while remaining ok=true (exit code 0) when 
 });
 
 test('doctor performs read-only WS Hub probe (zero register calls, zero eviction) and never leaks token', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-node-doctor-hub-');
+  const dir = await tempDir('helmx-node-doctor-hub-');
   const token = 'doctor-hub-node:secret-1';
   // Same nodeId is online: sending register would evict it, so read-only probe must never send register.
   const hub = await startDoctorHub(token);
@@ -396,7 +396,7 @@ test('doctor performs read-only WS Hub probe (zero register calls, zero eviction
 });
 
 test('doctor probe does not disrupt an online daemon with the same nodeId', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-node-doctor-live-');
+  const dir = await tempDir('helmx-node-doctor-live-');
   const token = 'doctor-live-node:secret-1';
   const hub = await startDoctorHub(token);
   t.after(async () => {
@@ -433,7 +433,7 @@ test('doctor probe does not disrupt an online daemon with the same nodeId', { ti
 });
 
 test('doctor reports hub error truthfully when Hub is unreachable', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-doctor-dead-');
+  const dir = await tempDir('helmx-node-doctor-dead-');
   try {
     // Nothing listens on port 1: handshake fails immediately with connection refused
     await writeNodeIdentity(dir, { nodeId: 'doctor-dead-node', token: 'doctor-dead-node:secret-1', hubUrl: 'http://127.0.0.1:1' });
@@ -452,7 +452,7 @@ test('doctor reports hub error truthfully when Hub is unreachable', { timeout: 6
 });
 
 test('doctor reports ok when herdr_ipc is reachable and info when unreachable', { timeout: 60_000 }, async () => {
-  const dir = await tempDir('helm-node-doctor-ipc-');
+  const dir = await tempDir('helmx-node-doctor-ipc-');
   const token = 'doctor-ipc-node:secret-1';
   const hub = await startDoctorHub(token);
   const sockets = new Set<net.Socket>();

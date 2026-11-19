@@ -2,7 +2,7 @@
  * SubagentWorkflow 引擎出口。
  *
  * 自 @tintinweb/pi-subagents v0.23.1 (MIT) 移植（runtime/worker-source/meta/
- * journal/json-schema/progress），helm 适配：action() 原语 + 统一前缀重放账本
+ * journal/json-schema/progress），helmx 适配：action() 原语 + 统一前缀重放账本
  * （started/终态 fsync 与 uncertain 恢复语义）+ WorkflowService 宿主服务。
  */
 

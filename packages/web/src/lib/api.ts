@@ -43,7 +43,7 @@ import type {
   ConversationWithdrawRequest,
   ConversationWithdrawResponse,
   WhenBusy,
-} from '@helm/protocol/browser'
+} from '@helmx/protocol/browser'
 
 export interface SubmitInputPayload {
   text: string
@@ -55,7 +55,7 @@ export interface SubmitInputPayload {
   replaceFromEntryId?: number
 }
 
-const TOKEN_STORAGE_KEY = 'helm:token'
+const TOKEN_STORAGE_KEY = 'helmx:token'
 let memoryToken: string | null | undefined
 
 export function getStoredToken(): string | null {
@@ -127,7 +127,7 @@ export async function apiRequest<T>(
     body: hasBody ? JSON.stringify(body) : undefined,
     signal,
   })
-  if (res.status === 401 && typeof window !== 'undefined' && !path.startsWith('/api/auth/')) window.dispatchEvent(new Event('helm:unauthorized'))
+  if (res.status === 401 && typeof window !== 'undefined' && !path.startsWith('/api/auth/')) window.dispatchEvent(new Event('helmx:unauthorized'))
   if (!res.ok) throw await parseErrorResponse(res)
   return (await res.json()) as T
 }

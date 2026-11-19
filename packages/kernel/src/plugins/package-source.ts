@@ -10,7 +10,7 @@
  * Rejected: `file://`, plaintext `http://`, `builtin:` prefixes, empty strings, and bare relative names.
  */
 import { isAbsolute, resolve } from 'node:path';
-import { HelmError, type PluginPackageSource } from '@helm/protocol';
+import { HelmxError, type PluginPackageSource } from '@helmx/protocol';
 
 /** Minimal npm specifier check: non-empty with no whitespace (semver parsing belongs to npm). */
 const NPM_SPEC_PATTERN = /^\S+$/;
@@ -20,8 +20,8 @@ const NPM_SPEC_PATTERN = /^\S+$/;
  * accepts `https://host/path`, `user@host:path` SCP, or `host/path` shorthand.
  */
 function assertGitRepo(repo: string, raw: string): void {
-  const fail = (detail: string): HelmError =>
-    new HelmError('validation_error', `Invalid git repository address (${detail}): ${repo}`, 400, { raw, repo });
+  const fail = (detail: string): HelmxError =>
+    new HelmxError('validation_error', `Invalid git repository address (${detail}): ${repo}`, 400, { raw, repo });
   if (repo.length === 0) throw fail('empty address');
   if (repo.includes('\\') || repo.includes('\0')) throw fail('contains backslash or NUL');
   if (/\s/.test(repo)) throw fail('contains whitespace');
@@ -71,13 +71,13 @@ function splitGitTail(rest: string, raw: string): { repo: string; ref?: string; 
   let head = hashIndex >= 0 ? rest.slice(0, hashIndex) : rest;
   if (subdirectory !== undefined) {
     if (subdirectory.length === 0) {
-      throw new HelmError('validation_error', `Git source subdirectory is empty (expected path after '#'): ${raw}`, 400, { raw });
+      throw new HelmxError('validation_error', `Git source subdirectory is empty (expected path after '#'): ${raw}`, 400, { raw });
     }
     if (subdirectory.includes('#')) {
-      throw new HelmError('validation_error', `Git source contains multiple '#' characters (only one subdirectory fragment is allowed): ${raw}`, 400, { raw });
+      throw new HelmxError('validation_error', `Git source contains multiple '#' characters (only one subdirectory fragment is allowed): ${raw}`, 400, { raw });
     }
     if (subdirectory.startsWith('/') || subdirectory.includes('..') || subdirectory.includes('\\')) {
-      throw new HelmError('validation_error', `Git source subdirectory must be a relative path inside the repository: ${raw}`, 400, { raw });
+      throw new HelmxError('validation_error', `Git source subdirectory must be a relative path inside the repository: ${raw}`, 400, { raw });
     }
   }
   let ref: string | undefined;
@@ -89,15 +89,15 @@ function splitGitTail(rest: string, raw: string): { repo: string; ref?: string; 
     ref = head.slice(atIndex + 1);
     head = head.slice(0, atIndex);
     if (ref.length === 0) {
-      throw new HelmError('validation_error', `Git source ref is empty (expected branch/tag/commit after '@'): ${raw}`, 400, { raw });
+      throw new HelmxError('validation_error', `Git source ref is empty (expected branch/tag/commit after '@'): ${raw}`, 400, { raw });
     }
     if (ref.includes('#')) {
-      throw new HelmError('validation_error', `Invalid git source ref (cannot contain '#'): ${raw}`, 400, { raw });
+      throw new HelmxError('validation_error', `Invalid git source ref (cannot contain '#'): ${raw}`, 400, { raw });
     }
   }
   const repo = head;
   if (repo.length === 0) {
-    throw new HelmError('validation_error', `Git source is missing repository address: ${raw}`, 400, { raw });
+    throw new HelmxError('validation_error', `Git source is missing repository address: ${raw}`, 400, { raw });
   }
   return { repo, ref, subdirectory };
 }
@@ -105,16 +105,16 @@ function splitGitTail(rest: string, raw: string): { repo: string; ref?: string; 
 /** Parses a plugin package `source` string (`cwd` resolves relative local paths). */
 export function parsePluginSource(raw: string, cwd: string): PluginPackageSource {
   if (typeof raw !== 'string' || raw.trim().length === 0) {
-    throw new HelmError('validation_error', 'Plugin package source must be a non-empty string', 400);
+    throw new HelmxError('validation_error', 'Plugin package source must be a non-empty string', 400);
   }
   if (raw !== raw.trim()) {
-    throw new HelmError('validation_error', `Plugin package source cannot have leading or trailing whitespace: ${raw}`, 400, { raw });
+    throw new HelmxError('validation_error', `Plugin package source cannot have leading or trailing whitespace: ${raw}`, 400, { raw });
   }
   if (raw.startsWith('builtin:') || raw.startsWith('builtin%3A')) {
-    throw new HelmError('validation_error', `Plugin package source cannot use builtin: prefix (built-in plugins are not package-managed): ${raw}`, 400, { raw });
+    throw new HelmxError('validation_error', `Plugin package source cannot use builtin: prefix (built-in plugins are not package-managed): ${raw}`, 400, { raw });
   }
   if (raw.startsWith('file://')) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `file:// URLs are not supported (pass an absolute path or ./ ../ relative path directly): ${raw}`,
       400,
@@ -124,15 +124,15 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
   if (raw.startsWith('npm:')) {
     const spec = raw.slice('npm:'.length);
     if (!NPM_SPEC_PATTERN.test(spec)) {
-      throw new HelmError('validation_error', `Invalid npm specifier: ${spec} (expected npm:<spec>)`, 400, { raw });
+      throw new HelmxError('validation_error', `Invalid npm specifier: ${spec} (expected npm:<spec>)`, 400, { raw });
     }
     if (spec.startsWith('builtin:')) {
-      throw new HelmError('validation_error', `npm specifier cannot start with builtin: (${spec})`, 400, { raw });
+      throw new HelmxError('validation_error', `npm specifier cannot start with builtin: (${spec})`, 400, { raw });
     }
     return { kind: 'npm', raw, spec };
   }
   if (raw.startsWith('git+')) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `git+ URL scheme is not supported (use git:<repo>[@<ref>] or https Git URL): ${raw}`,
       400,
@@ -155,13 +155,13 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
     if (fragment !== undefined) {
       const parts = fragment.split('#');
       if (parts.length > 2) {
-        throw new HelmError('validation_error', `Git URL has too many '#' fragments (at most ref and subdirectory): ${raw}`, 400, { raw });
+        throw new HelmxError('validation_error', `Git URL has too many '#' fragments (at most ref and subdirectory): ${raw}`, 400, { raw });
       }
       if (parts.length === 2) {
         const parsedRef = parts[0]!;
         subdirectory = parts[1];
         if (parsedRef.length === 0) {
-          throw new HelmError('validation_error', `Git URL ref is empty: ${raw}`, 400, { raw });
+          throw new HelmxError('validation_error', `Git URL ref is empty: ${raw}`, 400, { raw });
         }
         ref = parsedRef;
       } else {
@@ -171,7 +171,7 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
       }
       if (subdirectory !== undefined) {
         if (subdirectory.length === 0 || subdirectory.startsWith('/') || subdirectory.includes('..') || subdirectory.includes('\\')) {
-          throw new HelmError('validation_error', `Git URL subdirectory must be a relative path inside the repository: ${raw}`, 400, { raw });
+          throw new HelmxError('validation_error', `Git URL subdirectory must be a relative path inside the repository: ${raw}`, 400, { raw });
         }
       }
     }
@@ -181,22 +181,22 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
       ref = repo.slice(atOutsideUser + 1);
       repo = repo.slice(0, atOutsideUser);
       if (ref.length === 0 || ref.includes('/')) {
-        throw new HelmError('validation_error', `Invalid trailing @ref in git URL: ${raw}`, 400, { raw });
+        throw new HelmxError('validation_error', `Invalid trailing @ref in git URL: ${raw}`, 400, { raw });
       }
     }
     let parsedHost: URL;
     try {
       parsedHost = new URL(repo);
     } catch {
-      throw new HelmError('validation_error', `Invalid git URL: ${raw}`, 400, { raw });
+      throw new HelmxError('validation_error', `Invalid git URL: ${raw}`, 400, { raw });
     }
     if (parsedHost.hostname === '' || /^\s+$/.test(parsedHost.hostname)) {
-      throw new HelmError('validation_error', `Git URL is missing hostname: ${raw}`, 400, { raw });
+      throw new HelmxError('validation_error', `Git URL is missing hostname: ${raw}`, 400, { raw });
     }
     return { kind: 'git', raw, repo, ref, subdirectory };
   }
   if (/^http:\/\//i.test(raw)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `Plaintext http:// git URLs are not supported (use https or git:): ${raw}`,
       400,
@@ -204,7 +204,7 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
     );
   }
   if (/^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(raw) || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `Unsupported plugin package protocol (expected npm:, git:, https Git URL, or local path): ${raw}`,
       400,
@@ -215,11 +215,11 @@ export function parsePluginSource(raw: string, cwd: string): PluginPackageSource
   if (isAbsolute(raw) || raw.startsWith('./') || raw.startsWith('../') || /^[a-zA-Z]:[\\/]/.test(raw) || raw.startsWith('\\\\')) {
     const path = resolve(cwd, raw);
     if (path.includes('\0')) {
-      throw new HelmError('validation_error', `Local path contains illegal character: ${raw}`, 400, { raw });
+      throw new HelmxError('validation_error', `Local path contains illegal character: ${raw}`, 400, { raw });
     }
     return { kind: 'local', raw, path };
   }
-  throw new HelmError(
+  throw new HelmxError(
     'validation_error',
     `Unrecognized plugin package source: ${raw} (expected npm:<spec>, git:<repo>[@<ref>], https Git URL, or local absolute/relative path)`,
     400,

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import type { ConversationSummary, Profile } from '@helm/protocol/browser'
+import type { ConversationSummary, Profile } from '@helmx/protocol/browser'
 import { assetsApi, conversationsApi } from '../lib/api.js'
 import {
   buildSlashMenuItems,
@@ -11,7 +11,7 @@ import {
 } from '../lib/commands-model.js'
 import { formatBytes } from '../lib/format.js'
 import { errorText } from '../lib/error-text.js'
-import { HelmIcon, Select, type SelectOption } from '@helm/plugin-client'
+import { HelmxIcon, Select, type SelectOption } from '@helmx/plugin-client'
 import { isSameResolvedTarget, type ResolvedTarget } from '../lib/types.js'
 import {
   useConversations,
@@ -359,7 +359,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
   const envError = standbyEnvError(draft, t)
 
   return (
-    <div className="helm-pane agent-standby-pane" data-agent={profileId}>
+    <div className="helmx-pane agent-standby-pane" data-agent={profileId}>
       <header className="pane-topbar conversation-topbar">
         <div className="pane-title-group">
           <span className="pane-title">{label}</span>
@@ -379,7 +379,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
       <div className="agent-standby-body">
         {profilesLoadError !== undefined ? (
           <div className="timeline-empty-state" role="alert">
-            <HelmIcon name="alert-triangle" size={20} />
+            <HelmxIcon name="alert-triangle" size={20} />
             <span>{t('composer.standby.profileLoadFailed', { error: profilesLoadError })}</span>
             <button type="button" className="btn btn-sm" onClick={() => void refreshAssets()}>
               {t('common.retry')}
@@ -387,12 +387,12 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
           </div>
         ) : !assetsLoaded ? (
           <div className="timeline-empty-state" role="status">
-            <HelmIcon name="loader" size={20} className="spin-slow" />
+            <HelmxIcon name="loader" size={20} className="spin-slow" />
             <span>{t('composer.standby.loadingProfile')}</span>
           </div>
         ) : profile === undefined ? (
           <div className="timeline-empty-state" role="alert">
-            <HelmIcon name="circle-slash" size={20} />
+            <HelmxIcon name="circle-slash" size={20} />
             <span>{t('composer.standby.profileMissing', { profileId })}</span>
             <button type="button" className="btn btn-sm" onClick={() => openTarget({ kind: 'profiles' })}>
               {t('composer.standby.goToProfiles')}
@@ -400,7 +400,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
           </div>
         ) : !humanSelectable ? (
           <div className="timeline-empty-state" role="alert">
-            <HelmIcon name="lock" size={20} />
+            <HelmxIcon name="lock" size={20} />
             <span>{t('composer.standby.notHumanSelectable')}</span>
           </div>
         ) : (
@@ -420,7 +420,7 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
                     disabled={draft.sending}
                     onClick={() => applyStarter(starter.prompt)}
                   >
-                    <HelmIcon name="corner-down-right" size={11} />
+                    <HelmxIcon name="corner-down-right" size={11} />
                     <span className="timeline-starter-label">{starter.label}</span>
                   </button>
                 ))}
@@ -628,7 +628,7 @@ function StandbyComposer({
         <StandbyEnvBar draftKey={draftKey} draft={draft} profile={profile} disabled={configLocked} onResetToDefault={onResetEnvToDefault} />
         {anchored ? (
           <div className="agent-standby-anchored callout" role="status">
-            <HelmIcon name="lock" size={12} />
+            <HelmxIcon name="lock" size={12} />
             <span className="agent-standby-anchored-text">
               {t('composer.standby.anchoredNotice', { id: draft.conversationId! })}
             </span>
@@ -678,7 +678,7 @@ function StandbyComposer({
             <div className="composer-attachments">
               {draft.localFiles.map((att) => (
                 <span key={att.key} className="attachment-chip">
-                  <HelmIcon name="file" size={11} />
+                  <HelmxIcon name="file" size={11} />
                   <span>{att.name}</span>
                   <span className="mono tabular-nums">{formatBytes(att.size)}</span>
                   <span className="badge badge-neutral agent-standby-attachment-state">{t('composer.standby.attachmentPending')}</span>
@@ -691,14 +691,14 @@ function StandbyComposer({
                       disabled={busy}
                       onClick={() => removeLocalFile(att.key)}
                     >
-                      <HelmIcon name="x" size={10} />
+                      <HelmxIcon name="x" size={10} />
                     </button>
                   </Tooltip>
                 </span>
               ))}
               {draft.uploaded.map((att) => (
                 <span key={att.artifactId} className="attachment-chip">
-                  <HelmIcon name="paperclip" size={11} />
+                  <HelmxIcon name="paperclip" size={11} />
                   <span>{att.name}</span>
                   <span className="mono tabular-nums">{formatBytes(att.size)}</span>
                   <span className="badge badge-ok agent-standby-attachment-state">{t('composer.standby.attachmentUploaded')}</span>
@@ -711,7 +711,7 @@ function StandbyComposer({
                       disabled={busy}
                       onClick={() => removeUploaded(att.artifactId)}
                     >
-                      <HelmIcon name="x" size={10} />
+                      <HelmxIcon name="x" size={10} />
                     </button>
                   </Tooltip>
                 </span>
@@ -764,7 +764,7 @@ function StandbyComposer({
                   disabled={busy}
                   onClick={() => fileInputRef.current?.click()}
                 >
-                  <HelmIcon name="plus" size={19} />
+                  <HelmxIcon name="plus" size={19} />
                 </button>
               </Tooltip>
               <StandbyModelPicker
@@ -798,7 +798,7 @@ function StandbyComposer({
                 title={envError !== null ? envError : t('composer.standby.sendTitle')}
                 aria-label={busy ? t('composer.standby.sendingAria') : t('composer.sendControls.send')}
               >
-                <HelmIcon name={busy ? 'loader' : 'arrow-up'} size={18} className={busy ? 'spin-slow' : undefined} />
+                <HelmxIcon name={busy ? 'loader' : 'arrow-up'} size={18} className={busy ? 'spin-slow' : undefined} />
               </button>
             </span>
           </div>
@@ -935,7 +935,7 @@ function StandbyEnvBar({ draftKey, draft, profile, disabled, onResetToDefault }:
   if (!draft.envCustomized) {
     return (
       <div className="composer-env-bar agent-standby-env-bar">
-        <HelmIcon name="monitor" size={12} />
+        <HelmxIcon name="monitor" size={12} />
         <span className="agent-standby-env-hint">
           {t('composer.standby.envFollowsProfile', {
             node: profile.nodeId !== undefined && profile.nodeId !== '' ? t('composer.standby.envSuffix', { value: profile.nodeId }) : '',
@@ -966,7 +966,7 @@ function StandbyEnvBar({ draftKey, draft, profile, disabled, onResetToDefault }:
         />
       </span>
       <span className="composer-env-item composer-env-cwd-wrap">
-        <HelmIcon name="folder" size={12} className="composer-env-cwd-icon" />
+        <HelmxIcon name="folder" size={12} className="composer-env-cwd-icon" />
         <input
           className="input mono composer-env-cwd-input"
           aria-label={t('composer.standby.envCwdAria')}

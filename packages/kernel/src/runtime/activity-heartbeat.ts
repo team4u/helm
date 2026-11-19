@@ -21,7 +21,7 @@
 import { mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import process from 'node:process';
-import { HUB_ACTIVITY_FILENAME, type HubActivityCounts, type HubActivityFile } from '@helm/protocol';
+import { HUB_ACTIVITY_FILENAME, type HubActivityCounts, type HubActivityFile } from '@helmx/protocol';
 
 /** Parse the start-time field (22) out of a `/proc/<pid>/stat` line (`comm` may contain spaces). */
 function parseProcStartTime(statContent: string): number | null {

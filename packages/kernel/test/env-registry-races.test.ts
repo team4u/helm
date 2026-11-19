@@ -14,47 +14,47 @@ class RegistrySocket extends EventEmitter {
   close() { this.readyState = 3; this.emit('close') }
 }
 
-test('local ScopedEnv never inherits host or per-call forged HELM_TOKEN', { timeout: 60_000 }, async () => {
-  const previous = process.env.HELM_TOKEN
-  process.env.HELM_TOKEN = 'host-private-credential'
-  const fabric = createEnvFabric({ envOptions: () => ({ HELM_CONVERSATION_ID: '8' }) })
+test('local ScopedEnv never inherits host or per-call forged HELMX_TOKEN', { timeout: 60_000 }, async () => {
+  const previous = process.env.HELMX_TOKEN
+  process.env.HELMX_TOKEN = 'host-private-credential'
+  const fabric = createEnvFabric({ envOptions: () => ({ HELMX_CONVERSATION_ID: '8' }) })
   try {
     const env = fabric.envForTarget({ nodeId: 'local', cwd: process.cwd(), conversationId: 8 })
     let text = ''
-    const result = await env.exec([process.execPath, '-e', 'process.stdout.write(process.env.HELM_TOKEN ?? "absent")'], {
-      env: { HELM_TOKEN: 'spoofed-credential' }, onOutput: (chunk) => { text += chunk },
+    const result = await env.exec([process.execPath, '-e', 'process.stdout.write(process.env.HELMX_TOKEN ?? "absent")'], {
+      env: { HELMX_TOKEN: 'spoofed-credential' }, onOutput: (chunk) => { text += chunk },
     }, BACKGROUND_CONTEXT)
     assert.equal(result.ok, true)
     assert.equal(text, 'absent')
   } finally {
-    if (previous === undefined) delete process.env.HELM_TOKEN
-    else process.env.HELM_TOKEN = previous
+    if (previous === undefined) delete process.env.HELMX_TOKEN
+    else process.env.HELMX_TOKEN = previous
     await fabric.dispose()
   }
 })
 
-test('local ScopedEnv without composer strips all host-managed HELM_* variables (fail-closed)', { timeout: 60_000 }, async () => {
+test('local ScopedEnv without composer strips all host-managed HELMX_* variables (fail-closed)', { timeout: 60_000 }, async () => {
   const saved: Record<string, string | undefined> = {}
-  // Save and clear all pre-existing host HELM_* vars first: when running under a Helm-hosted bash session,
-  // external host wrappers inject node control vars like HELM_NODE_INSTANCE_ID / HELM_NODE_CONTROL_ENDPOINT.
+  // Save and clear all pre-existing host HELMX_* vars first: when running under a Helmx-hosted bash session,
+  // external host wrappers inject node control vars like HELMX_NODE_INSTANCE_ID / HELMX_NODE_CONTROL_ENDPOINT.
   // composeExecutionEnv intentionally strips only its 8 self-managed keys while letting daemon control vars
-  // pass through, which would otherwise cause /^helm_/i assertions below to misreport leftovers.
+  // pass through, which would otherwise cause /^helmx_/i assertions below to misreport leftovers.
   for (const key of Object.keys(process.env)) {
-    if (/^helm_/i.test(key)) {
+    if (/^helmx_/i.test(key)) {
       saved[key] = process.env[key]
       delete process.env[key]
     }
   }
   const injected: Array<[string, string]> = [
-    ['HELM_TOKEN', 'host-token'],
-    ['helm_token', 'host-token-variant'],
-    ['HELM_CONVERSATION_ID', '999'],
-    ['HELM_CWD', '/wrong'],
-    ['HELM_ENV', '1'],
-    ['HELM_DATA_DIR', '/host/data'],
-    ['HELM_HUB_URL', 'http://wrong:1'],
-    ['HELM_NODE_ID', 'wrong-node'],
-    ['HELM_EXECUTION_SCOPE', 'helm-stale-host-scope'],
+    ['HELMX_TOKEN', 'host-token'],
+    ['helmx_token', 'host-token-variant'],
+    ['HELMX_CONVERSATION_ID', '999'],
+    ['HELMX_CWD', '/wrong'],
+    ['HELMX_ENV', '1'],
+    ['HELMX_DATA_DIR', '/host/data'],
+    ['HELMX_HUB_URL', 'http://wrong:1'],
+    ['HELMX_NODE_ID', 'wrong-node'],
+    ['HELMX_EXECUTION_SCOPE', 'helmx-stale-host-scope'],
   ]
   for (const [key, value] of injected) {
     if (!(key in saved)) saved[key] = process.env[key]
@@ -62,16 +62,16 @@ test('local ScopedEnv without composer strips all host-managed HELM_* variables 
   }
   const fabric = createEnvFabric({})
   try {
-    // Without envOptions (no conversation scope): inherited host env must carry zero managed HELM_* keys.
+    // Without envOptions (no conversation scope): inherited host env must carry zero managed HELMX_* keys.
     const env = fabric.envForTarget({ nodeId: 'local', cwd: process.cwd() })
     let text = ''
     const result = await env.exec(
-      [process.execPath, '-e', 'process.stdout.write(JSON.stringify(Object.keys(process.env).filter((k) => /^helm_/i.test(k))))'],
+      [process.execPath, '-e', 'process.stdout.write(JSON.stringify(Object.keys(process.env).filter((k) => /^helmx_/i.test(k))))'],
       { onOutput: (chunk) => { text += chunk } },
       BACKGROUND_CONTEXT,
     )
     assert.equal(result.ok, true)
-    assert.deepEqual(JSON.parse(text), [], 'all host-managed HELM_* variables (including case variants) must be stripped')
+    assert.deepEqual(JSON.parse(text), [], 'all host-managed HELMX_* variables (including case variants) must be stripped')
   } finally {
     for (const [key, value] of Object.entries(saved)) {
       if (value === undefined) delete process.env[key]
@@ -84,16 +84,16 @@ test('local ScopedEnv without composer strips all host-managed HELM_* variables 
 test('composer-supplied managed variables still take effect (bound keys unaffected by host stripping)', { timeout: 60_000 }, async () => {
   const fabric = createEnvFabric({
     envOptions: ({ conversationId, cwd }) => ({
-      HELM_CONVERSATION_ID: String(conversationId ?? 0),
-      HELM_CWD: cwd,
-      HELM_ENV: '1',
+      HELMX_CONVERSATION_ID: String(conversationId ?? 0),
+      HELMX_CWD: cwd,
+      HELMX_ENV: '1',
     }),
   })
   try {
     const env = fabric.envForTarget({ conversationId: 5, nodeId: 'local', cwd: process.cwd() })
     let text = ''
     const result = await env.exec(
-      [process.execPath, '-e', 'process.stdout.write(process.env.HELM_CONVERSATION_ID + "|" + process.env.HELM_ENV)'],
+      [process.execPath, '-e', 'process.stdout.write(process.env.HELMX_CONVERSATION_ID + "|" + process.env.HELMX_ENV)'],
       { onOutput: (chunk) => { text += chunk } },
       BACKGROUND_CONTEXT,
     )

@@ -6,7 +6,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationEntry } from '@helm/protocol'
+import type { ConversationEntry } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
 import {
   importWorkflowModels,
@@ -54,7 +54,7 @@ test('当前正文生成优先于保留的旧思考快照', { timeout: 60_000 },
 test('新一轮输入尚无回答时，不把上一轮 assistant 结论作为本轮结果', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [
     { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '旧轮次结论' }] }] },
-    { id: '2', kind: 'helm.input', data: { text: '重新执行' } },
+    { id: '2', kind: 'helmx.input', data: { text: '重新执行' } },
   ]
   assert.equal(m.resolveSubagentHeaderSnippet({ badgeStatus: 'done', entries }), undefined)
   assert.deepEqual(

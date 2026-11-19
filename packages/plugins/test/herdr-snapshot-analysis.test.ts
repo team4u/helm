@@ -14,7 +14,7 @@
 
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import {
   createBlockedSnapshotAnalyzer,
   type ConversationTextPort,
@@ -103,7 +103,7 @@ test('在途 abort: 外部取消立即传播原始错误（不等待 deadline、
   const pending = analyzer.analyze({ snapshot: 's', conversationId: 1, signal: controller.signal })
   // 端口已发起（同步注册后微任务内），外部取消立即传播。
   await new Promise((r) => setTimeout(r, 10))
-  const abortErr = new HelmError('aborted', '外部取消', 499)
+  const abortErr = new HelmxError('aborted', '外部取消', 499)
   controller.abort(abortErr)
   await assert.rejects(pending, () => true, '外部取消 reject')
   // 底层迟到的结果不产生 unhandled rejection。
@@ -129,7 +129,7 @@ test('错误诊断: 固定安全中文映射，不携带 Error.message/响应/�
   // 已知 code：固定映射文案（不含上游 message——可含 raw response）。
   const knownPort: ConversationTextPort = {
     async completeConversationText() {
-      throw new HelmError('model_not_configured', `会话 1 未解析出生效模型\n模型原始响应：SECRET-RESPONSE`, 409)
+      throw new HelmxError('model_not_configured', `会话 1 未解析出生效模型\n模型原始响应：SECRET-RESPONSE`, 409)
     },
   }
   const analyzer1 = createBlockedSnapshotAnalyzer(knownPort, { timeoutMs: 200 })
@@ -160,7 +160,7 @@ test('cooperative port 外部取消：抢先返回 error 分支也立即传播�
     completeConversationText(input) {
       return new Promise((_resolve, reject) => {
         input.signal?.addEventListener('abort', () => {
-          reject(new HelmError('aborted', '外部取消（端口响应 signal）', 499))
+          reject(new HelmxError('aborted', '外部取消（端口响应 signal）', 499))
         }, { once: true })
       })
     },
@@ -172,7 +172,7 @@ test('cooperative port 外部取消：抢先返回 error 分支也立即传播�
   controller.abort()
   await assert.rejects(pending, (e: unknown) => {
     // 传播原始语义（aborted），不得折叠成回退 outcome。
-    assert.ok(e instanceof HelmError || e instanceof Error)
+    assert.ok(e instanceof HelmxError || e instanceof Error)
     return true
   })
 })
@@ -189,7 +189,7 @@ test('外部取消 reason 保留：传播原始错误对象（不重造）', { t
   }
   const analyzer = createBlockedSnapshotAnalyzer(port, { timeoutMs: 10_000 })
   const controller = new AbortController()
-  const original = new HelmError('aborted', '原始取消原因', 499)
+  const original = new HelmxError('aborted', '原始取消原因', 499)
   const pending = analyzer.analyze({ snapshot: 's', conversationId: 1, signal: controller.signal })
   await new Promise((r) => setTimeout(r, 10))
   controller.abort(original)

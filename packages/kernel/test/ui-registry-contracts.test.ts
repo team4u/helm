@@ -20,18 +20,18 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
-  HelmError,
+  HelmxError,
   PLUGIN_UI_METHOD_NAMES,
   type PluginDefinition,
   type PluginActionSpec,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import { UiRegistry } from '../src/plugins/ui-registry.js';
 import { PluginHost, type PluginHostBackend } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
-import { createPluginBuildProvider } from '@helm/plugin-build';
+import { createPluginBuildProvider } from '@helmx/plugin-build';
 import { MemoryDocStore, cleanupDir, makeTempDir } from './helpers.js';
 
-const isHelmError = (code: string) => (err: unknown): boolean => err instanceof HelmError && err.code === code;
+const isHelmxError = (code: string) => (err: unknown): boolean => err instanceof HelmxError && err.code === code;
 
 // ---------------------------------------------------------------------------
 // UiRegistry boundaries: artifact.previewer
@@ -69,21 +69,21 @@ test('artifactPreviewer: valid MIME/extension declarations pass and matcher list
   // label required and non-empty
   assert.throws(
     () => ui.registerUi('p1', 'artifact.previewer', { id: 'bad-label', mimeTypes: ['text/plain'] }, 'artifactPreviewer'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
 
   // mimeTypes: non-array / empty array / non-string / duplicates
   for (const mimeTypes of [[], ['text/plain', 'text/plain'], ['text/plain', 1], 'text/plain']) {
     assert.throws(
       () => ui.registerUi('p1', 'artifact.previewer', { id: 'bad-mime', label: 'x', mimeTypes }, 'artifactPreviewer'),
-      isHelmError('invalid_ui_spec'),
+      isHelmxError('invalid_ui_spec'),
     );
   }
   // extensions: same rules
   for (const extensions of [[], ['.md', '.md'], ['.md', 1], '.md']) {
     assert.throws(
       () => ui.registerUi('p1', 'artifact.previewer', { id: 'bad-ext', label: 'x', extensions }, 'artifactPreviewer'),
-      isHelmError('invalid_ui_spec'),
+      isHelmxError('invalid_ui_spec'),
     );
   }
 
@@ -91,7 +91,7 @@ test('artifactPreviewer: valid MIME/extension declarations pass and matcher list
   for (const bad of ['*/*', 'text/*x', 'te*t/plain', '*/plain', 'text/plain;charset=utf-8', 'Text/Plain', '/plain', 'text/', 'text']) {
     assert.throws(
       () => ui.registerUi('p1', 'artifact.previewer', { id: 'bad-mime2', label: 'x', mimeTypes: [bad] }, 'artifactPreviewer'),
-      isHelmError('invalid_ui_spec'),
+      isHelmxError('invalid_ui_spec'),
       `MIME "${bad}" should be rejected`,
     );
   }
@@ -99,7 +99,7 @@ test('artifactPreviewer: valid MIME/extension declarations pass and matcher list
   for (const bad of ['.MD', 'md', '.md/x', '.m*', '.', '..', '.md.', '.*']) {
     assert.throws(
       () => ui.registerUi('p1', 'artifact.previewer', { id: 'bad-ext2', label: 'x', extensions: [bad] }, 'artifactPreviewer'),
-      isHelmError('invalid_ui_spec'),
+      isHelmxError('invalid_ui_spec'),
       `extension "${bad}" should be rejected`,
     );
   }
@@ -128,7 +128,7 @@ test('composerCompleter: disallowed client track, trigger allowlist, and source 
   // label required and non-empty
   assert.throws(
     () => ui.registerUi('p1', 'composer.completer', { id: 'bad-label', trigger: '@', source: { kind: 'action', actionId: 'x' } }, 'composerCompleter'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
 
   // Disallowed track: client rejected (completions render uniformly via host)
@@ -141,7 +141,7 @@ test('composerCompleter: disallowed client track, trigger allowlist, and source 
         source: { kind: 'action', actionId: 'x' },
         client: { module: './x.tsx', export: 'X' },
       }, 'composerCompleter'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
     'client track should be rejected',
   );
 });
@@ -159,7 +159,7 @@ test('composerCompleter: doc/sessionDoc sources still enforce safe source shape 
         trigger: '@',
         source: { kind: 'doc', name: 'items', itemsField: '__proto__' },
       }, 'composerCompleter'),
-    isHelmError('invalid_ui_spec'),
+    isHelmxError('invalid_ui_spec'),
   );
   // assertUiDocsRegistered is a hook stub: no longer checks completer doc sources at end of define phase
   ui.assertUiDocsRegistered('p1', () => false, () => false);
@@ -176,7 +176,7 @@ test('display copy fields: one registerUi guard covers label/title/description o
   ];
   const expectDisplayCopyThrow = (run: () => void, field: string): void => {
     assert.throws(run, (err: unknown) => {
-      if (!(err instanceof HelmError)) return false;
+      if (!(err instanceof HelmxError)) return false;
       assert.equal(err.code, 'invalid_ui_spec');
       assert.ok(
         err.message.includes(`${field} must be display copy`),
@@ -310,7 +310,7 @@ interface HostFixture {
 }
 
 async function createHost(): Promise<HostFixture> {
-  const dataDir = await makeTempDir('helm-ui-contracts-');
+  const dataDir = await makeTempDir('helmx-ui-contracts-');
   const events: HostFixture['events'] = [];
   // Per-conversation in-memory store (sessionDoc requires a persistence layer; refusing silent fallback is kernel semantics)
   const sessionData = new Map<string, string>();
@@ -434,7 +434,7 @@ test('host: completer binding to own action validates missing/non-idempotent act
         });
       },
     };
-    await assert.rejects(() => host.register(missing), isHelmError('invalid_ui_spec'));
+    await assert.rejects(() => host.register(missing), isHelmxError('invalid_ui_spec'));
     assert.equal(host.listUi().length, 0);
 
     // Non-idempotent action (missing idempotent: true): rejected
@@ -450,7 +450,7 @@ test('host: completer binding to own action validates missing/non-idempotent act
         });
       },
     };
-    await assert.rejects(() => host.register(nonIdem), isHelmError('invalid_ui_spec'));
+    await assert.rejects(() => host.register(nonIdem), isHelmxError('invalid_ui_spec'));
 
     // Action declared after UI declaration (async order): validated at end of define phase
     const later: PluginDefinition = {
@@ -522,7 +522,7 @@ test('host: completer cross-plugin actions validate on target enable without blo
 
     // New cross-plugin binding validates at enable commit point: target enabled & non-idempotent -> rejected
     await host.register(consumer2('test:provider', 'test:consumer2'), { enabled: false });
-    await assert.rejects(() => host.enable('test:consumer2'), isHelmError('invalid_ui_spec'));
+    await assert.rejects(() => host.enable('test:consumer2'), isHelmxError('invalid_ui_spec'));
 
     // Target enabled & idempotent -> enable passes
     await host.register(provider2(), { enabled: false });

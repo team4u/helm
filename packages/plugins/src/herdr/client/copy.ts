@@ -10,10 +10,10 @@
  * pass through unchanged. Display-copy builders that were pure model helpers
  * (outcome labels, owner/status filter options) live here rather than in
  * models.ts because models.ts is compiled and imported standalone by tests
- * without the shared @helm/plugin-client runtime.
+ * without the shared @helmx/plugin-client runtime.
  */
-import type { HelmLocale, LocalizedText } from '@helm/plugin-client'
-import { DEFAULT_HELM_LOCALE, resolveLocalizedText } from '@helm/plugin-client'
+import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/plugin-client'
 
 import { outcomeTone } from './models.ts'
 
@@ -32,7 +32,7 @@ export const HDR_REFRESH_LINKS: LocalizedText = { en: 'Refresh links', 'zh-CN': 
 export const HDR_REFETCH: LocalizedText = { en: 'Refetch', 'zh-CN': '重取' }
 
 /** Degraded-connection callout: backend error passes through, timestamp of the last known snapshot appended. */
-export function herdrDegradedNotice(error: string | undefined, timestamp: string, locale: HelmLocale): string {
+export function herdrDegradedNotice(error: string | undefined, timestamp: string, locale: HelmxLocale): string {
   const reason = error !== undefined && error !== ''
     ? error
     : resolveLocalizedText({ en: 'unknown error', 'zh-CN': '未知错误' }, locale)
@@ -46,7 +46,7 @@ export function herdrDegradedNotice(error: string | undefined, timestamp: string
 }
 
 /** Failed action notification (backend error message passes through unchanged). */
-export function herdrActionFailed(message: string, locale: HelmLocale): string {
+export function herdrActionFailed(message: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Herdr action failed: ${message}`, 'zh-CN': `Herdr 操作失败：${message}` },
     locale,
@@ -63,7 +63,7 @@ export const HDR_FILTER_OWNER_ARIA: LocalizedText = { en: 'Filter by ownership',
 export const HDR_FILTER_STATUS_ARIA: LocalizedText = { en: 'Filter by status', 'zh-CN': '状态筛选' }
 
 /** Node filter options: "all" plus one entry per observed node. */
-export function herdrNodeFilterOptions(nodes: ReadonlyArray<string>, locale: HelmLocale): Array<{ value: string; label: string }> {
+export function herdrNodeFilterOptions(nodes: ReadonlyArray<string>, locale: HelmxLocale): Array<{ value: string; label: string }> {
   const all = resolveLocalizedText({ en: 'All nodes', 'zh-CN': '全部节点' }, locale)
   const local = resolveLocalizedText({ en: 'Local (local)', 'zh-CN': '本机 (local)' }, locale)
   return [
@@ -72,17 +72,17 @@ export function herdrNodeFilterOptions(nodes: ReadonlyArray<string>, locale: Hel
   ]
 }
 
-/** Ownership filter options (raw owner values helm/human stay verbatim). */
-export function herdrOwnerFilterOptions(locale: HelmLocale = DEFAULT_HELM_LOCALE): Array<{ value: string; label: string }> {
+/** Ownership filter options (raw owner values helmx/human stay verbatim). */
+export function herdrOwnerFilterOptions(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): Array<{ value: string; label: string }> {
   return [
     { value: 'all', label: resolveLocalizedText({ en: 'All owners', 'zh-CN': '全部归属' }, locale) },
-    { value: 'helm', label: resolveLocalizedText({ en: 'helm managed', 'zh-CN': 'helm 受管' }, locale) },
+    { value: 'helmx', label: resolveLocalizedText({ en: 'helmx managed', 'zh-CN': 'helmx 受管' }, locale) },
     { value: 'human', label: resolveLocalizedText({ en: 'human direct', 'zh-CN': 'human 直连' }, locale) },
   ]
 }
 
 /** Status filter options (agent-status identifiers stay verbatim). */
-export function herdrStatusFilterOptions(locale: HelmLocale = DEFAULT_HELM_LOCALE): Array<{ value: string; label: string }> {
+export function herdrStatusFilterOptions(locale: HelmxLocale = DEFAULT_HELMX_LOCALE): Array<{ value: string; label: string }> {
   return [
     { value: 'all', label: resolveLocalizedText({ en: 'All statuses', 'zh-CN': '全部状态' }, locale) },
     { value: 'working', label: 'working' },
@@ -94,7 +94,7 @@ export function herdrStatusFilterOptions(locale: HelmLocale = DEFAULT_HELM_LOCAL
 }
 
 /** Row-count metric next to the filters. */
-export function herdrRowCount(filtered: number, total: number, locale: HelmLocale): string {
+export function herdrRowCount(filtered: number, total: number, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `${filtered}/${total} rows`, 'zh-CN': `${filtered}/${total} 行` },
     locale,
@@ -146,7 +146,7 @@ export const HDR_ACTION_SNAPSHOT: LocalizedText = { en: 'Snapshot', 'zh-CN': '�
 export const HDR_ACTION_OPEN_LINKED: LocalizedText = { en: 'Open linked conversation', 'zh-CN': '打开关联会话' }
 
 /** Linked-conversation button tooltips. */
-export function herdrConversationTitle(conversationId: number, locale: HelmLocale): string {
+export function herdrConversationTitle(conversationId: number, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Conversation #${conversationId}`, 'zh-CN': `会话 #${conversationId}` },
     locale,
@@ -165,7 +165,7 @@ export const HDR_SNAPSHOT_ARIA: LocalizedText = { en: 'Terminal snapshot', 'zh-C
 export const HDR_CLOSE: LocalizedText = { en: 'Close', 'zh-CN': '关闭' }
 
 /** Snapshot modal title (pane identifier passes through unchanged). */
-export function herdrSnapshotTitle(title: string, locale: HelmLocale): string {
+export function herdrSnapshotTitle(title: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Terminal snapshot: ${title}`, 'zh-CN': `终端快照：${title}` },
     locale,
@@ -188,7 +188,7 @@ const HDR_OUTCOME_LABELS: Record<string, LocalizedText> = {
 /** Managed-row task outcome badge; undefined when there is no outcome to show. */
 export function herdrOutcomeLabel(
   outcome: string | undefined,
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): { label: string; tone: string } | undefined {
   const tone = outcomeTone(outcome)
   const text = outcome === undefined ? undefined : HDR_OUTCOME_LABELS[outcome]

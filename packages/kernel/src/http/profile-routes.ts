@@ -5,7 +5,7 @@
  * `ProfileService`: HTTP create rejects the field, PUT forbids removing or modifying it, and DELETE
  * forbids deleting plugin-managed Profiles. Disabled-model binding is preflighted before saving (`409 model_disabled`).
  */
-import { HelmError, type Profile } from '@helm/protocol'
+import { HelmxError, type Profile } from '@helmx/protocol'
 import { errorResponse, jsonOk, readJsonBody, type JsonRedactor } from './http-utils.js'
 import type { KernelRuntimeLike } from './contracts.js'
 import { parseProfileBody, requireIdParam, ValidationError } from './validate.js'
@@ -31,7 +31,7 @@ export async function handleProfilesDomain(
       // Hosting metadata may only be declared by trusted plugin bootstraps (direct ProfileService write);
       // HTTP create rejects `managedByPlugin` to prevent spoofing managed ownership or bypassing deletion locks.
       if (profile.managedByPlugin !== undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'profile_managed_by_plugin',
           'managedByPlugin is declared by plugin bootstrap and cannot be set via HTTP create',
           403,
@@ -40,7 +40,7 @@ export async function handleProfilesDomain(
       }
       const existing = await kernel.profiles.get(profile.id)
       if (existing?.managedByPlugin !== undefined) {
-        throw new HelmError('profile_managed_by_plugin', `cannot overwrite plugin-managed profile ${profile.id}`, 403)
+        throw new HelmxError('profile_managed_by_plugin', `cannot overwrite plugin-managed profile ${profile.id}`, 403)
       }
       // Reject disabled model before saving so we never persist a binding that fails on the first turn (409);
       // HTTP boundary only—trusted plugin bootstraps writing ProfileService directly bypass this check.
@@ -55,7 +55,7 @@ export async function handleProfilesDomain(
   if (third === undefined) {
     if (method === 'GET') {
       const found = await kernel.profiles.get(profileId)
-      if (found === undefined) throw new HelmError('not_found', `profile not found: ${profileId}`, 404)
+      if (found === undefined) throw new HelmxError('not_found', `profile not found: ${profileId}`, 404)
       return jsonOk(redactor, await enrichProfile(found))
     }
     if (method === 'PUT') {
@@ -69,10 +69,10 @@ export async function handleProfilesDomain(
       // Omitting the field counts as attempted removal (PUT full-replacement contract) and fails explicitly.
       const existing = await kernel.profiles.get(profileId)
       if (existing === undefined) {
-        throw new HelmError('not_found', `profile not found: ${profileId}`, 404)
+        throw new HelmxError('not_found', `profile not found: ${profileId}`, 404)
       }
       if (profile.managedByPlugin !== existing.managedByPlugin) {
-        throw new HelmError(
+        throw new HelmxError(
           'profile_managed_by_plugin',
           `profile ${profileId} hosting metadata is declared by a plugin and cannot be set, modified, or removed via HTTP`,
           403,
@@ -93,13 +93,13 @@ export async function handleProfilesDomain(
       // window between re-check and `rm`.
       const inUse = (await kernel.listConversations()).some((c) => c.profileId === profileId)
       if (inUse) {
-        throw new HelmError('profile_in_use', `profile ${profileId} is still bound by conversations; unbind before deleting`, 409)
+        throw new HelmxError('profile_in_use', `profile ${profileId} is still bound by conversations; unbind before deleting`, 409)
       }
       // Refuse deleting plugin-managed Profiles (`managedByPlugin` set): prevents bypassing UI to delete
       // bootstrapped plugin assets over HTTP; the built-in default profile is protected by ProfileService itself.
       const target = await kernel.profiles.get(profileId)
       if (target?.managedByPlugin !== undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'profile_managed_by_plugin',
           `profile ${profileId} is managed by plugin ${target.managedByPlugin} and cannot be deleted`,
           403,

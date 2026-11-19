@@ -5,10 +5,10 @@
  * - AskService secretLifetime 接线与校验；
  * - buildSpawnEnv 最小授权（默认零业务机密、显式 secretNames 含 __proto__、缺失/过期 404、单次采样防竞态空注入）；
  * - HerdrExecutor 窗格与 Gate 机密授权（不缓存旧值、轮换生效、运行期过期 404、不跨任务沿用）与 agentJournalKey 指纹；
- * - createHelm 真实回合结算（completed/failed/aborted + late hook）、原生执行行显式拒绝非空 secretNames 与插件配置 HTTP 隐藏动态机密。
+ * - createHelmx 真实回合结算（completed/failed/aborted + late hook）、原生执行行显式拒绝非空 secretNames 与插件配置 HTTP 隐藏动态机密。
  */
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import { HelmError, type PluginDefinition, type Profile } from '@helm/protocol'
+import { HelmxError, type PluginDefinition, type Profile } from '@helmx/protocol'
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -17,8 +17,8 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { createHubHandler } from '../../kernel/src/http/hub.js'
 import { AskService } from '../../kernel/src/runtime/asks.js'
 import { RuntimeAgentSpawn } from '../../kernel/src/runtime/runtime-agent-spawn.js'
-import { openHelmDatabase } from '../../kernel/src/runtime/sqlite.js'
-import { HelmStore } from '../../kernel/src/runtime/store.js'
+import { openHelmxDatabase } from '../../kernel/src/runtime/sqlite.js'
+import { HelmxStore } from '../../kernel/src/runtime/store.js'
 import {
   CredentialService,
   MAX_SECRET_TTL_MS,
@@ -42,8 +42,8 @@ function spawnEnvBackend(stash: SecretStash, options: { token?: string; nodeHubU
   return new RuntimeAgentSpawn({
     store: { getConv: () => ({ nodeId: 'local' }) } as never,
     toolDeps: {
-      dataDir: '/tmp/helm-spawnenv-data',
-      defaultCwd: '/tmp/helm-spawnenv-default',
+      dataDir: '/tmp/helmx-spawnenv-data',
+      defaultCwd: '/tmp/helmx-spawnenv-default',
       hubUrl: 'http://127.0.0.1:3202',
       stashEnvFor: (id: number) => stash.envFor(id),
       redact: (t: string) => stash.redact(t),
@@ -99,17 +99,17 @@ test('SecretStash TTL 与形状校验：惰性过期停止注入但保持脱敏�
   for (const bad of [0, -1, 1.5, Number.MAX_SAFE_INTEGER * 2, Infinity, NaN, '3000', null]) {
     assert.throws(
       () => stash.put(7, 'BAD_TTL', 'v', { ttlMs: bad as number }),
-      (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error',
     )
   }
   assert.throws(
     () => validateSecretLifetime({ ttlMs: MAX_SECRET_TTL_MS + 1 }, 't'),
-    (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
+    (e: unknown) => e instanceof HelmxError && e.code === 'validation_error',
   )
   for (const badShape of [{ scope: 'session' }, { ttl: 5_000 }, null, [1], new Date(), new Map()]) {
     assert.throws(
       () => stash.put(7, 'S', 'v', badShape as never),
-      (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error',
     )
   }
   stash.put(7, 'S', 'v', {})
@@ -147,9 +147,9 @@ test('SecretStash turn 作用域与 clear：按结算代数精确回收、跨会
 // ---------------------------------------------------------------------------
 
 test('AskService secretLifetime 校验与透传，以及 buildSpawnEnv 最小授权与单次采样防竞态', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-secret-ask-')
-  const db = await openHelmDatabase(join(root, 'state.db'))
-  const store = new HelmStore(db)
+  const root = useTempDir(t, 'helmx-secret-ask-')
+  const db = await openHelmxDatabase(join(root, 'state.db'))
+  const store = new HelmxStore(db)
   await store.load()
   const askStash = new SecretStash()
   const service = new AskService({
@@ -171,7 +171,7 @@ test('AskService secretLifetime 校验与透传，以及 buildSpawnEnv 最小授
   ]) {
     await assert.rejects(
       service.createAsk({ conversationId: 1, ownerPluginId: 't', title: 'x', fields }),
-      (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error',
     )
   }
 
@@ -209,7 +209,7 @@ test('AskService secretLifetime 校验与透传，以及 buildSpawnEnv 最小授
 
   const defaultEnv = backend.buildSpawnEnv(7, '/w', 'local')
   assert.equal(defaultEnv['A_KEY'], undefined)
-  assert.equal(defaultEnv['HELM_TOKEN'], 'managed-token')
+  assert.equal(defaultEnv['HELMX_TOKEN'], 'managed-token')
 
   const grantedEnv = backend.buildSpawnEnv(7, '/w', 'local', { secretNames: ['A_KEY', '__proto__'] })
   assert.equal(grantedEnv['A_KEY'], 'va')
@@ -224,13 +224,13 @@ test('AskService secretLifetime 校验与透传，以及 buildSpawnEnv 最小授
   for (const name of ['NOPE', 'GONE_TTL', 'GONE_TURN', 'toString', 'constructor']) {
     assert.throws(
       () => backend.buildSpawnEnv(7, '/w', 'local', { secretNames: [name] }),
-      (e: unknown) => e instanceof HelmError && e.code === 'secret_not_found',
+      (e: unknown) => e instanceof HelmxError && e.code === 'secret_not_found',
     )
   }
   for (const bad of [['A', 'A'], ['bad-name!'], [''], 42]) {
     assert.throws(
       () => backend.buildSpawnEnv(7, '/w', 'local', { secretNames: bad as string[] }),
-      (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error',
     )
   }
 
@@ -241,7 +241,7 @@ test('AskService secretLifetime 校验与透传，以及 buildSpawnEnv 最小授
   assert.equal(edgeBackend.buildSpawnEnv(7, '/w', 'local', { secretNames: ['EDGE_KEY'] })['EDGE_KEY'], 'edge-value')
   assert.throws(
     () => edgeBackend.buildSpawnEnv(7, '/w', 'local', { secretNames: ['EDGE_KEY'] }),
-    (e: unknown) => e instanceof HelmError && e.code === 'secret_not_found',
+    (e: unknown) => e instanceof HelmxError && e.code === 'secret_not_found',
   )
 })
 
@@ -280,7 +280,7 @@ class SecretPaneFakeTransport implements HerdrTransport {
     }
     const id = String(params['pane_id'] ?? params['target'] ?? '')
     const pane = this.panes.get(id)
-    if (!pane) throw new HelmError('agent_not_found', `no pane ${id}`, 404)
+    if (!pane) throw new HelmxError('agent_not_found', `no pane ${id}`, 404)
     if (method === 'agent.start') {
       pane.name = params['name'] as string
       pane.status = 'idle'
@@ -292,19 +292,19 @@ class SecretPaneFakeTransport implements HerdrTransport {
       pane.seq += 1
       this.onPrompted?.()
       const fileName = (params['text'] as string).match(/wf-out-[A-Za-z0-9_.-]+\.(json|md)/)?.[0] ?? ''
-      mkdirSync(join(pane.cwd, '.helm'), { recursive: true })
-      writeFileSync(join(pane.cwd, '.helm', fileName), 'herdr-done')
+      mkdirSync(join(pane.cwd, '.helmx'), { recursive: true })
+      writeFileSync(join(pane.cwd, '.helmx', fileName), 'herdr-done')
       return { type: 'agent_prompted', agent: this.infoOf(pane) }
     }
     if (method === 'agent.read') return { type: 'pane_read', read: { pane_id: pane.paneId, text: 'tail' } }
     if (method === 'tab.close') return { type: 'ok' }
-    throw new HelmError('method_not_found', `fake: ${method}`, 400)
+    throw new HelmxError('method_not_found', `fake: ${method}`, 400)
   }
   async readOutput(_t: HerdrTarget, cwd: string, fileName: string): Promise<string> {
-    return readFileSync(join(cwd, '.helm', fileName), 'utf8')
+    return readFileSync(join(cwd, '.helmx', fileName), 'utf8')
   }
   async removeOutput(_t: HerdrTarget, cwd: string, fileName: string): Promise<void> {
-    rmSync(join(cwd, '.helm', fileName), { force: true })
+    rmSync(join(cwd, '.helmx', fileName), { force: true })
   }
   async runGate(_t: HerdrTarget, _cmd: string, _cwd: string, _sig: AbortSignal | undefined, env?: Record<string, string>) {
     this.gateEnvs.push(env ?? {})
@@ -322,7 +322,7 @@ function makePaneEnv(dataDir: string, options: { clock?: () => number; onPrompte
   const spawnBackend = spawnEnvBackend(stash, { token: 'managed-token', nodeHubUrl: 'http://10.0.0.5:3202' })
   const profiles = new Map<string, Profile>([[
     'ci-runner',
-    { id: 'ci-runner', runtime: { kind: 'herdr', agent: 'agy', nodeId: 'node-a', env: { CI_FLAG: 'profile-yes', DEPLOY_TOKEN: 'profile-deploy', HELM_CWD: '/hijack' } } } as Profile,
+    { id: 'ci-runner', runtime: { kind: 'herdr', agent: 'agy', nodeId: 'node-a', env: { CI_FLAG: 'profile-yes', DEPLOY_TOKEN: 'profile-deploy', HELMX_CWD: '/hijack' } } } as Profile,
   ]])
   let doc: ManagedDoc = { ...EMPTY_MANAGED_DOC, panes: [] }
   const registry = new PaneRegistry({ get: () => doc, set: (next) => { doc = next } }, doc)
@@ -361,13 +361,13 @@ function makePaneEnv(dataDir: string, options: { clock?: () => number; onPrompte
 }
 
 test('Herdr 窗格与 Gate 机密最小授权、轮换重取、TTL 过期拒跑、跨任务隔离与 workflow journal 指纹', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-herdr-paneenv-')
+  const dir = useTempDir(t, 'helmx-herdr-paneenv-')
   const env = makePaneEnv(dir)
 
-  // 1. 默认无业务机密，保留 Profile 同名值与受管 HELM_*（含节点可达 hubUrl），建窗前拒绝缺失机密
+  // 1. 默认无业务机密，保留 Profile 同名值与受管 HELMX_*（含节点可达 hubUrl），建窗前拒绝缺失机密
   await assert.rejects(
     env.executor.handle({ parentConversationId: 7, prompt: 'deploy', agentType: 'ci-runner', secretNames: ['NOT_IN_STASH'] }),
-    (e: unknown) => e instanceof HelmError && e.code === 'secret_not_found',
+    (e: unknown) => e instanceof HelmxError && e.code === 'secret_not_found',
   )
   assert.equal(env.transport.calls.length, 0)
 
@@ -376,10 +376,10 @@ test('Herdr 窗格与 Gate 机密最小授权、轮换重取、TTL 过期拒跑�
   assert.equal(env0['API_KEY'], undefined)
   assert.equal(env0['DEPLOY_TOKEN'], 'profile-deploy')
   assert.equal(env0['CI_FLAG'], 'profile-yes')
-  assert.notEqual(env0['HELM_CWD'], '/hijack')
-  assert.equal(env0['HELM_DATA_DIR'], undefined)
-  assert.equal(env0['HELM_HUB_URL'], 'http://10.0.0.5:3202')
-  assert.equal(env0['HELM_TOKEN'], 'managed-token')
+  assert.notEqual(env0['HELMX_CWD'], '/hijack')
+  assert.equal(env0['HELMX_DATA_DIR'], undefined)
+  assert.equal(env0['HELMX_HUB_URL'], 'http://10.0.0.5:3202')
+  assert.equal(env0['HELMX_TOKEN'], 'managed-token')
 
   // 2. 显式授权覆盖 Profile 同名值（含 __proto__）+ Gate 轮换重取 + 后续任务不沿用旧授权
   env.stash.put(7, '__proto__', 'pane-prototype-named-secret')
@@ -406,14 +406,14 @@ test('Herdr 窗格与 Gate 机密最小授权、轮换重取、TTL 过期拒跑�
 
   // 3. 任务期间 TTL 过期时 Gate 启动前 404 拒绝（零 Gate 副作用）
   const clock = { ms: 10_000 }
-  const ttlEnv = makePaneEnv(useTempDir(t, 'helm-herdr-panettl-'), {
+  const ttlEnv = makePaneEnv(useTempDir(t, 'helmx-herdr-panettl-'), {
     clock: () => clock.ms,
     onPrompted: () => { clock.ms += 100 },
   })
   ttlEnv.stash.put(7, 'SHORT_TTL', 'short-lived', { ttlMs: 50 })
   await assert.rejects(
     ttlEnv.executor.handle({ parentConversationId: 7, prompt: 'deploy', agentType: 'ci-runner', gate: 'true', secretNames: ['SHORT_TTL'] }),
-    (e: unknown) => e instanceof HelmError && e.code === 'secret_not_found',
+    (e: unknown) => e instanceof HelmxError && e.code === 'secret_not_found',
   )
   assert.equal(ttlEnv.transport.gateEnvs.length, 0)
 
@@ -427,12 +427,12 @@ test('Herdr 窗格与 Gate 机密最小授权、轮换重取、TTL 过期拒跑�
 })
 
 // ---------------------------------------------------------------------------
-// 4. createHelm 真实回合结算、原生执行行诚实拒绝与插件配置 HTTP 动态机密隔离
+// 4. createHelmx 真实回合结算、原生执行行诚实拒绝与插件配置 HTTP 动态机密隔离
 // ---------------------------------------------------------------------------
 
-test('createHelm 真实回合结算（completed/failed/aborted + late hook）与原生 spawn 非空 secretNames 诚实拒绝', { timeout: 60_000 }, async () => {
+test('createHelmx 真实回合结算（completed/failed/aborted + late hook）与原生 spawn 非空 secretNames 诚实拒绝', { timeout: 60_000 }, async () => {
   const env = await openHubTestEnv({
-    prefix: 'helm-secret-turnsettle-',
+    prefix: 'helmx-secret-turnsettle-',
     fauxOptions: { tokensPerSecond: 1, tokenSize: { min: 4, max: 4 } },
   })
   try {
@@ -496,7 +496,7 @@ test('createHelm 真实回合结算（completed/failed/aborted + late hook）与
     stash.put(1, 'NATIVE_KEY', 'native-secret')
     await assert.rejects(
       kernel.spawnAgent({ parentConversationId: 1, prompt: 'grant', agentType: 'assistant', secretNames: ['NATIVE_KEY'] }),
-      (e: unknown) => e instanceof HelmError && e.code === 'unsupported_secret_grant',
+      (e: unknown) => e instanceof HelmxError && e.code === 'unsupported_secret_grant',
     )
     faux.setResponses([fauxAssistantMessage('ok')])
     assert.equal(await kernel.spawnAgent({ parentConversationId: 1, prompt: 'empty grant', secretNames: [] }), 'ok')
@@ -506,7 +506,7 @@ test('createHelm 真实回合结算（completed/failed/aborted + late hook）与
 })
 
 test('插件配置 HTTP 在重启与停用时均隐藏动态机密并保持已声明配置掩码', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-config-namespace-')
+  const dataDir = useTempDir(t, 'helmx-config-namespace-')
   const pluginId = 'test:dynamic-credentials'
   const dynamicSecret = 'dynamic-hook-signing-key-7e4a'
   const configSecret = 'declared-config-key-94b2'

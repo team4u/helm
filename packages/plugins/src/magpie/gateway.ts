@@ -6,7 +6,7 @@
  * - fetchImpl 注入端口：测试走受控 HTTP，不触真实网络；
  * - 错误信息只含 URL 与状态（token 只经 Bearer 头，绝不进错误文本）。
  */
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import {
   DEFAULT_MAGPIE_ROOT,
   DEFAULT_MAGPIE_TOKEN,
@@ -75,8 +75,8 @@ export function resolveGateway(
   config: MagpiePluginConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): MagpieGatewayRef {
-  const invalid = (source: 'gatewayUrl' | 'env', raw: string): HelmError =>
-    new HelmError(
+  const invalid = (source: 'gatewayUrl' | 'env', raw: string): HelmxError =>
+    new HelmxError(
       'magpie_invalid_gateway_url',
       `Magpie 网关地址配置无法解析为 http(s) 根地址：${source === 'gatewayUrl' ? '插件配置 gatewayUrl' : '环境变量 MAGPIE_GW_URL / MAGPIE_ADDR'} = ${JSON.stringify(raw)}`,
       400,

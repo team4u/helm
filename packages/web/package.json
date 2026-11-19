@@ -1,5 +1,5 @@
 {
-  "name": "@helm/web",
+  "name": "@helmx/web",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -10,8 +10,8 @@
     "test": "tsx --tsconfig tsconfig.test.json --test \"test/*.test.ts\""
   },
   "dependencies": {
-    "@helm/plugin-client": "workspace:*",
-    "@helm/protocol": "workspace:*",
+    "@helmx/plugin-client": "workspace:*",
+    "@helmx/protocol": "workspace:*",
     "@radix-ui/react-alert-dialog": "^1.2.1",
     "@radix-ui/react-dropdown-menu": "^2.2.1",
     "@radix-ui/react-tooltip": "^1.4.1",
@@ -28,8 +28,8 @@
   },
   "devDependencies": {
     "@happy-dom/global-registrator": "^21.0.4",
-    "@helm/plugin-build": "workspace:*",
-    "@helm/plugins": "workspace:*",
+    "@helmx/plugin-build": "workspace:*",
+    "@helmx/plugins": "workspace:*",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^5.0.0",

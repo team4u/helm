@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
-import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
 import { ensureHappyDom } from './helpers/dom-harness.js'
 
 ensureHappyDom()
@@ -196,7 +196,7 @@ test('ConversationTimeline：agent 回合响应中不显示复制与分叉按钮
   }
 
   const entriesDuringResponse: ConversationEntry[] = [
-    { id: '1', kind: 'helm.input', data: { text: '简单演示下工作流编排', origin: 'human' } },
+    { id: '1', kind: 'helmx.input', data: { text: '简单演示下工作流编排', origin: 'human' } },
     {
       id: '2',
       kind: 'pi.assistant',
@@ -268,7 +268,7 @@ test('ConversationTimeline：含工具调用的多段回合，复制按钮只复
   }
 
   const entries: ConversationEntry[] = [
-    { id: '1', kind: 'helm.input', data: { text: '帮我查一下配置', origin: 'human' } },
+    { id: '1', kind: 'helmx.input', data: { text: '帮我查一下配置', origin: 'human' } },
     {
       id: '2',
       kind: 'pi.assistant',

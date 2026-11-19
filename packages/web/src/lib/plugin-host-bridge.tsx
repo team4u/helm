@@ -1,17 +1,17 @@
 /**
- * SDK 宿主端口桥：把 external store 的 pluginHostPort 切片适配为 @helm/plugin-client
+ * SDK 宿主端口桥：把 external store 的 pluginHostPort 切片适配为 @helmx/plugin-client
  * 宿主上下文。独立成模块以保持「无 react-dom 依赖」的静态导入图——测试 helper
  * （helpers/host-store.ts）静态引入本模块不会在 happy-dom 注册前加载 react-dom/client
- * （那会破坏受控输入的事件委托）；生产 HelmStoreProvider 与测试共用同一实现。
+ * （那会破坏受控输入的事件委托）；生产 HelmxStoreProvider 与测试共用同一实现。
  */
 import { useCallback, useMemo, useSyncExternalStore } from 'react'
-import type { PluginClientHostPort } from '@helm/plugin-client'
-import { PluginClientHostContext } from '@helm/plugin-client'
-import { createLocaleTranslator } from '@helm/protocol/browser'
-import type { HelmExternalStore } from './helm-store.js'
+import type { PluginClientHostPort } from '@helmx/plugin-client'
+import { PluginClientHostContext } from '@helmx/plugin-client'
+import { createLocaleTranslator } from '@helmx/protocol/browser'
+import type { HelmxExternalStore } from './helmx-store.js'
 import { createPluginClientHostPort } from './plugin-client-host.js'
 
-export function PluginClientHostBridge({ store, children }: { store: HelmExternalStore; children: React.ReactNode }) {
+export function PluginClientHostBridge({ store, children }: { store: HelmxExternalStore; children: React.ReactNode }) {
   const subscribe = useCallback((listener: () => void) => store.subscribeDomain('pluginHostPort', listener), [store])
   const slice = useSyncExternalStore(subscribe, store.getPluginHostPortSlice, store.getPluginHostPortSlice)
   const port = useMemo<PluginClientHostPort>(

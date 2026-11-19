@@ -9,7 +9,7 @@ import { openHubTestEnv, type HubTestEnv } from './helpers/hub-test-env.js'
 let fixture: HubTestEnv
 
 before(async () => {
-  fixture = await openHubTestEnv({ prefix: 'helm-runtime-boundary-' })
+  fixture = await openHubTestEnv({ prefix: 'helmx-runtime-boundary-' })
 }, { timeout: 60_000 })
 
 after(async () => {

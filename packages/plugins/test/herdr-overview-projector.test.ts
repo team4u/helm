@@ -110,7 +110,7 @@ function managedPane(paneId: string, overrides: Partial<ManagedPane> = {}): Mana
     paneId,
     tabId: 'tab1',
     effectiveCwd: '/work/dir',
-    agentName: 'helm-wf-abc123',
+    agentName: 'helmx-wf-abc123',
     routing: { kind: 'claude' },
     parentConversationId: 1,
     outcome: 'running',
@@ -259,13 +259,13 @@ test('streamError 在 fetch 成功后仍 stale，直到真实订阅 ACK 才恢�
 
 test('归属：远端同 ID 记录不认领；human takeover 不带管理信息', { timeout: 60_000 }, async () => {
   const h = makeHarness(() => ({
-    agents: [agentInfo('p1', { name: 'helm-wf-abc123' }), agentInfo('p2', { name: 'human-shell', tabId: 'tab2' })],
+    agents: [agentInfo('p1', { name: 'helmx-wf-abc123' }), agentInfo('p2', { name: 'human-shell', tabId: 'tab2' })],
     panes: [pane('p1', { agentStatus: 'working' }), pane('p2', { tabId: 'tab2', agentStatus: 'unknown' })],
   }))
   // 远端同 paneId 记录：不得认领本机 p1。
   h.registry.add(managedPane('p1', { target: { nodeId: 'remote-node', session: 'main' } }))
   // 本机记录但 agentName 已不一致（人类接管重启终端）：human。
-  h.registry.add(managedPane('p2', { tabId: 'tab2', agentName: 'helm-wf-other' }))
+  h.registry.add(managedPane('p2', { tabId: 'tab2', agentName: 'helmx-wf-other' }))
   const done = h.projector.refresh(h.registry, h.asks, TARGET)
   h.fetcher.gate(0).resolve({ agents: [], panes: [] })
   await done
@@ -281,9 +281,9 @@ test('归属：远端同 ID 记录不认领；human takeover 不带管理信息'
   assert.equal(p2.stateChangeSeq, 7) // Agent join 的真实 seq 是窗格事实，照常展示
 })
 
-test('归属全一致才算 helm：本机冻结 target + tabId + agentName + Agent join', { timeout: 60_000 }, async () => {
+test('归属全一致才算 helmx：本机冻结 target + tabId + agentName + Agent join', { timeout: 60_000 }, async () => {
   const h = makeHarness(() => ({
-    agents: [agentInfo('p1', { name: 'helm-wf-abc123', tabId: 'tab1', workspaceId: 'ws1' })],
+    agents: [agentInfo('p1', { name: 'helmx-wf-abc123', tabId: 'tab1', workspaceId: 'ws1' })],
     panes: [pane('p1', { tabId: 'tab1', workspaceId: 'ws1', agentStatus: 'working' })],
   }))
   h.registry.add(managedPane('p1')) // target={session:'main'} 与 TARGET 精确一致
@@ -294,10 +294,10 @@ test('归属全一致才算 helm：本机冻结 target + tabId + agentName + Age
   h.fetcher.gate(0).resolve({ agents: [], panes: [] })
   await done
   const row = h.docs.at(-1)?.panes.find((p) => p.paneId === 'p1')!
-  assert.equal(row.ownedBy, 'helm')
+  assert.equal(row.ownedBy, 'helmx')
   assert.equal(row.outcome, 'running')
   assert.equal(row.pendingAsk, true)
-  assert.equal(row.agentName, 'helm-wf-abc123')
+  assert.equal(row.agentName, 'helmx-wf-abc123')
   assert.equal(row.stateChangeSeq, 7)
   assert.deepEqual(h.docs.at(-1)?.asks, [{ paneId: 'p1', nodeId: 'local', seq: 7, phase: 'pending' }])
 })
@@ -329,7 +329,7 @@ test('同 seq 下真实 cwd/status 变化仍发布', { timeout: 60_000 }, async 
 
 test('机密脱敏：cwd/foregroundCwd/label/title/agent/agentName 落 doc 前 redact', { timeout: 60_000 }, async () => {
   const h = makeHarness(() => ({
-    agents: [agentInfo('p1', { name: 'helm-wf-SECRET-name', foregroundCwd: '/home/SECRET/proj' })],
+    agents: [agentInfo('p1', { name: 'helmx-wf-SECRET-name', foregroundCwd: '/home/SECRET/proj' })],
     panes: [pane('p1', { cwd: '/work/SECRET-path', label: 'label-SECRET', title: 'title-SECRET', agent: 'claude-SECRET' })],
   }))
   const done = h.projector.refresh(h.registry, h.asks, TARGET)
@@ -341,7 +341,7 @@ test('机密脱敏：cwd/foregroundCwd/label/title/agent/agentName 落 doc 前 r
   assert.equal(row.label, 'label-[REDACTED]')
   assert.equal(row.title, 'title-[REDACTED]')
   assert.equal(row.agent, 'claude-[REDACTED]')
-  assert.equal(row.agentName, 'helm-wf-[REDACTED]-name')
+  assert.equal(row.agentName, 'helmx-wf-[REDACTED]-name')
   assert.equal(JSON.stringify(h.docs.at(-1)).includes('SECRET'), false)
 })
 
@@ -407,7 +407,7 @@ test('MetadataProjector：单飞期间的新 token 不丢弃，forget 回收 seq
   const slow = new MetadataProjector(
     async (_target, method, params) => {
       assert.equal(method, 'pane.report_metadata')
-      tokens.push((params['tokens'] as Record<string, string>)['helm']!)
+      tokens.push((params['tokens'] as Record<string, string>)['helmx']!)
       if (first) {
         first = false
         firstEntered.resolve()

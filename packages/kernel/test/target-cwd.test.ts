@@ -14,7 +14,7 @@
  */
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import {
   normalizeCwdForPlatform,
   normalizeSessionCwd,
@@ -83,12 +83,12 @@ describe('normalizeCwdForPlatform: rejects relative paths and normalizes by plat
     for (const bad of ['relative/ws', './here', '..', 'C:relative', 'c:']) {
       assert.throws(
         () => normalizeCwdForPlatform(bad, 'posix', 'test'),
-        (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
+        (e: unknown) => e instanceof HelmxError && e.code === 'validation_error',
         `relative form '${bad}' must reject`,
       )
       assert.throws(
         () => normalizeCwdForPlatform(bad, 'win32', 'test'),
-        (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
+        (e: unknown) => e instanceof HelmxError && e.code === 'validation_error',
       )
     }
   })
@@ -108,7 +108,7 @@ describe('normalizeCwdForPlatform: rejects relative paths and normalizes by plat
     for (const bad of ['/home/user', '/tmp', '/', '/mnt/cdrom', '/mnt']) {
       assert.throws(
         () => normalizeCwdForPlatform(bad, 'win32', 'test'),
-        (e: unknown) => e instanceof HelmError && e.code === 'unmappable_posix_root',
+        (e: unknown) => e instanceof HelmxError && e.code === 'unmappable_posix_root',
         `unmappable POSIX path '${bad}' must fail explicitly`,
       )
     }
@@ -142,7 +142,7 @@ describe('normalizeSessionCwd: combines node resolution with platform normalizat
   it('rejects relative paths before platform resolution regardless of whether platform is known', { timeout: 60_000 }, () => {
     assert.throws(
       () => normalizeSessionCwd('rel', { nodeId: 'unknown-node', entry: 'test' }),
-      (e: unknown) => e instanceof HelmError && e.code === 'validation_error',
+      (e: unknown) => e instanceof HelmxError && e.code === 'validation_error',
     )
   })
 })

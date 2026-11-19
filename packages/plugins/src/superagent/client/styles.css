@@ -1,7 +1,7 @@
 /**
  * builtin:superagent plugin styles.
  *
- * Fully reuses host design-system primitives (.screen-container, .table-wrap, .helm-table, .kv-list, .callout, .loading-state, etc.).
+ * Fully reuses host design-system primitives (.screen-container, .table-wrap, .helmx-table, .kv-list, .callout, .loading-state, etc.).
  * Keeps only SuperAgent patrol-specific widgets and report-card styles.
  */
 .sa-widget {

@@ -1,9 +1,9 @@
 /**
- * `@helm/protocol/browser` — browser-safe contract entry.
+ * `@helmx/protocol/browser` — browser-safe contract entry.
  *
  * Re-exports only the cross-runtime DTOs, pure helpers and UI contracts that carry
  * no `node:*` and no `@earendil-works/pi-*` dependency, for browser consumers
- * such as `@helm/web` and `@helm/plugin-client`.
+ * such as `@helmx/web` and `@helmx/plugin-client`.
  */
 
 export * from './conversation.js'

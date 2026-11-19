@@ -1,5 +1,5 @@
 /**
- * Helm 零缓存 Service Worker：
+ * Helmx 零缓存 Service Worker：
  * 仅承担 PWA 安装满足条件、生命周期接管与通知点击路由，不做离线缓存或网络请求拦截，
  * 确保页面版本探测与热更新导航始终直达最新服务端响应。
  */
@@ -68,7 +68,7 @@ self.addEventListener('notificationclick', (event) => {
           }
         }
         targetClient.postMessage({
-          type: 'helm:notification-click',
+          type: 'helmx:notification-click',
           url,
           tag,
           clickId,

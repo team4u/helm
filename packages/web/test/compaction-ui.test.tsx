@@ -19,12 +19,12 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helmx/protocol'
 import { makeTestStore } from './helpers/store.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import type { ToastNotice } from '../src/lib/types.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
-import type { HelmStoreValue } from '../src/lib/types.js'
+import type { HelmxStoreValue } from '../src/lib/types.js'
 import {
   getComposerPlaceholder,
   isSessionManageCommand,
@@ -39,7 +39,7 @@ try {
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
-const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
+const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
 const { Composer } = await import('../src/conversation/Composer.js')
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
@@ -95,8 +95,8 @@ function makeConversation(overrides: Partial<ConversationSummary> = {}): Convers
 
 function makeNoticeStore(
   conversation: ConversationSummary,
-  extra: Partial<HelmStoreValue> = {},
-): HelmExternalStore {
+  extra: Partial<HelmxStoreValue> = {},
+): HelmxExternalStore {
   return makeTestStore({
     conversations: [conversation],
     conversationDetails: { [conversation.id]: { ...conversation, entries: [] } },
@@ -171,7 +171,7 @@ test('ConversationTimeline: compacting=true renders the in-progress divider with
     contextUsage: { tokens: 50_000, contextWindow: 100_000, compacting: true },
   })
   const entries: ConversationEntry[] = [
-    { id: '1', kind: 'helm.input', data: { text: '先查一下日志', origin: 'human' } },
+    { id: '1', kind: 'helmx.input', data: { text: '先查一下日志', origin: 'human' } },
     { id: '2', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '已查看' }] }] },
   ]
   const live: ConversationLive = {
@@ -230,7 +230,7 @@ test('ConversationTimeline: contentFingerprint includes the compacting state to 
     contextUsage: { tokens: 50_000, contextWindow: 100_000, compacting: false },
   })
   const entries: ConversationEntry[] = [
-    { id: '1', kind: 'helm.input', data: { text: '你好', origin: 'human' } },
+    { id: '1', kind: 'helmx.input', data: { text: '你好', origin: 'human' } },
   ]
   const store = makeNoticeStore(baseConv, {
     conversationDetails: { [baseConv.id]: { ...baseConv, entries } },
@@ -454,7 +454,7 @@ test('ConversationPane: at compacting=true the menu item disables showing the in
   activeRoots.push(root)
 
   await act(async () => {
-    root.render(e(HelmStoreProvider, null, e(ConversationPane, { conversationId: 1 })))
+    root.render(e(HelmxStoreProvider, null, e(ConversationPane, { conversationId: 1 })))
   })
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 30))

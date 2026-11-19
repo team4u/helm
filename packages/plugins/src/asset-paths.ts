@@ -9,7 +9,7 @@
 import { existsSync, lstatSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { HelmError, PREBUILT_CLIENT_DIR_NAME } from '@helm/protocol'
+import { HelmxError, PREBUILT_CLIENT_DIR_NAME } from '@helmx/protocol'
 
 export interface PluginClientAssets {
   clientRoot?: string
@@ -50,7 +50,7 @@ export function resolvePluginClientAssets(
       : undefined
 
   if (clientRoot === undefined && prebuiltClientDir === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       missingErrorCode,
       `内置插件 ${pluginId} 找不到 client 或 dist-client 组件目录（期望 ${localDistClient}、${localClient} 或 ${srcFallback}）`,
       500,

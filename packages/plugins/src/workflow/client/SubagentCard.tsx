@@ -5,9 +5,9 @@
  */
 import { useMemo } from 'react'
 import type { ReactNode, RefObject } from 'react'
-import type { ToolViewProps } from '@helm/protocol'
+import type { ToolViewProps } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { useConversation, usePluginContext, usePluginLocale, formatDurationMs, resolveLocalizedText } from '@helm/plugin-client'
+import { useConversation, usePluginContext, usePluginLocale, formatDurationMs, resolveLocalizedText } from '@helmx/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import { ExecutionCard } from './ExecutionCard.tsx'
 import { ExecutionChildrenRows } from './ExecutionChildrenRows.tsx'

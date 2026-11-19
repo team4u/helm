@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { matchesConversationScope, type ConversationScopeTarget } from '@helm/protocol'
+import { matchesConversationScope, type ConversationScopeTarget } from '@helmx/protocol'
 
 const conv = (over: Partial<ConversationScopeTarget>): ConversationScopeTarget => ({
   id: 1,

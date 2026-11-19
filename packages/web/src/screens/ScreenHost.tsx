@@ -5,8 +5,8 @@
  */
 import * as React from 'react'
 import { useMemo } from 'react'
-import { HelmIcon } from '@helm/plugin-client'
-import { resolveLocalizedText, type ScreenSpec } from '@helm/protocol/browser'
+import { HelmxIcon } from '@helmx/plugin-client'
+import { resolveLocalizedText, type ScreenSpec } from '@helmx/protocol/browser'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useGroupedUi, useLocationTargets, useStoreActions } from '../lib/store-context.js'
 import type { ResolvedTarget } from '../lib/types.js'
@@ -68,10 +68,10 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
 
   if (matched === undefined) {
     return (
-      <div className="helm-pane">
+      <div className="helmx-pane">
         <div className="pane-topbar">
           <div className="pane-title-group">
-            <HelmIcon name="alert-triangle" size={14} />
+            <HelmxIcon name="alert-triangle" size={14} />
             <span className="pane-title">
               {t('shell.screen.notFoundTitle', { pluginId, screenId })}
             </span>
@@ -89,7 +89,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
         </div>
         <div className="timeline-scroll">
           <div className="callout callout-warn">
-            <HelmIcon name="alert-triangle" size={13} />
+            <HelmxIcon name="alert-triangle" size={13} />
             <span>
               {t('shell.screen.notFoundBody', { pluginId, screenId })}
             </span>
@@ -103,10 +103,10 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
   const spec = matched.spec as ScreenSpec
 
   return (
-    <div className="helm-pane">
+    <div className="helmx-pane">
       <div className="pane-topbar">
         <div className="pane-title-group">
-          {spec.icon !== undefined && <HelmIcon name={spec.icon} size={14} />}
+          {spec.icon !== undefined && <HelmxIcon name={spec.icon} size={14} />}
           <span className="pane-title">{resolveLocalizedText(spec.label, locale) || `${pluginId}/${screenId}`}</span>
         </div>
         <div className="pane-actions">

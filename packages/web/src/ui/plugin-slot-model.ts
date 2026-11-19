@@ -6,7 +6,7 @@
  * order inside groupedUi.pluginSlots, first registered wins); the three keys
  * compose into a single stable sort.
  */
-import type { ConversationScope, PluginSlotContributionSpec } from '@helm/protocol/browser'
+import type { ConversationScope, PluginSlotContributionSpec } from '@helmx/protocol/browser'
 import type { QualifiedUiSpec } from '../lib/types.js'
 
 export type SlotContribution = QualifiedUiSpec<PluginSlotContributionSpec>

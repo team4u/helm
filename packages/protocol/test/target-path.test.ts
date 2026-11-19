@@ -10,7 +10,7 @@
 import { posix, win32 } from 'node:path'
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { isAbsoluteTargetPath, pathRulesForShape, targetPathShape } from '@helm/protocol'
+import { isAbsoluteTargetPath, pathRulesForShape, targetPathShape } from '@helmx/protocol'
 
 const posixRules = pathRulesForShape('posix')
 const win32Rules = pathRulesForShape('win32')

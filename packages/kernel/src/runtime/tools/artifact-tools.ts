@@ -28,7 +28,7 @@ import { resolveTargetPath } from './target-path.js'
 import { resolveToolTarget } from './tool-target.js'
 import { requireRemoteEnv } from './guards.js'
 import { basenameForShape } from './file-env.js'
-import type { HelmToolDeps } from '../tool-deps.js'
+import type { HelmxToolDeps } from '../tool-deps.js'
 
 /** Shared classification/limit messages for `register_artifact` (shared across preflight, post-open, and post-read).
  * Note: `'is directory'`, `'15 MiB'`, and `'not ordinary file'` wording are preserved for test compatibility. */
@@ -122,7 +122,7 @@ const registerArtifactParameters = obj({
  * `size`/`mime`; binary fidelity and text redaction are unified in `ArtifactService`; all errors pass through `deps.redact`.
  */
 export function createRegisterArtifactTool(
-  deps: HelmToolDeps,
+  deps: HelmxToolDeps,
 ): ToolRegistration<typeof registerArtifactParameters, never> {
   return defineTool({
     name: 'register_artifact',
@@ -403,7 +403,7 @@ const readArtifactParameters = obj({
  * UTF-8 boundaries with guaranteed forward progress on `nextOffset`.
  */
 export function createReadArtifactTool(
-  deps: HelmToolDeps,
+  deps: HelmxToolDeps,
   isAuthorized: (conversationId: number, artifactConversationId: number) => boolean,
 ): ToolRegistration<typeof readArtifactParameters, never> {
   return defineTool({
@@ -430,7 +430,7 @@ export function createReadArtifactTool(
       const conversationId = api.conversationId as number
       // Honesty: only missing artifacts (`FileNotFoundError`) map to `artifact_not_found`;
       // genuine storage/DB read failures surface the redacted underlying error (`artifact_read_failed`, matching `readBuffer` below).
-      let meta: Awaited<ReturnType<HelmToolDeps['artifacts']['get']>>
+      let meta: Awaited<ReturnType<HelmxToolDeps['artifacts']['get']>>
       try {
         meta = await deps.artifacts.get(id)
       } catch (error) {

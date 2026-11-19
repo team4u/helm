@@ -8,18 +8,18 @@
  * - Orchestrate the external trigger pipeline (`dispatchTrigger`: validate original explicit target -> run `trigger` hook -> `submitInput`).
  */
 
-import { HelmError } from '@helm/protocol'
-import type { ConversationInit, ConversationSummary, ExternalTriggerEnvelope } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
+import type { ConversationInit, ConversationSummary, ExternalTriggerEnvelope } from '@helmx/protocol'
 import type { HookBridge } from './hook-bridge.js'
-import { escapeXml } from '@helm/protocol'
+import { escapeXml } from '@helmx/protocol'
 import { stripEnvelope } from './runtime-helpers.js'
-import type { HelmStore } from './store.js'
+import type { HelmxStore } from './store.js'
 
 interface RuntimeTriggerDispatcherDeps {
-  readonly store: HelmStore
+  readonly store: HelmxStore
   readonly hookBridge: HookBridge
   getConversation(id: number): ConversationSummary
-  getConversationOwnership(id: number): 'helm' | 'bot' | 'human'
+  getConversationOwnership(id: number): 'helmx' | 'bot' | 'human'
   createConversation(init: ConversationInit): Promise<ConversationSummary>
   submitInput(
     id: number,
@@ -108,7 +108,7 @@ export class RuntimeTriggerDispatcher {
     try {
       await this.deps.submitInput(target, final.text, { origin: 'trigger', whenBusy: 'steer' })
     } catch (err) {
-      if (!(err instanceof HelmError && err.code === 'not_found')) throw err
+      if (!(err instanceof HelmxError && err.code === 'not_found')) throw err
       const resolved = await this.resolveDefaultTriggerTarget()
       await this.deps.submitInput(resolved, final.text, { origin: 'trigger', whenBusy: 'steer' })
     }

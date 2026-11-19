@@ -1,6 +1,6 @@
 /**
  * Tests for the AgentExecutionInfo.meta namespace envelope boundary validation
- * (@helm/protocol contract): JSON-safe deep clone / unknown top-level field
+ * (@helmx/protocol contract): JSON-safe deep clone / unknown top-level field
  * rejection / at least one of conversationId or executionId / meta shape
  * (non-object, non-object namespace) / non-JSON values (functions/Symbols/
  * undefined/NaN/Infinity/class instances) / cycle, count, length and depth
@@ -11,7 +11,7 @@
  */
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
-import { HelmError, sanitizeAgentExecutionInfo, sanitizeAgentGateResult, sanitizeAgentNamespacedMeta } from '../src/index.js'
+import { HelmxError, sanitizeAgentExecutionInfo, sanitizeAgentGateResult, sanitizeAgentNamespacedMeta } from '../src/index.js'
 
 const timeout = { timeout: 60_000 } as const
 const ctx = { agentId: 'agent-x' }
@@ -20,7 +20,7 @@ function rejects(value: unknown, reasonPart: string, code = 'execution_info_inva
   assert.throws(
     () => sanitizeAgentExecutionInfo(value, ctx),
     (error: unknown) => {
-      assert.ok(error instanceof HelmError)
+      assert.ok(error instanceof HelmxError)
       assert.equal(error.code, code)
       assert.ok(error.message.includes(reasonPart), `message should contain "${reasonPart}" (actual ${error.message})`)
       return true
@@ -172,7 +172,7 @@ describe('sanitizeAgentGateResult (gate result contract)', () => {
     for (const bad of ['str', null, [], 42, { output: 'x' }, { ok: 1, output: 'x' }, { ok: true }]) {
       assert.throws(
         () => sanitizeAgentGateResult(bad, ctx),
-        (error: unknown) => error instanceof HelmError && error.code === 'gate_result_invalid',
+        (error: unknown) => error instanceof HelmxError && error.code === 'gate_result_invalid',
       )
     }
   })
@@ -181,7 +181,7 @@ describe('sanitizeAgentGateResult (gate result contract)', () => {
     assert.throws(
       () => sanitizeAgentGateResult({ ok: true, output: 'x', signal: 'SIGKILL' }, ctx),
       (error: unknown) =>
-        error instanceof HelmError &&
+        error instanceof HelmxError &&
         error.code === 'gate_result_invalid' &&
         error.message.includes('must not carry unknown fields'),
     )
@@ -192,7 +192,7 @@ describe('sanitizeAgentGateResult (gate result contract)', () => {
       assert.throws(
         () => sanitizeAgentGateResult({ ok: false, output: '', exitCode: badExit as never }, ctx),
         (error: unknown) =>
-          error instanceof HelmError &&
+          error instanceof HelmxError &&
           error.code === 'gate_result_invalid' &&
           error.message.includes('exitCode'),
         `exitCode=${String(badExit)} should be rejected`,
@@ -201,7 +201,7 @@ describe('sanitizeAgentGateResult (gate result contract)', () => {
     assert.throws(
       () => sanitizeAgentGateResult({ ok: false, output: '', timedOut: 'yes' as never }, ctx),
       (error: unknown) =>
-        error instanceof HelmError &&
+        error instanceof HelmxError &&
         error.code === 'gate_result_invalid' &&
         error.message.includes('timedOut'),
     )

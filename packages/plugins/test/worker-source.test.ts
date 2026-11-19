@@ -159,8 +159,8 @@ const META_OK: AgentWithMetaResult<{ done: boolean }> = {
   execution: {
     nodeId: 'local',
     conversationId: 42,
-    effectiveCwd: '/repo/wt/helm/spawn-deadbeef',
-    worktree: { id: 'wt-1', path: '/repo/wt/helm/spawn-deadbeef', branch: 'helm/spawn-deadbeef' },
+    effectiveCwd: '/repo/wt/helmx/spawn-deadbeef',
+    worktree: { id: 'wt-1', path: '/repo/wt/helmx/spawn-deadbeef', branch: 'helmx/spawn-deadbeef' },
   },
   gate: { ok: true, output: '', exitCode: 0, timedOut: false },
 }

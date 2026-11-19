@@ -1,7 +1,7 @@
 /**
  * Plugin dependency graph validation, dependent lookup, and topological sorting.
  */
-import { HelmError } from '@helm/protocol';
+import { HelmxError } from '@helmx/protocol';
 import {
   findDependencyCycle,
   topoSortByDependencies,
@@ -20,7 +20,7 @@ export function assertNoDependencyCycle(
     (id) => plugins.get(id)?.dependencies,
   );
   if (cycle !== undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_dependency_cycle',
       `Plugin ${pluginId} declared a dependency cycle: ${cycle.join(' -> ')}`,
       409,
@@ -41,7 +41,7 @@ export function assertDependenciesSatisfied(
   for (const dep of dependencies) {
     const depState = plugins.get(dep);
     if (depState === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_dependency_missing',
         `Plugin ${pluginId} depends on ${dep}, which is not registered (install/register and enable it first)`,
         409,
@@ -49,7 +49,7 @@ export function assertDependenciesSatisfied(
       );
     }
     if (!depState.enabled || depState.phase !== 'idle') {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_dependency_not_enabled',
         `Plugin ${pluginId} depends on ${dep}, which is not enabled (dependencies must be registered and enabled)`,
         409,
@@ -87,7 +87,7 @@ export function assertNoEnabledDependents(
 ): void {
   const dependents = collectDependents(plugins, pluginId);
   if (dependents.length === 0) return;
-  throw new HelmError(
+  throw new HelmxError(
     'plugin_in_use',
     `Plugin ${pluginId} is required by ${dependents.length} plugin(s) (${dependents.map((s) => s.definition.id).join(', ')}); disable or remove dependents first`,
     409,

@@ -34,8 +34,8 @@ import {
   type FileWatcher,
   type FileChange,
 } from '@earendil-works/pi-durable/env'
-import type { EnvExecOutputEvent, NodeEnvRpcFunctions, RpcEnvError, RpcResult } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { EnvExecOutputEvent, NodeEnvRpcFunctions, RpcEnvError, RpcResult } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { ExecOutputHub } from './exec-output.js'
 
 /** Resolves a node's env RPC by `nodeId` (wired to fabric's connection registry). */
@@ -183,7 +183,7 @@ export class RemoteExecutionEnv implements ExecutionEnv {
         rpcPromise,
         new Promise<never>((_, reject) => {
           timer = setTimeout(() => {
-            reject(new HelmError(
+            reject(new HelmxError(
               'node_offline',
               `node ${this.#nodeIdValue} is offline; reconnect wait exceeded ${this.#rpcWaitTimeoutMs}ms (file operations do not wait unboundedly)`,
               409,

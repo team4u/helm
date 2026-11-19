@@ -1,7 +1,7 @@
 /**
  * journal.ts -- the private prefix-replay ledger of workflow runs.
  *
- * Ported from @tintinweb/pi-subagents v0.23.1 (MIT) journal.ts and hardened per helm semantics:
+ * Ported from @tintinweb/pi-subagents v0.23.1 (MIT) journal.ts and hardened per helmx semantics:
  *
  * ## Prefix replay, not table lookup
  * Each row matches by stable scope path, in-scope call position, attempt number and payload hash (key).

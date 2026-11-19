@@ -1,14 +1,14 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 import type { Extension } from '@earendil-works/pi-durable'
-import { HelmError, type ActionManifest } from '@helm/protocol'
+import { HelmxError, type ActionManifest } from '@helmx/protocol'
 import {
   RuntimeToolRegistry,
   wrapToolExecute,
   type PluginHostToolTarget,
 } from '../src/runtime/tool-registry.js'
 import type { HandledToolCallEntry } from '../src/runtime/hook-bridge.js'
-import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
+import type { HelmxToolDeps } from '../src/runtime/tool-deps.js'
 import type { DerivedToolSpec } from '../src/plugins/index.js'
 import { CapabilityRegistry } from '../src/plugins/capability-registry.js'
 
@@ -53,7 +53,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     assert.deepEqual(res.output, [{ type: 'text', text: 'normal-output' }])
   })
 
-  it('installKernelTools: registers helm-core extension (7 core tools) all wrapped with wrapToolExecute', { timeout: 60_000 }, async () => {
+  it('installKernelTools: registers helmx-core extension (7 core tools) all wrapped with wrapToolExecute', { timeout: 60_000 }, async () => {
     const installed: Extension[] = []
     const fakeRegistry = {
       install(ext: Extension) {
@@ -62,7 +62,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     }
 
     const handledToolCalls = new Map<string, HandledToolCallEntry>()
-    const fakeToolDeps: HelmToolDeps = {
+    const fakeToolDeps: HelmxToolDeps = {
       dataDir: '/tmp/test',
       defaultCwd: '/tmp/test',
       hubUrl: 'http://127.0.0.1:3202',
@@ -129,7 +129,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
 
     assert.equal(installed.length, 1)
     const coreExt = installed[0]!
-    assert.equal(coreExt.name, 'helm-core')
+    assert.equal(coreExt.name, 'helmx-core')
     assert.ok(Array.isArray(coreExt.tools))
     const toolNames = coreExt.tools!.map((t) => t.name)
     assert.deepEqual(
@@ -210,7 +210,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     }
 
     const handledToolCalls = new Map<string, HandledToolCallEntry>()
-    const fakeToolDeps: HelmToolDeps = {
+    const fakeToolDeps: HelmxToolDeps = {
       dataDir: '/tmp/test',
       defaultCwd: '/tmp/test',
       hubUrl: 'http://127.0.0.1:3202',
@@ -275,7 +275,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
 
     registryModule.refreshPluginTools()
     assert.equal(installed.length, 1)
-    assert.equal(installed[0]!.name, 'helm-plugins')
+    assert.equal(installed[0]!.name, 'helmx-plugins')
     assert.equal(installed[0]!.tools?.length, 1)
     assert.equal(installed[0]!.tools?.[0]?.name, 'custom_search')
 
@@ -286,13 +286,13 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
       }>
     }
     const res = await tool.execute(
-      { q: 'helm' },
+      { q: 'helmx' },
       { conversationId: 10, callId: 'call-custom-1' },
       { abortSignal: undefined },
     )
     assert.deepEqual(executedToolCall, {
       name: 'custom_search',
-      args: { q: 'helm' },
+      args: { q: 'helmx' },
       context: { conversationId: 10, callId: 'call-custom-1', signal: undefined },
     })
     assert.ok(res.output[0]!.text.includes('***'))
@@ -302,7 +302,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
     currentTools = []
     registryModule.refreshPluginTools()
     assert.equal(installed.length, 2)
-    assert.equal(installed[1]!.name, 'helm-plugins')
+    assert.equal(installed[1]!.name, 'helmx-plugins')
     assert.equal(installed[1]!.tools?.length, 0)
   })
 
@@ -346,7 +346,7 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
 
   it('installKernelTools: only read-only tools read and read_artifact declare replay: "safe"; others remain non-safe by default', { timeout: 60_000 }, () => {
     const installed: Extension[] = []
-    const fakeToolDeps: HelmToolDeps = {
+    const fakeToolDeps: HelmxToolDeps = {
       dataDir: '/tmp/test',
       defaultCwd: '/tmp/test',
       hubUrl: 'http://127.0.0.1:3202',
@@ -430,12 +430,12 @@ describe('RuntimeToolRegistry and wrapToolExecute unit tests', { timeout: 60_000
           replay: 'always' as never,
           execute: () => ({ ok: true }),
         }),
-      (error: unknown) => error instanceof HelmError && error.code === 'invalid_tool_spec' && error.status === 400,
+      (error: unknown) => error instanceof HelmxError && error.code === 'invalid_tool_spec' && error.status === 400,
     )
 
     const derived = cap.listTools(['demo'])
     const installed: Extension[] = []
-    const fakeToolDeps: HelmToolDeps = {
+    const fakeToolDeps: HelmxToolDeps = {
       dataDir: '/tmp/test',
       defaultCwd: '/tmp/test',
       hubUrl: 'http://127.0.0.1:3202',

@@ -27,15 +27,15 @@
  *   block tree B's completion notice, nor block blocked notices inside tree B
  *   or tree A itself;
  * - Completion notices honestly distinguish outcomes: no accumulated
- *   participant in error → "Helm conversation completed" (#id title); any
- *   participant in error → "Helm conversation finished" (#id title · with
+ *   participant in error → "Helmx conversation completed" (#id title); any
+ *   participant in error → "Helmx conversation finished" (#id title · with
  *   failures);
- * - Waiting notices: title "Helm is waiting for you", body deduplicated by
+ * - Waiting notices: title "Helmx is waiting for you", body deduplicated by
  *   root and honestly flagging failures, clicking jumps to the tree's most
  *   recently updated blocked conversation.
  */
 
-import type { ConversationSummary } from '@helm/protocol/browser'
+import type { ConversationSummary } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import { MAX_ANCESTRY_DEPTH } from '../conversation/ancestry-model.js'
 import type { ConversationBackgroundIndex } from './background-activity-model.js'
@@ -138,13 +138,13 @@ export function resolveActivitySnapshot(input: {
 }
 
 /** Completion-notice title when no participant of the root tree is in error (English bridge value; the catalog key is shell.quiet.completedTitle). */
-export const COMPLETED_NOTIFICATION_TITLE = 'Helm conversation completed'
+export const COMPLETED_NOTIFICATION_TITLE = 'Helmx conversation completed'
 
 /** Finish-notice title when any participant of the root tree is in error — never claims completion (English bridge value; shell.quiet.endedTitle). */
-export const ENDED_NOTIFICATION_TITLE = 'Helm conversation finished'
+export const ENDED_NOTIFICATION_TITLE = 'Helmx conversation finished'
 
 /** Notice title for waiting on human input/approval (blocked) (English bridge value; shell.quiet.waitingTitle). */
-export const WAITING_NOTIFICATION_TITLE = 'Helm is waiting for you'
+export const WAITING_NOTIFICATION_TITLE = 'Helmx is waiting for you'
 
 /** Maximum root entries listed in a body; anything beyond folds into "{count} pending in total". */
 const MAX_LISTED_CONVERSATIONS = 3
@@ -180,8 +180,8 @@ function mergeToRootIds(
  * Compose one root tree's completion-cycle notification (null when no
  * accumulated participants):
  * - Any accumulated participant (merged child conversations included) in error
- *   → "Helm conversation finished", body `#id title · with failures`;
- * - No error participants → "Helm conversation completed", body `#id title`;
+ *   → "Helmx conversation finished", body `#id title · with failures`;
+ * - No error participants → "Helmx conversation completed", body `#id title`;
  * - Jump to rootId while the root survives; if the root was deleted but child
  *   participants survive, jump to the surviving root; if the whole tree was
  *   deleted during the cycle the notice still stands but fabricates no title —
@@ -235,7 +235,7 @@ export function composeTreeCompletionNotification(input: {
 /**
  * Compose one root tree's waiting-for-human (blocked) notification:
  * - null when no blocked conversation survives;
- * - title fixed to the waiting title ("Helm is waiting for you");
+ * - title fixed to the waiting title ("Helmx is waiting for you");
  * - body deduplicated by root (multiple blocked children listed once), and
  *   honestly flagging failures when any accumulated participant is in error;
  * - primaryConversationId is the tree's most recently updated blocked

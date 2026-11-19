@@ -13,7 +13,7 @@ import type {
   NodeIpcEvent,
   NodeIpcSubscribeInput,
   RpcResult,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import { invalidInput, isRecord, rpcFail, type RpcErrorCode } from './env-rpc-shared.js';
 
 /** Max single-frame size (matches kernel Herdr transport; oversized frames fail explicitly). */
@@ -300,7 +300,7 @@ export function createIpcBridge(options: IpcBridgeOptions): IpcBridge {
         activeIpcSubscriptions.delete(input.subscribeId);
         socket.destroy();
         try { onIpcClosed?.({ subscribeId: input.subscribeId, ...(error ? { error } : {}) }); }
-        catch { console.error('[helm-node] IPC close notification callback failed'); }
+        catch { console.error('[helmx-node] IPC close notification callback failed'); }
       };
       const timer: NodeJS.Timeout = setTimeout(() => {
         if (acked) return;

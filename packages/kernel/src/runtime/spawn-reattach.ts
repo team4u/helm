@@ -13,7 +13,7 @@
 
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Conversation, EntryId, EntryRecord, SettledSubmissionRecord } from '@earendil-works/pi-durable'
-import { HelmError, isAbsoluteAgentPath, type AgentSpawnRequest } from '@helm/protocol'
+import { HelmxError, isAbsoluteAgentPath, type AgentSpawnRequest } from '@helmx/protocol'
 import { assertSpawnForkFields } from './spawn-fork.js'
 import { extractAcceptedStructuredOutputFromEntries } from './structured-output.js'
 
@@ -31,7 +31,7 @@ export function assertSpawnRequestModes(
   assertSpawnForkFields(request)
   if (request.requestId !== undefined) {
     if (typeof request.requestId !== 'string' || request.requestId.trim() === '') {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `requestId must be a non-empty string (received ${String(request.requestId)})`,
         400,
@@ -42,15 +42,15 @@ export function assertSpawnRequestModes(
   if (request.reattach === undefined) return
   const raw = request.reattach
   if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new HelmError('validation_error', 'reattach must be a plain object', 400)
+    throw new HelmxError('validation_error', 'reattach must be a plain object', 400)
   }
   for (const key of Object.keys(raw)) {
     if (key !== 'conversationId' && key !== 'executionId' && key !== 'effectiveCwd') {
-      throw new HelmError('validation_error', `reattach contains unknown field "${key}"`, 400, { field: key })
+      throw new HelmxError('validation_error', `reattach contains unknown field "${key}"`, 400, { field: key })
     }
   }
   if (request.resume !== undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       'reattach and resume are mutually exclusive: cannot reattach in-place while resuming an existing subagent',
       400,
@@ -58,7 +58,7 @@ export function assertSpawnRequestModes(
     )
   }
   if (request.fork === true) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       'reattach and fork are mutually exclusive: cannot reattach in-place while forking from parent conversation',
       400,
@@ -66,7 +66,7 @@ export function assertSpawnRequestModes(
   }
   if (raw.conversationId !== undefined) {
     if (typeof raw.conversationId !== 'number' || !Number.isSafeInteger(raw.conversationId) || raw.conversationId <= 0) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `reattach.conversationId must be a positive safe integer (received ${String(raw.conversationId)})`,
         400,
@@ -76,7 +76,7 @@ export function assertSpawnRequestModes(
   }
   if (raw.executionId !== undefined) {
     if (typeof raw.executionId !== 'string' || raw.executionId.length === 0) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `reattach.executionId must be a non-empty string (received ${String(raw.executionId)})`,
         400,
@@ -86,7 +86,7 @@ export function assertSpawnRequestModes(
   }
   if (raw.effectiveCwd !== undefined) {
     if (typeof raw.effectiveCwd !== 'string' || !isAbsoluteAgentPath(raw.effectiveCwd)) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `reattach.effectiveCwd must be an absolute path (received ${String(raw.effectiveCwd)})`,
         400,
@@ -95,7 +95,7 @@ export function assertSpawnRequestModes(
     }
   }
   if (raw.conversationId === undefined && raw.executionId === undefined) {
-    throw new HelmError('validation_error', 'reattach requires at least conversationId or executionId', 400)
+    throw new HelmxError('validation_error', 'reattach requires at least conversationId or executionId', 400)
   }
 }
 
@@ -153,7 +153,7 @@ function assistantTextFromEntry(entry: EntryRecord | undefined): string {
 /**
  * Read assistant text for a given submission: prefers `settled.answer` directly, falling back to searching
  * `[settled.entry, settled.answer]` in reverse order for the latest non-empty `pi.assistant` text
- * (stopping at `pi.reset` or `helm.rewind`).
+ * (stopping at `pi.reset` or `helmx.rewind`).
  */
 export async function readSubmissionAssistantText(
   conversation: Pick<Conversation, 'entries'>,
@@ -181,7 +181,7 @@ export async function readSubmissionAssistantText(
       BACKGROUND_CONTEXT,
     )
     for (const entry of page.items) {
-      if (entry.kind === 'pi.reset' || entry.kind === 'helm.rewind') return undefined
+      if (entry.kind === 'pi.reset' || entry.kind === 'helmx.rewind') return undefined
       const text = assistantTextFromEntry(entry)
       if (text !== '') return text
     }

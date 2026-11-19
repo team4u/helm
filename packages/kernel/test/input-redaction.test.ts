@@ -2,11 +2,11 @@
  * Input redaction regression tests (minimal real-world regression suite).
  *
  * Background: submitInput previously redacted only meta while forwarding raw text/effectiveText into
- * SDK context and helm.input.data, allowing registered secrets (managed tokens, SecretStash values)
+ * SDK context and helmx.input.data, allowing registered secrets (managed tokens, SecretStash values)
  * to enter model context and state.sqlite in plaintext.
  *
  * Verified via real KernelRuntime + faux provider + temp dataDir:
- * 1. Direct input containing managed token / stash secret -> model requests, helm.input entries,
+ * 1. Direct input containing managed token / stash secret -> model requests, helmx.input entries,
  *    auto-generated title, FTS, and all state.sqlite tables contain only markers/placeholders;
  * 2. Output of input hook transforms containing secrets -> identically redacted across all layers
  *    (while preserving transform semantics: transformed text/origin apply).
@@ -76,7 +76,7 @@ function sqliteTablesContaining(dbPath: string, needle: string): string[] {
 }
 
 test('direct input with managed token and stash secret is redacted end-to-end across text/meta/title/entry/FTS/SQLite', { timeout: 60_000 }, async () => {
-  const env = await makeEnv('helm-input-redact-direct-')
+  const env = await makeEnv('helmx-input-redact-direct-')
   try {
     // Conversation-scoped stash secret (placeholder format after redaction: [REDACTED:stash:<uuid>]).
     const conversation = await env.kernel.createConversation()
@@ -106,7 +106,7 @@ test('direct input with managed token and stash secret is redacted end-to-end ac
     assert.ok(requests[0]!.includes('[REDACTED]'), 'managed token should enter model context as [REDACTED]')
     assert.ok(requests[0]!.includes(placeholder), 'stash secret should enter model context as stash placeholder')
 
-    // 2) Full SQLite scan: no table stores plaintext (covering helm.input entry, title column, FTS).
+    // 2) Full SQLite scan: no table stores plaintext (covering helmx.input entry, title column, FTS).
     const dbPath = join(env.dataDir, 'state.sqlite')
     assert.deepEqual(sqliteTablesContaining(dbPath, env.managedToken), [], 'state.sqlite must not store plaintext managed token')
     assert.deepEqual(sqliteTablesContaining(dbPath, 'sk-secret-plain-value-9f3k'), [], 'state.sqlite must not store plaintext stash secret')
@@ -116,7 +116,7 @@ test('direct input with managed token and stash secret is redacted end-to-end ac
     assert.ok(conv.title.includes('[REDACTED]'), 'first input auto-title should contain redacted marker')
     assert.ok(!conv.title.includes(env.managedToken), 'auto-title must not contain plaintext managed token')
     const detail = await env.kernel.getConversationDetail(conversation.id)
-    const input = detail.entries.find((entry) => entry.kind === 'helm.input')?.data as
+    const input = detail.entries.find((entry) => entry.kind === 'helmx.input')?.data as
       { text: string; meta: Record<string, unknown> } | undefined
     assert.ok(input, 'conversation detail should persist redacted input entry')
     assert.equal(input.text, `credential is [REDACTED] and ${placeholder}, plus meta`)
@@ -134,7 +134,7 @@ test('direct input with managed token and stash secret is redacted end-to-end ac
 })
 
 test('input hook transform output containing secrets is redacted end-to-end while preserving transform semantics', { timeout: 60_000 }, async () => {
-  const env = await makeEnv('helm-input-redact-transform-')
+  const env = await makeEnv('helmx-input-redact-transform-')
   try {
     await env.kernel.plugins.register({
       id: 'test:inject-secret',

@@ -39,7 +39,7 @@ const timeout = { timeout: 60_000 } as const
 let root: string
 
 before(async () => {
-  root = await makeTempDir('helm-resclean-')
+  root = await makeTempDir('helmx-resclean-')
 })
 
 after(async () => {
@@ -72,7 +72,7 @@ describe('diagnostics.collect external aggregation (replaces watchdogTick transf
               targetId: 'ext:p1',
               targetKind: 'external',
               nodeId: 'local',
-              ownedBy: 'helm',
+              ownedBy: 'helmx',
               status: 'working',
               stalledMs: 0,
               facts: { kind: 'test-collector' },
@@ -177,7 +177,7 @@ describe('handledToolCalls orphan cleanup', { timeout: 60_000 }, () => {
 describe('EnvFabric.evictConversation', { timeout: 60_000 }, () => {
   it('clears cached target instances for the conversation (envForTarget allocates a fresh instance)', timeout, async () => {
     const fabric = createEnvFabric({
-      envOptions: () => ({ HELM_CONVERSATION_ID: '42' }),
+      envOptions: () => ({ HELMX_CONVERSATION_ID: '42' }),
     })
     try {
       const a = fabric.envForTarget({ conversationId: 42, nodeId: 'local', cwd: root })

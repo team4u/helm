@@ -5,7 +5,7 @@
  * 拒绝、绝不静默丢弃）、background 缺省按权威 ownership 判定、执行元数据
  * （conversationId / executionId / worktree）独立于业务 result 回报。
  */
-import { safeResultText, type AgentExecutionInfo, type AgentSpawnRequest, type HelmPluginContext } from '@helm/protocol'
+import { safeResultText, type AgentExecutionInfo, type AgentSpawnRequest, type HelmxPluginContext } from '@helmx/protocol'
 import {
   DEFAULT_MAX_SUBAGENT_DEPTH,
   HARD_MAX_SUBAGENT_DEPTH,
@@ -59,7 +59,7 @@ function envelopeError(text: string, result: string): {
 }
 
 export function registerSubagentTool(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   deps: Pick<WorkflowToolDeps, 'workflows' | 'assertCanSpawn' | 'resolveBackground' | 'syncRunsDoc'>,
 ): void {
   const { workflows, assertCanSpawn, resolveBackground, syncRunsDoc } = deps
@@ -74,7 +74,7 @@ export function registerSubagentTool(
       'Only pass background:false for synchronous waiting when the very next step depends on the subagent result and there is no other work in between.',
     ],
     description:
-      'Spawn a subagent. Human conversations default to background execution: the call returns a runId as soon as the execution environment is ready, and the completion arrives as a steer follow-up in this conversation; automated conversations (managed subagents/resident workers/trigger sessions, owned by bot/helm) default to waiting synchronously for the final result, and an explicit background=true is rejected — a background report would let the automated caller settle early. An explicit background:false forces synchronous waiting: a synchronous run still has a durable WorkflowRun (it can be moved background by runId via the workflows detach action or the UI "move to background", returning a background handle immediately). agentType is a Profile ID or an external runtime identifier (e.g. herdr:agy); outputs are validated against schema, and gate is accepted in the real node and working directory. Supports label (concise task name), cwd, fork (spawn a native sub-conversation forked from the parent conversation\'s currently completed context; the default agentType inherits the parent conversation\'s role and context/directory/model config; mutually exclusive with resume; unsupported for external runtimes), isolation:worktree, model, effort, maxSubagentDepth (explicitly grants the subtree spawn-depth ceiling, 1..5, default inherits the current ceiling of 2); resume continues the same execution context via execution.conversationId/executionId. External runtime panes carry no parent-conversation secrets by default; grant them individually with secretNames. result and execution metadata are separate; after inspecting or merging, cleanup_worktree can clean up the managed worktree.',
+      'Spawn a subagent. Human conversations default to background execution: the call returns a runId as soon as the execution environment is ready, and the completion arrives as a steer follow-up in this conversation; automated conversations (managed subagents/resident workers/trigger sessions, owned by bot/helmx) default to waiting synchronously for the final result, and an explicit background=true is rejected — a background report would let the automated caller settle early. An explicit background:false forces synchronous waiting: a synchronous run still has a durable WorkflowRun (it can be moved background by runId via the workflows detach action or the UI "move to background", returning a background handle immediately). agentType is a Profile ID or an external runtime identifier (e.g. herdr:agy); outputs are validated against schema, and gate is accepted in the real node and working directory. Supports label (concise task name), cwd, fork (spawn a native sub-conversation forked from the parent conversation\'s currently completed context; the default agentType inherits the parent conversation\'s role and context/directory/model config; mutually exclusive with resume; unsupported for external runtimes), isolation:worktree, model, effort, maxSubagentDepth (explicitly grants the subtree spawn-depth ceiling, 1..5, default inherits the current ceiling of 2); resume continues the same execution context via execution.conversationId/executionId. External runtime panes carry no parent-conversation secrets by default; grant them individually with secretNames. result and execution metadata are separate; after inspecting or merging, cleanup_worktree can clean up the managed worktree.',
     inputSchema: {
       type: 'object',
       properties: {

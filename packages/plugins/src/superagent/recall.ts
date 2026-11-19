@@ -1,8 +1,8 @@
 import {
-  HelmError,
+  HelmxError,
   type ConversationEntry,
   type TurnOutcome,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import {
   RECALL_DOC_NAME,
   SUPERAGENT_PLUGIN_ID,
@@ -10,7 +10,7 @@ import {
   isPosIntId,
   type RecallGraphDoc,
 } from './contracts.js'
-import { isJsonObject } from '@helm/protocol'
+import { isJsonObject } from '@helmx/protocol'
 
 const SETTLED_OUTCOMES = new Set(['completed', 'failed', 'aborted'])
 
@@ -18,7 +18,7 @@ const RECALL_ARTIFACT_KEYS = ['id', 'conversationId', 'name', 'path', 'mimeType'
 
 export function assertRecallDoc(value: unknown): void {
   if (!isJsonObject(value) || value.version !== 1 || !Array.isArray(value.nodes)) {
-    throw new HelmError(
+    throw new HelmxError(
       'superagent_doc_corrupt',
       `插件 doc ${RECALL_DOC_NAME} 结构非法（期望 { version: 1, nodes: [] }）`,
       500,
@@ -66,7 +66,7 @@ export function assertRecallDoc(value: unknown): void {
         )
       })
     ) {
-      throw new HelmError(
+      throw new HelmxError(
         'superagent_doc_corrupt',
         `插件 doc ${RECALL_DOC_NAME}.nodes 含非法节点（期望 RecallNode 真实契约）`,
         500,
@@ -74,7 +74,7 @@ export function assertRecallDoc(value: unknown): void {
       )
     }
     if (seenIds.has(n.id)) {
-      throw new HelmError(
+      throw new HelmxError(
         'superagent_doc_corrupt',
         `插件 doc ${RECALL_DOC_NAME}.nodes 重复节点 id '${n.id}'`,
         500,
@@ -85,9 +85,9 @@ export function assertRecallDoc(value: unknown): void {
   }
 }
 
-/** helm.rewind 截断标记携带的被覆盖输入 ID（omittedInputIds）；载荷非法返回 undefined。 */
+/** helmx.rewind 截断标记携带的被覆盖输入 ID（omittedInputIds）；载荷非法返回 undefined。 */
 export function rewindOmittedInputIds(entry: ConversationEntry): string[] | undefined {
-  if (entry.kind !== 'helm.rewind') return undefined
+  if (entry.kind !== 'helmx.rewind') return undefined
   const data = entry.data as { omittedInputIds?: unknown } | undefined
   const raw = data?.omittedInputIds
   if (!Array.isArray(raw)) return undefined
@@ -151,7 +151,7 @@ export function updateRecallDoc(
   const doc = handle.get()
   assertRecallDoc(doc)
   if (!SETTLED_OUTCOMES.has(node.outcome)) {
-    throw new HelmError('validation_error', `outcome 必须是 completed|failed|aborted（收到 ${node.outcome}）`, 400, {})
+    throw new HelmxError('validation_error', `outcome 必须是 completed|failed|aborted（收到 ${node.outcome}）`, 400, {})
   }
   const current = doc as { version: 1; nodes: Array<{ id: string }> }
   if (current.nodes.some((n) => n.id === node.id)) return false

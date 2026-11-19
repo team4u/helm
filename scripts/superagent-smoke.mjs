@@ -4,13 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { createHelm } from '../packages/hub/dist/app.js';
+import { createHelmx } from '../packages/hub/dist/app.js';
 import { startHub } from '../packages/kernel/dist/http/index.js';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const cliEntry = fileURLToPath(new URL('../packages/cli/dist/index.js', import.meta.url));
 
-const dataDir = await mkdtemp(join(tmpdir(), 'helm-superagent-built-'));
+const dataDir = await mkdtemp(join(tmpdir(), 'helmx-superagent-built-'));
 const pluginId = 'builtin:superagent';
 let app;
 let hub;
@@ -19,7 +19,7 @@ async function cli(args) {
   return await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliEntry, ...args], {
       cwd: repositoryRoot,
-      env: { ...process.env, HELM_DATA_DIR: dataDir, HELM_HUB_URL: hub.url, HELM_TOKEN: cliToken ?? '', HELM_CONVERSATION_ID: '1' },
+      env: { ...process.env, HELMX_DATA_DIR: dataDir, HELMX_HUB_URL: hub.url, HELMX_TOKEN: cliToken ?? '', HELMX_CONVERSATION_ID: '1' },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
     let stdout = '', stderr = '';
@@ -38,7 +38,7 @@ async function success(args) {
   return JSON.parse(result.stdout);
 }
 async function open() {
-  app = await createHelm({ dataDir, cwd: dataDir });
+  app = await createHelmx({ dataDir, cwd: dataDir });
   hub = await startHub({ kernel: app.kernel, workflows: app.workflows, port: 0 });
 }
 async function close() {

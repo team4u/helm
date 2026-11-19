@@ -32,7 +32,7 @@
  *   (deduplicated, joined with " · "); string meanings are never parsed.
  */
 
-import type { ConversationSummary, WorkbenchPanelSpec } from '@helm/protocol/browser'
+import type { ConversationSummary, WorkbenchPanelSpec } from '@helmx/protocol/browser'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { matchesUiScope } from '../lib/types.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'

@@ -5,11 +5,11 @@
  * - updates using semantic flags must GET the full Profile first, merge, and PUT so untouched
  *   bindings like nodeId/cwd/model are never dropped (otherwise later conversations fall back to local);
  * - the full system text returned by GET is stripped and not sent back unless --system[-file] is explicitly given;
- *   MEMORY.md long-term memory is managed by builtin:memory (helm memory get/set/configure);
+ *   MEMORY.md long-term memory is managed by builtin:memory (helmx memory get/set/configure);
  * - --input alone performs an explicit full replacement (without GET); combined with semantic flags it serves as a merge layer;
  * - create has no prior config to merge and constructs a new object from semantic flags / --input directly.
  */
-import type { Profile } from '@helm/protocol'
+import type { Profile } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags, type FlagSpec } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'

@@ -17,7 +17,7 @@ import { mkdtemp } from 'node:fs/promises'
 import { join } from 'node:path'
 import { WebSocket } from 'ws'
 import { createBirpc } from 'birpc'
-import type { NodeHealthSnapshot, NodeHeartbeatInput, NodeRegisterInput, NodeRegisterResult } from '@helm/protocol'
+import type { NodeHealthSnapshot, NodeHeartbeatInput, NodeRegisterInput, NodeRegisterResult } from '@helmx/protocol'
 import { NodeRegistry, sanitizeNodeHealth, attachNodeWsGateway, type HubConnectionLocal } from '../src/env/index.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { startHub } from '../src/http/index.js'
@@ -248,7 +248,7 @@ function assertCompleteHealth(health: unknown): void {
 let rootDir: string
 
 test('setup: create temporary directory', { timeout: 60_000 }, async () => {
-  rootDir = await makeTempDir('helm-node-health-')
+  rootDir = await makeTempDir('helmx-node-health-')
 })
 
 // ---------------------------------------------------------------------------

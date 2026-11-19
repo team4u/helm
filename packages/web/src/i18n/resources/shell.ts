@@ -10,8 +10,8 @@ import type { MessageTable } from '../messages.js'
 
 export const shellMessages = {
   // App chrome: loading screen, connection banner, version banner, mobile nav
-  'shell.loading.connecting': { en: 'Connecting to Helm kernel...', 'zh-CN': '正在连接 Helm 内核...' },
-  'shell.connection.cannotConnect': { en: 'Cannot connect to Helm right now', 'zh-CN': '暂时无法连接 Helm' },
+  'shell.loading.connecting': { en: 'Connecting to Helmx kernel...', 'zh-CN': '正在连接 Helmx 内核...' },
+  'shell.connection.cannotConnect': { en: 'Cannot connect to Helmx right now', 'zh-CN': '暂时无法连接 Helmx' },
   'shell.connection.reconnect': { en: 'Reconnect', 'zh-CN': '重新连接' },
   'shell.connection.syncing': { en: 'Syncing conversations…', 'zh-CN': '正在同步会话…' },
   'shell.connection.autoRefresh': {
@@ -20,10 +20,10 @@ export const shellMessages = {
   },
   'shell.nav.toggleNav': { en: 'Toggle navigation bar', 'zh-CN': '切换导航栏' },
   'shell.nav.closeNav': { en: 'Close navigation bar', 'zh-CN': '关闭导航栏' },
-  'shell.version.banner': { en: 'A new Helm version is available', 'zh-CN': 'Helm 已发布新版本' },
+  'shell.version.banner': { en: 'A new Helmx version is available', 'zh-CN': 'Helmx 已发布新版本' },
   'shell.version.bannerWithHint': {
-    en: 'A new Helm version is available — {hint}',
-    'zh-CN': 'Helm 已发布新版本，{hint}',
+    en: 'A new Helmx version is available — {hint}',
+    'zh-CN': 'Helmx 已发布新版本，{hint}',
   },
   'shell.version.refreshNow': { en: 'Refresh now', 'zh-CN': '立即刷新' },
   'shell.version.deferDraft': {
@@ -48,14 +48,14 @@ export const shellMessages = {
   },
 
   // Auth gate (first-start setup and unlock)
-  'shell.auth.consoleTitle': { en: 'Helm Console', 'zh-CN': 'Helm 主控台' },
+  'shell.auth.consoleTitle': { en: 'Helmx Console', 'zh-CN': 'Helmx 主控台' },
   'shell.auth.setupDesc': {
-    en: 'First start: set the local Helm master password (at least 8 characters) to protect conversations, model credentials and node connections.',
-    'zh-CN': '首次启动：请设置本机 Helm 主控密码（至少 8 位），用于保护会话、模型凭据与节点连接。',
+    en: 'First start: set the local Helmx master password (at least 8 characters) to protect conversations, model credentials and node connections.',
+    'zh-CN': '首次启动：请设置本机 Helmx 主控密码（至少 8 位），用于保护会话、模型凭据与节点连接。',
   },
   'shell.auth.unlockDesc': {
-    en: 'Enter the local Helm master password to unlock the console.',
-    'zh-CN': '请输入本机 Helm 主控密码以解锁工作台。',
+    en: 'Enter the local Helmx master password to unlock the console.',
+    'zh-CN': '请输入本机 Helmx 主控密码以解锁工作台。',
   },
   'shell.auth.passwordMin': {
     en: 'Master password needs at least 8 characters',
@@ -70,7 +70,7 @@ export const shellMessages = {
   'shell.auth.confirmLabel': { en: 'Confirm master password', 'zh-CN': '确认主控密码' },
   'shell.auth.confirmPlaceholder': { en: 'Re-enter the password', 'zh-CN': '再次输入密码' },
   'shell.auth.verifying': { en: 'Verifying...', 'zh-CN': '正在验证...' },
-  'shell.auth.initialize': { en: 'Initialize and enter Helm', 'zh-CN': '初始化并进入 Helm' },
+  'shell.auth.initialize': { en: 'Initialize and enter Helmx', 'zh-CN': '初始化并进入 Helmx' },
   'shell.auth.unlock': { en: 'Unlock console', 'zh-CN': '解锁主控台' },
   'shell.auth.themeSystem': {
     en: 'System theme (currently {current}; click to switch to light mode)',
@@ -194,9 +194,9 @@ export const shellMessages = {
   'shell.archive.errorSuffix': { en: ': {error}', 'zh-CN': '：{error}' },
 
   // Quiet browser notifications (root-tree completion / waiting drafts)
-  'shell.quiet.completedTitle': { en: 'Helm conversation completed', 'zh-CN': 'Helm 会话已完成' },
-  'shell.quiet.endedTitle': { en: 'Helm conversation finished', 'zh-CN': 'Helm 会话已结束' },
-  'shell.quiet.waitingTitle': { en: 'Helm is waiting for you', 'zh-CN': 'Helm 等待你的处理' },
+  'shell.quiet.completedTitle': { en: 'Helmx conversation completed', 'zh-CN': 'Helmx 会话已完成' },
+  'shell.quiet.endedTitle': { en: 'Helmx conversation finished', 'zh-CN': 'Helmx 会话已结束' },
+  'shell.quiet.waitingTitle': { en: 'Helmx is waiting for you', 'zh-CN': 'Helmx 等待你的处理' },
   'shell.quiet.finishedBody': { en: 'Conversation finished', 'zh-CN': '会话已结束' },
   'shell.quiet.finishedWithFailures': {
     en: 'Conversation finished · with failures',

@@ -2,7 +2,7 @@
  * Integration tests for `builtin:workflow` read-only managed worktree inspection (`list_worktrees` /
  * `inspect_worktree` actions).
  *
- * Covers (via real `createHelm` + faux model + temp real Git repo + public plugin actions):
+ * Covers (via real `createHelmx` + faux model + temp real Git repo + public plugin actions):
  * 1. Real `spawnAgent` with `isolation: 'worktree'` returns registered metadata in `list_worktrees`;
  * 2. `inspect_worktree` (exact `worktreeId`) runs real read-only git commands on the target node:
  *    uncommitted files, commits ahead of base, diff stat, and preview are all real values;
@@ -15,20 +15,20 @@
  *    files preserve the true `dirtyFileCount`.
  *
  * Contract discipline: read-only inspection never mutates the worktree; everything runs against real
- * `createHelm` + `builtin:workflow` public actions without mocking git.
+ * `createHelmx` + `builtin:workflow` public actions without mocking git.
  *
  * Runner: `tsx --test`; every test declares `{ timeout: 60_000 }`.
  */
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import type { AgentExecutionInfo, AgentSpawnRequest } from '@helm/protocol'
+import type { AgentExecutionInfo, AgentSpawnRequest } from '@helmx/protocol'
 import { execFileSync } from 'node:child_process'
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { HelmError } from '@helm/protocol'
-import { extractWorkflowExecutionMeta } from '@helm/plugins/contracts'
+import { HelmxError } from '@helmx/protocol'
+import { extractWorkflowExecutionMeta } from '@helmx/plugins/contracts'
 import {
   createGitTemplate,
   createHubTestApp,
@@ -53,8 +53,8 @@ let rootDir: string
 let gitTemplate: GitTemplate
 
 before(() => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-worktree-inspect-'))
-  gitTemplate = createGitTemplate('helm-worktree-inspect-tpl-')
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-worktree-inspect-'))
+  gitTemplate = createGitTemplate('helmx-worktree-inspect-tpl-')
 })
 
 after(() => {
@@ -130,7 +130,7 @@ describe('builtin:workflow managed worktree read-only inspection actions', { tim
     try {
       let resolved: AgentExecutionInfo | undefined
       env.faux.setResponses([
-        fauxAssistantMessage([fauxToolCall('bash', { command: 'pwd > .helm-child-pwd.txt' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage([fauxToolCall('bash', { command: 'pwd > .helmx-child-pwd.txt' })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('task complete'),
       ])
       await env.kernel.spawnAgent({
@@ -172,9 +172,9 @@ describe('builtin:workflow managed worktree read-only inspection actions', { tim
       assert.equal(inspect['currentBranch'], branch)
       assert.equal(inspect['branchChanged'], undefined, 'branchChanged must be omitted when current branch matches registered branch')
       const dirtyFiles = inspect['dirtyFiles'] as string[]
-      assert.equal(inspect['dirtyFileCount'], 2, 'two untracked files (draft.txt and .helm-child-pwd.txt); committed feature.txt is excluded')
+      assert.equal(inspect['dirtyFileCount'], 2, 'two untracked files (draft.txt and .helmx-child-pwd.txt); committed feature.txt is excluded')
       assert.ok(
-        dirtyFiles.some((l) => l.includes('draft.txt')) && dirtyFiles.some((l) => l.includes('.helm-child-pwd.txt')),
+        dirtyFiles.some((l) => l.includes('draft.txt')) && dirtyFiles.some((l) => l.includes('.helmx-child-pwd.txt')),
         `dirtyFiles should list both untracked files (got ${JSON.stringify(dirtyFiles)})`,
       )
       assert.equal(inspect['commitsAhead'], 1, 'should be 1 commit ahead of registered baseCommit')
@@ -251,7 +251,7 @@ describe('builtin:workflow managed worktree read-only inspection actions', { tim
         await assert.rejects(
           () => env.invoke.cleanupWorktree({ worktreeId, force: true }),
           (err: unknown) => {
-            assert.ok(err instanceof HelmError)
+            assert.ok(err instanceof HelmxError)
             assert.equal(err.code, 'worktree_process_check_failed', 'non-Linux platforms do not support process scanning so cleanup must reject explicitly')
             return true
           },

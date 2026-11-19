@@ -8,8 +8,8 @@
  * only overlays enhancements — when absent we honestly fall back to the
  * plugin summary itself.
  */
-import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale, type LocalizedText } from '@helm/plugin-client'
-import type { PluginSummary, ScreenSpec } from '@helm/protocol'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/plugin-client'
+import type { PluginSummary, ScreenSpec } from '@helmx/protocol'
 import { APP_DESCRIPTION_FALLBACK, appDescriptionFromViews } from './copy.ts'
 
 export type AppCategory = 'productivity' | 'devops' | 'data' | 'finance' | 'automation' | 'other'
@@ -94,7 +94,7 @@ export function mergeAppItems(
 /** Resolve an app's display name for the active locale, falling back to plugin ID. */
 export function resolveAppName(
   plugin: Pick<PluginSummary, 'id' | 'name'>,
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   const resolved = plugin.name !== undefined ? resolveLocalizedText(plugin.name, locale) : ''
   return resolved.trim() !== '' ? resolved : plugin.id
@@ -103,7 +103,7 @@ export function resolveAppName(
 /** Resolve a contributed screen label for the active locale, falling back to screen ID. */
 export function resolveAppScreenLabel(
   screen: Pick<AppScreenRef, 'screenId' | 'label'>,
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   const resolved = screen.label !== undefined ? resolveLocalizedText(screen.label, locale) : ''
   return resolved.trim() !== '' ? resolved : screen.screenId
@@ -113,7 +113,7 @@ export function resolveAppScreenLabel(
 export function resolveAppDescription(
   plugin: Pick<PluginSummary, 'description'>,
   screens: readonly AppScreenRef[],
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   const declared = plugin.description !== undefined ? resolveLocalizedText(plugin.description, locale) : ''
   if (declared.trim() !== '') return declared
@@ -148,7 +148,7 @@ interface AppFilterState {
 export function filterAppItems(
   items: AppItem[],
   filter: AppFilterState,
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): AppItem[] {
   const query = filter.query.trim().toLowerCase()
   return items.filter((item) => {

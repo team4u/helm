@@ -7,8 +7,8 @@ import {
   DialogOverlay,
   DialogPortal,
   DialogTitle,
-  HelmIcon,
-} from '@helm/plugin-client'
+  HelmxIcon,
+} from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatBytes } from '../lib/format.js'
 import { useIsMobile } from './composer-model.js'
@@ -76,7 +76,7 @@ export function PreviewModalShell({
           >
             <div className="modal-header artifact-preview-header">
               <span className="preview-modal-title-group">
-                <HelmIcon name="file-text" size={14} />
+                <HelmxIcon name="file-text" size={14} />
                 <DialogTitle className="modal-title preview-modal-title" title={title}>
                   {title}
                 </DialogTitle>
@@ -96,7 +96,7 @@ export function PreviewModalShell({
                     onClick={() => setDesktopFullscreen((v) => !v)}
                     title={desktopFullscreen ? t('conv.artifact.windowModeTitle') : t('conv.artifact.fullscreenTitle')}
                   >
-                    <HelmIcon name={desktopFullscreen ? 'minimize-2' : 'maximize-2'} size={12} />
+                    <HelmxIcon name={desktopFullscreen ? 'minimize-2' : 'maximize-2'} size={12} />
                     {desktopFullscreen ? t('conv.artifact.windowLabel') : t('conv.pane.fullscreen')}
                   </button>
                 ) : null}
@@ -104,7 +104,7 @@ export function PreviewModalShell({
                   <CopyButton text={copyText} label={isMobile ? undefined : t('conv.artifact.copy')} className="btn btn-sm" />
                 ) : null}
                 <button type="button" className="btn btn-sm" onClick={onDownload} title={t('common.download')}>
-                  <HelmIcon name="download" size={12} />
+                  <HelmxIcon name="download" size={12} />
                   {!isMobile ? t('common.download') : null}
                 </button>
                 <DialogClose asChild>
@@ -114,7 +114,7 @@ export function PreviewModalShell({
                     title={t('conv.artifact.closeTitle')}
                     aria-label={t('conv.artifact.closeAria')}
                   >
-                    <HelmIcon name="x" size={14} />
+                    <HelmxIcon name="x" size={14} />
                   </button>
                 </DialogClose>
               </span>
@@ -122,13 +122,13 @@ export function PreviewModalShell({
             <div className="modal-body preview-modal-body" ref={modalBodyRef}>
               {state.phase === 'loading' ? (
                 <div className="preview-modal-loading">
-                  <HelmIcon name="loader" size={14} className="spin-slow" />
+                  <HelmxIcon name="loader" size={14} className="spin-slow" />
                   {loadingLabel}
                 </div>
               ) : null}
               {state.phase === 'error' ? (
                 <div className="callout callout--error">
-                  <HelmIcon name="alert-circle" size={13} />
+                  <HelmxIcon name="alert-circle" size={13} />
                   <span>{errorLabel}</span>
                 </div>
               ) : null}

@@ -22,12 +22,12 @@ import { chmodSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-  HelmError,
+  HelmxError,
   type ConversationSummary,
   type PluginDefinition,
   type PluginUiContribution,
   type Profile,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { ProfileService } from '../../kernel/src/services/index.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
@@ -45,7 +45,7 @@ import {
   truncateCodePoints,
 } from '../src/profile/catalog.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, makeConversationSummary } from './helpers/plugin-test-env.js'
 
 // ---------------------------------------------------------------------------
@@ -104,12 +104,12 @@ function makeControlledBackend(): ControlledBackend {
     },
     getConversation(id) {
       const found = conversations.get(id)
-      if (!found) throw new HelmError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
+      if (!found) throw new HelmxError('not_found', `会话不存在：${id}`, 404, { conversationId: id })
       return found
     },
     async updateConversation(id, patch) {
       const found = conversations.get(id)
-      if (!found) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+      if (!found) throw new HelmxError('not_found', `会话不存在：${id}`, 404)
       const next = { ...found, ...patch }
       conversations.set(id, next)
       return next
@@ -119,7 +119,7 @@ function makeControlledBackend(): ControlledBackend {
     },
     markConversationOwnership() {},
     async createAsk() {
-      throw new HelmError('unsupported', 'test', 400)
+      throw new HelmxError('unsupported', 'test', 400)
     },
     async cancelAsk() {},
     registerAskSeqResolver() {
@@ -136,7 +136,7 @@ function makeControlledBackend(): ControlledBackend {
       return { ok: true, output: '' }
     },
     async execEnv() {
-      throw new HelmError('unsupported', 'fixture', 501)
+      throw new HelmxError('unsupported', 'fixture', 501)
     },
     emitEvent(type, payload) {
       if (type === 'notification') notifications.push(payload as { title: string; body: string; level: string })
@@ -184,7 +184,7 @@ interface Env {
 }
 
 async function makeEnv(extraPlugins: PluginDefinition[] = [], withSessionDocs = false): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-profile-collab-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-profile-collab-'))
   const profiles = new ProfileService(dataDir)
   await profiles.ensureDefault()
   const backend = Object.assign(makeControlledBackend(), createProfileFileHost(dataDir, profiles))
@@ -563,7 +563,7 @@ test('before_turn：候选 SYSTEM 缺失不告警不伪造；IO 错误显式上�
     if (!isRoot) {
       await assert.rejects(
         () => env.host.runHook('before_turn', { ...turn, sections: [] } as never),
-        (err: unknown) => err instanceof HelmError && err.code === 'hook_execution_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'hook_execution_failed',
         'IO 错误必须显式失败',
       )
     }
@@ -614,13 +614,13 @@ test('list_mentionable：上下文会话为真实身份来源；Workflow 启停�
     // 无上下文 + 失效显式目标 → 404
     await assert.rejects(
       () => env.host.invokeAction('builtin:profile', 'list_mentionable', { conversationId: 404 }),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
     )
 
     // 无上下文 + 无显式目标 → validation_error（不猜测默认会话）
     await assert.rejects(
       () => env.host.invokeAction('builtin:profile', 'list_mentionable', {}),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
     )
   } finally {
     await env.close()
@@ -770,7 +770,7 @@ test('list_mentionable：待命草稿态支持显式 profileId（无会话时校
     // 不存在的 profileId -> 404 not_found（绝不猜测或放行）
     await assert.rejects(
       () => env.host.invokeAction('builtin:profile', 'list_mentionable', { profileId: 'ghost' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
     )
 
     // 有会话上下文（conv 1 属 assistant）时不得被 input.profileId 冒充成 coder

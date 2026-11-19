@@ -1,5 +1,5 @@
 import React, { useId } from 'react'
-import { HelmIcon } from '../icons.js'
+import { HelmxIcon } from '../icons.js'
 
 export interface CheckboxProps {
   checked: boolean
@@ -16,7 +16,7 @@ export interface CheckboxProps {
 }
 
 /**
- * Minimal checkbox component (a common primitive in the restrained Helm style):
+ * Minimal checkbox component (a common primitive in the restrained Helmx style):
  * - Compact size (15px x 15px), hairline border and slight rounding (3px);
  * - Precise vector icons for checked (check) and indeterminate (minus) states;
  * - Full WAI-ARIA checkbox semantics and keyboard interaction (Space / Enter toggles);
@@ -53,8 +53,8 @@ export function Checkbox({
     }
   }
 
-  const wrapClass = ['helm-checkbox-wrap', disabled && 'is-disabled', className].filter(Boolean).join(' ')
-  const buttonClass = ['helm-checkbox', checked && 'is-checked', indeterminate && 'is-indeterminate'].filter(Boolean).join(' ')
+  const wrapClass = ['helmx-checkbox-wrap', disabled && 'is-disabled', className].filter(Boolean).join(' ')
+  const buttonClass = ['helmx-checkbox', checked && 'is-checked', indeterminate && 'is-indeterminate'].filter(Boolean).join(' ')
 
   const checkboxBox = (
     <button
@@ -71,9 +71,9 @@ export function Checkbox({
       title={title}
     >
       {indeterminate ? (
-        <HelmIcon name="minus" size={10} className="helm-checkbox-icon" />
+        <HelmxIcon name="minus" size={10} className="helmx-checkbox-icon" />
       ) : checked ? (
-        <HelmIcon name="check" size={10} className="helm-checkbox-icon" />
+        <HelmxIcon name="check" size={10} className="helmx-checkbox-icon" />
       ) : null}
     </button>
   )
@@ -94,7 +94,7 @@ export function Checkbox({
       title={title}
     >
       {checkboxBox}
-      <span className="helm-checkbox-label">{label}</span>
+      <span className="helmx-checkbox-label">{label}</span>
     </label>
   )
 }

@@ -1,4 +1,4 @@
-import { COMPOSER_DOCK_SLOT, type ConversationScope, type HelmPluginContext } from '@helm/protocol'
+import { COMPOSER_DOCK_SLOT, type ConversationScope, type HelmxPluginContext } from '@helmx/protocol'
 
 export const SWARM_WORKBENCH_PANEL_ID = 'groups' as const
 export const SWARM_COORDINATOR_TAG = 'swarm-coordinator' as const
@@ -43,7 +43,7 @@ const SWARM_TOOL_NAMES = [
  * owns the orchestration panel. No standalone board screen or header entry
  * fights the host for the primary stage.
  */
-export function registerSwarmUi(ctx: HelmPluginContext): void {
+export function registerSwarmUi(ctx: HelmxPluginContext): void {
   ctx.ui.toolView({
     id: 'swarm-tool-trace',
     toolNames: [...SWARM_TOOL_NAMES],

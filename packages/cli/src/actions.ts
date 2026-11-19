@@ -1,5 +1,5 @@
 /**
- * Dynamic plugin commands: GET /api/actions ActionManifest -> top-level `helm <path...>` commands.
+ * Dynamic plugin commands: GET /api/actions ActionManifest -> top-level `helmx <path...>` commands.
  * - Default path: [stripBuiltin(pluginId), actionId]; cli.command can override it completely.
  * - inputSchema.properties -> --kebab-case flags, coerced per JSON Schema type
  *   (kebab-case maps automatically back to camelCase property names; object/array/untyped fields parse as JSON;
@@ -16,7 +16,7 @@
  * - Command path conflicts, empty paths, and core command shadowing all fail explicitly — never silently dropped.
  * - Output is rendered via printValue with zero business-field hardcoding; --json preserves raw output.
  */
-import type { ActionManifest, JsonSchema, PluginActionCliPositionalSpec } from '@helm/protocol'
+import type { ActionManifest, JsonSchema, PluginActionCliPositionalSpec } from '@helmx/protocol'
 import path from 'node:path'
 import { CliError } from './errors.js'
 import type { HubClient } from './hub-client.js'
@@ -443,7 +443,7 @@ export function dynamicCommandOf(manifest: ActionManifest): DynamicCommand {
     flags: [
       ...flags,
       { name: 'input', type: 'json', help: inputHelp },
-      { name: 'current', type: 'boolean', help: 'attach conversation context from HELM_CONVERSATION_ID' },
+      { name: 'current', type: 'boolean', help: 'attach conversation context from HELMX_CONVERSATION_ID' },
     ],
     positional: positionals.length > 0
       ? positionals.map((p) => (p.required === true ? `<${p.field}>` : `[${p.field}]`)).join(' ')
@@ -539,13 +539,13 @@ export function assertNoConflict(existingPaths: readonly (readonly string[])[], 
   for (const existing of existingPaths) {
     const other = existing.join(' ')
     if (other === joined) {
-      throw new CliError(`plugin action command "helm ${joined}" conflicts with existing command`, 'command_conflict')
+      throw new CliError(`plugin action command "helmx ${joined}" conflicts with existing command`, 'command_conflict')
     }
     // Prefix overlap also counts as a conflict to avoid shadowing parent commands (e.g. ["tasks"] intercepting `tasks list`)
     const minLen = Math.min(existing.length, candidate.length)
     if (minLen > 0 && existing.slice(0, minLen).join(' ') === candidate.slice(0, minLen).join(' ')) {
       throw new CliError(
-        `plugin action command "helm ${joined}" has a path prefix conflict with existing command "helm ${other}"`,
+        `plugin action command "helmx ${joined}" has a path prefix conflict with existing command "helmx ${other}"`,
         'command_conflict',
       )
     }
@@ -579,7 +579,7 @@ export async function loadDynamicCommands(hub: HubClient, corePaths: readonly (r
     const prev = seen.get(key)
     if (prev) {
       throw new CliError(
-        `duplicate plugin action command "helm ${key}": registered by both ${prev} and ${manifest.pluginId}.${manifest.id}`,
+        `duplicate plugin action command "helmx ${key}": registered by both ${prev} and ${manifest.pluginId}.${manifest.id}`,
         'command_conflict',
       )
     }

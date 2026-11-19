@@ -10,7 +10,7 @@
  * 全部可恢复性判定统一经 run-resumability.ts 的 inspectRunResumability。
  */
 
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { inspectRunResumability } from './run-resumability.js'
 import {
   backgroundChildIds,
@@ -59,7 +59,7 @@ export class StartupRecovery {
         await this.svc.host.abortConversationGuarded(id)
       } catch (error) {
         if (
-          error instanceof HelmError &&
+          error instanceof HelmxError &&
           (error.code === 'not_found' || error.code === 'ownership_conflict')
         ) {
           process.stderr.write(
@@ -210,7 +210,7 @@ export class StartupRecovery {
             this.svc.host.getConversation(record.conversationId)
           } catch (error) {
             const kindLabel = record.kind === 'subagent' ? 'subagent' : '工作流'
-            const code = error instanceof HelmError && error.code !== '' ? error.code : 'parent_conversation_unavailable'
+            const code = error instanceof HelmxError && error.code !== '' ? error.code : 'parent_conversation_unavailable'
             await this.failRecoveredRecord(
               record,
               code,
@@ -293,7 +293,7 @@ export class StartupRecovery {
               this.pendingSettlementChildIds.delete(id)
             } catch (error) {
               if (
-                error instanceof HelmError &&
+                error instanceof HelmxError &&
                 (error.code === 'not_found' || error.code === 'ownership_conflict')
               ) {
                 this.preparedChildIds.delete(id)
@@ -320,7 +320,7 @@ export class StartupRecovery {
   /** 返回满足自动断点续跑条件的后台工作流。 */
   listAutoResumeCandidates(maxAttempts = 3): WorkflowAutoResumeCandidate[] {
     if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
-      throw new HelmError('validation_error', 'maxAttempts 必须是正整数', 400, { maxAttempts })
+      throw new HelmxError('validation_error', 'maxAttempts 必须是正整数', 400, { maxAttempts })
     }
     const index = this.svc.runs.readIndex()
     const baseCtx = this.svc.resumabilityContext()

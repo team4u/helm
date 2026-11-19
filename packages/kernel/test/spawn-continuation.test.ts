@@ -19,7 +19,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { HookPipeline } from '../src/plugins/hooks.js'
-import { HelmError, type AgentSpawnRequest } from '@helm/protocol'
+import { HelmxError, type AgentSpawnRequest } from '@helmx/protocol'
 
 function spawnRequest(overrides: Partial<AgentSpawnRequest> = {}): AgentSpawnRequest {
   return {
@@ -118,9 +118,9 @@ test('runAround duplicate next invocation explicitly rejects (invalid_hook_resul
   )
   assert.equal(outcome, 'native-once')
   assert.equal(defaultRuns, 1, 'duplicate next must not trigger a second defaultRun')
-  assert.ok(secondCallError instanceof HelmError)
-  assert.equal((secondCallError as HelmError).code, 'invalid_hook_result')
-  assert.ok((secondCallError as HelmError).message.includes('duplicate invoke next'))
+  assert.ok(secondCallError instanceof HelmxError)
+  assert.equal((secondCallError as HelmxError).code, 'invalid_hook_result')
+  assert.ok((secondCallError as HelmxError).message.includes('duplicate invoke next'))
 })
 
 test('runAround returning handled after calling next explicitly rejects', { timeout: 60_000 }, async () => {
@@ -132,7 +132,7 @@ test('runAround returning handled after calling next explicitly rejects', { time
   await assert.rejects(
     () => pipeline.runAround(spawnRequest(), async () => 'native'),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError)
+      assert.ok(err instanceof HelmxError)
       assert.equal(err.code, 'invalid_hook_result')
       assert.ok(err.message.includes('must not again return'))
       return true
@@ -186,7 +186,7 @@ test('runAround handler throws after triggering next: error propagates as thrown
       },
     ),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError)
+      assert.ok(err instanceof HelmxError)
       assert.equal(err.code, 'hook_execution_failed')
       assert.ok(String(err.message).includes('handler exploded'))
       return true
@@ -229,7 +229,7 @@ test('runAround only supports agent_spawn: other hooks explicitly reject', { tim
   await assert.rejects(
     () => pipeline.runAround({ id: 'x', source: 's', text: 't', createdAt: 0 } as never, async () => undefined as never),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError)
+      assert.ok(err instanceof HelmxError)
       assert.equal(err.code, 'invalid_hook_invocation')
       return true
     },

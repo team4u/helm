@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Callout,
-  HelmIcon,
+  HelmxIcon,
   Dialog,
   DialogClose,
   DialogContent,
@@ -11,7 +11,7 @@ import {
   usePluginContext,
   usePluginLocale,
   usePluginTranslator,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 import { loadMermaid } from './mermaid-loader.ts'
 import { getMermaidConfig } from './mermaid-theme.ts'
 import {
@@ -162,7 +162,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
         const mermaid = await loadMermaid()
         if (isStale()) return
         mermaid.initialize(getMermaidConfig(theme))
-        const id = `helm-mermaid-modal-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`
+        const id = `helmx-mermaid-modal-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`
         const { svg: out } = await mermaid.render(id, code)
         if (!isStale()) {
           setRenderedSvg(out)
@@ -483,7 +483,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
               }}
               title={t(MERMAID_ZOOM_IN_TITLE)}
             >
-              <HelmIcon name="zoom-in" size={12} />
+              <HelmxIcon name="zoom-in" size={12} />
             </button>
             <button
               type="button"
@@ -496,7 +496,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
               }}
               title={t(MERMAID_ZOOM_OUT_TITLE)}
             >
-              <HelmIcon name="zoom-out" size={12} />
+              <HelmxIcon name="zoom-out" size={12} />
             </button>
             <button
               type="button"
@@ -530,7 +530,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
               {view === 'diagram' ? t(MERMAID_VIEW_SOURCE) : t(MERMAID_VIEW_DIAGRAM)}
             </button>
             <button type="button" className="btn btn-sm" onClick={() => void copySource()}>
-              <HelmIcon name={copied ? 'check' : 'copy'} size={12} />
+              <HelmxIcon name={copied ? 'check' : 'copy'} size={12} />
               {t(MERMAID_COPY_SOURCE)}
             </button>
           </div>
@@ -541,7 +541,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
               title={t(MERMAID_CLOSE_TITLE)}
               aria-label={t(MERMAID_CLOSE)}
             >
-              <HelmIcon name="x" size={13} />
+              <HelmxIcon name="x" size={13} />
             </button>
           </DialogClose>
         </div>
@@ -596,7 +596,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
                         setRetryCount((n) => n + 1)
                       }}
                     >
-                      <HelmIcon name="refresh-cw" size={12} />
+                      <HelmxIcon name="refresh-cw" size={12} />
                       {t(MERMAID_RETRY)}
                     </button>
                   </div>
@@ -606,7 +606,7 @@ export function MermaidPreviewModal({ code, svg, onClose }: MermaidPreviewModalP
           ) : (
             <div className="mermaid-modal-status">
               <span className="mermaid-status-hint">
-                <HelmIcon name="loader" size={14} className="spin-slow" />
+                <HelmxIcon name="loader" size={14} className="spin-slow" />
                 {mermaidModalStatus(null, locale)}
               </span>
             </div>

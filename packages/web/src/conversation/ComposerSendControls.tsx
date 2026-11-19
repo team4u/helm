@@ -1,5 +1,5 @@
-import type { WhenBusy } from '@helm/protocol/browser'
-import { HelmIcon } from '@helm/plugin-client'
+import type { WhenBusy } from '@helmx/protocol/browser'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import {
   DropdownMenuContent,
@@ -63,7 +63,7 @@ export function ComposerSendControls({
               : t('composer.sendControls.sendTitle')}
           aria-label={editingEntryId !== null ? t('composer.sendControls.updateShort') : uploading > 0 ? t('composer.sendControls.uploading', { count: uploading }) : t('composer.sendControls.send')}
         >
-          <HelmIcon name={sending || uploading > 0 ? 'loader' : 'arrow-up'} size={18} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
+          <HelmxIcon name={sending || uploading > 0 ? 'loader' : 'arrow-up'} size={18} className={sending || uploading > 0 ? 'spin-slow' : undefined} />
         </button>
       ) : text.trim() === '' ? (
         <Tooltip content={t('composer.sendControls.stopExecution')} side="top">
@@ -74,7 +74,7 @@ export function ComposerSendControls({
             title={t('composer.sendControls.stopExecution')}
             aria-label={t('composer.sendControls.stopExecution')}
           >
-            <HelmIcon name="square" size={14} />
+            <HelmxIcon name="square" size={14} />
           </button>
         </Tooltip>
       ) : mobile ? (
@@ -87,7 +87,7 @@ export function ComposerSendControls({
             title={t('composer.sendControls.steerHint')}
             aria-label={uploading > 0 ? t('composer.sendControls.uploading', { count: uploading }) : t('composer.sendControls.steer')}
           >
-            <HelmIcon
+            <HelmxIcon
               name={sending || uploading > 0 ? 'loader' : 'corner-down-right'}
               size={13}
               className={sending || uploading > 0 ? 'spin-slow' : undefined}
@@ -102,7 +102,7 @@ export function ComposerSendControls({
             title={t('composer.sendControls.queueHint')}
             aria-label={t('composer.sendControls.queueSend')}
           >
-            <HelmIcon name="clock" size={13} />
+            <HelmxIcon name="clock" size={13} />
             <span>{t('composer.sendControls.queue')}</span>
           </button>
         </div>
@@ -117,7 +117,7 @@ export function ComposerSendControls({
               title={t('composer.sendControls.steerHintEnter')}
               aria-label={uploading > 0 ? t('composer.sendControls.uploading', { count: uploading }) : editingEntryId !== null ? t('composer.sendControls.updateShort') : t('composer.sendControls.steer')}
             >
-              <HelmIcon
+              <HelmxIcon
                 name={sending || uploading > 0 ? 'loader' : 'corner-down-right'}
                 size={14}
                 className={sending || uploading > 0 ? 'spin-slow' : undefined}
@@ -133,7 +133,7 @@ export function ComposerSendControls({
                 aria-label={t('composer.sendControls.chooseStrategy')}
                 title={t('composer.sendControls.chooseStrategyTitle')}
               >
-                <HelmIcon name="chevron-down" size={12} />
+                <HelmxIcon name="chevron-down" size={12} />
               </button>
             </DropdownMenuTrigger>
           </div>
@@ -142,7 +142,7 @@ export function ComposerSendControls({
               className="composer-busy-menu-item"
               onClick={() => void send('steer')}
             >
-              <HelmIcon name="corner-down-right" size={14} className="composer-busy-menu-icon" />
+              <HelmxIcon name="corner-down-right" size={14} className="composer-busy-menu-icon" />
               <div className="composer-busy-menu-text">
                 <div className="composer-busy-menu-title">{t('composer.sendControls.steer')}</div>
                 <div className="composer-busy-menu-desc">{t('composer.sendControls.steerHint')}</div>
@@ -155,7 +155,7 @@ export function ComposerSendControls({
               title={t('composer.sendControls.queueHintKbd')}
               aria-label={t('composer.sendControls.queueSend')}
             >
-              <HelmIcon name="clock" size={14} className="composer-busy-menu-icon" />
+              <HelmxIcon name="clock" size={14} className="composer-busy-menu-icon" />
               <div className="composer-busy-menu-text">
                 <div className="composer-busy-menu-title">{t('composer.sendControls.queueSend')}</div>
                 <div className="composer-busy-menu-desc">{t('composer.sendControls.queueHint')}</div>
@@ -170,7 +170,7 @@ export function ComposerSendControls({
               title={t('composer.sendControls.stopExecution')}
               aria-label={t('composer.sendControls.stopExecution')}
             >
-              <HelmIcon name="square" size={13} className="composer-busy-menu-icon" />
+              <HelmxIcon name="square" size={13} className="composer-busy-menu-icon" />
               <div className="composer-busy-menu-text">
                 <div className="composer-busy-menu-title">{t('composer.sendControls.stopMenuTitle')}</div>
                 <div className="composer-busy-menu-desc">{t('composer.sendControls.abortNow')}</div>

@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import type { AskSpec, ConversationSummary } from '@helm/protocol/browser'
+import type { AskSpec, ConversationSummary } from '@helmx/protocol/browser'
 import { asksApi } from '../lib/api.js'
-import { HelmIcon } from '@helm/plugin-client'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageTranslator } from '../i18n/catalog.js'
 import { Tooltip } from '../ui/Tooltip.js'
@@ -43,7 +43,7 @@ export function HoverIconButton({
         aria-label={title}
         onClick={onClick}
       >
-        <HelmIcon name={icon} size={13} />
+        <HelmxIcon name={icon} size={13} />
       </button>
     </Tooltip>
   )
@@ -204,10 +204,10 @@ export function PendingAsksPanel({ store }: { store: SidebarStoreView }) {
         onClick={() => setExpanded((v) => !v)}
       >
         <span className="pending-asks-toggle-label">
-          <HelmIcon name="alert-triangle" size={12} />
+          <HelmxIcon name="alert-triangle" size={12} />
           {t('shell.asks.pending', { count: asks.length })}
         </span>
-        <HelmIcon name={expanded ? 'chevron-down' : 'chevron-right'} size={12} />
+        <HelmxIcon name={expanded ? 'chevron-down' : 'chevron-right'} size={12} />
       </button>
       {expanded && (
         <div className="list pending-asks-list">
@@ -253,7 +253,7 @@ export function PendingAsksPanel({ store }: { store: SidebarStoreView }) {
                       disabled={busyAskId === ask.id}
                       onClick={() => void answerConfirm(ask, true)}
                     >
-                      <HelmIcon name="check" size={12} />
+                      <HelmxIcon name="check" size={12} />
                       {t('shell.asks.approve')}
                     </button>
                     <button
@@ -261,7 +261,7 @@ export function PendingAsksPanel({ store }: { store: SidebarStoreView }) {
                       disabled={busyAskId === ask.id}
                       onClick={() => void answerConfirm(ask, false)}
                     >
-                      <HelmIcon name="x" size={12} />
+                      <HelmxIcon name="x" size={12} />
                       {t('common.cancel')}
                     </button>
                   </>

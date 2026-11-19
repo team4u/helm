@@ -1,8 +1,8 @@
 /**
  * Plugin boundary JSON Schema validation: thin kernel wrapper delegating compilation, caching,
- * and validation to `@helm/protocol` (single TypeBox-backed implementation across the monorepo).
+ * and validation to `@helmx/protocol` (single TypeBox-backed implementation across the monorepo).
  */
-import { assertSchemaCompilable, validateOrThrow, type JsonSchema } from '@helm/protocol';
+import { assertSchemaCompilable, validateOrThrow, type JsonSchema } from '@helmx/protocol';
 
 export { assertSchemaCompilable, validateOrThrow };
 

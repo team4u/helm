@@ -15,7 +15,7 @@ import {
   readTextFile,
 } from './atomic-file.js'
 import { withFileLock, withProcessFileLock } from './file-lock.js'
-import { isJsonObject } from '@helm/protocol'
+import { isJsonObject } from '@helmx/protocol'
 
 interface StoredCredential {
   /** Value after SecretStash redaction or raw secret (model API keys are stored directly without stashing). */

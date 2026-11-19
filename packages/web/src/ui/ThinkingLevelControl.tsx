@@ -1,5 +1,5 @@
 import React from 'react'
-import { Tabs, TabsList, TabsTrigger } from '@helm/plugin-client'
+import { Tabs, TabsList, TabsTrigger } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 
 export interface ThinkingLevelControlProps {

@@ -19,7 +19,7 @@ import type {
   ComposerCompleterSpec,
   ComposerCompletionItem,
   ConversationSummary,
-} from '@helm/protocol/browser'
+} from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { QualifiedUiSpec } from '../lib/types.js'
 import { matchesUiScope } from '../lib/types.js'

@@ -2,7 +2,7 @@
  * Web UI message catalog primitives: pure types plus a table-bound translator
  * factory (zero React, zero DOM; independently unit-testable).
  *
- * Copy model alignment with `@helm/protocol` locale.ts:
+ * Copy model alignment with `@helmx/protocol` locale.ts:
  * - Display copy lives in message tables keyed by dot-namespaced ids; every
  *   entry must declare BOTH supported locales (`en` + `zh-CN`) at compile time,
  *   which is stricter than protocol `LocalizedText` (a plain string or partial
@@ -17,7 +17,7 @@
  * empty string) — production code is protected by the `WebMessageKey` literal
  * union, so runtime misses can only come from hand-built tables in tests.
  */
-import type { HelmLocale } from '@helm/protocol/browser'
+import type { HelmxLocale } from '@helmx/protocol/browser'
 
 /** One catalog entry: display copy for every supported UI locale. */
 export type MessageEntry = Readonly<{ en: string; 'zh-CN': string }>
@@ -45,7 +45,7 @@ export function formatMessage(template: string, params?: MessageParams): string 
 /** Resolve one message: exact entry hit then interpolate; a missing key echoes the key itself. */
 export function translateMessage(
   table: MessageTable,
-  locale: HelmLocale,
+  locale: HelmxLocale,
   key: string,
   params?: MessageParams,
 ): string {
@@ -56,7 +56,7 @@ export function translateMessage(
 
 /** Create a translator bound to a locale and a table (pure; safe to recreate per render). */
 export function createMessageTranslator<Table extends MessageTable>(
-  locale: HelmLocale,
+  locale: HelmxLocale,
   table: Table,
 ): MessageTranslator<Table> {
   return (key, params) => translateMessage(table, locale, key, params)

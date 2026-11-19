@@ -3,14 +3,14 @@
  *
  * - `allocate`：批量执行 git 预检（单次 `rev-parse` 取 bare/common-dir/toplevel +
  *   `worktree list --porcelain -z` 定位真正主仓 + 单次 `status --porcelain=v2 --branch`
- *   取 HEAD/分支/dirtySource），在主工作树同级 `.helm-worktrees/<repo>-<shortId>` 创建
- *   独立 worktree 与 `helm/spawn-<shortId>` 分支；
+ *   取 HEAD/分支/dirtySource），在主工作树同级 `.helmx-worktrees/<repo>-<shortId>` 创建
+ *   独立 worktree 与 `helmx/spawn-<shortId>` 分支；
  * - `registerExternal`：外部运行时回传的 worktree 统一登记；
  * - `inspect` / `verifyForResume` / `cleanup`：转发至子模块并与统一 `WorktreeStore` 共享状态。
  */
 import type { FileError, Result } from '@earendil-works/pi-durable/env'
 import { randomUUID } from 'node:crypto'
-import { HelmError, pathRulesForShape, targetPathShape, type NodePathUsage } from '@helm/protocol'
+import { HelmxError, pathRulesForShape, targetPathShape, type NodePathUsage } from '@helmx/protocol'
 import {
   gitExec,
   normalizePathValue,
@@ -148,14 +148,14 @@ export class WorktreeAllocator {
         isBare = bare.ok && bare.output.trim() === 'true'
       }
       if (isBare) {
-        throw new HelmError(
+        throw new HelmxError(
           'worktree_unsupported_layout',
           `目录 ${sourceCwd}（节点 ${nodeId}）是裸仓库（bare）：没有可检出的工作树，不支持派生隔离 worktree`,
           400,
           { nodeId, sourceCwd },
         )
       }
-      throw new HelmError(
+      throw new HelmxError(
         'not_a_git_repo',
         `目录 ${sourceCwd}（节点 ${nodeId}）不是 Git 仓库（git rev-parse --show-toplevel 失败）：\n${rev.output.trim()}`,
         400,
@@ -166,7 +166,7 @@ export class WorktreeAllocator {
     const revLines = rev.output.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n')
     const [bareFlag = '', commonDir = '', sourceToplevel = ''] = revLines
     if (bareFlag.trim() === 'true') {
-      throw new HelmError(
+      throw new HelmxError(
         'worktree_unsupported_layout',
         `目录 ${sourceCwd}（节点 ${nodeId}）位于裸仓库（bare）：没有可检出的工作树，不支持派生隔离 worktree`,
         400,
@@ -174,7 +174,7 @@ export class WorktreeAllocator {
       )
     }
     if (revLines.length < 3 || commonDir === '' || sourceToplevel === '') {
-      throw new HelmError(
+      throw new HelmxError(
         'not_a_git_repo',
         `目录 ${sourceCwd}（节点 ${nodeId}）不是有效 Git 工作树：\n${rev.output.trim()}`,
         400,
@@ -188,7 +188,7 @@ export class WorktreeAllocator {
     // Step C：单次 status --porcelain=v2 --branch 同时获取 HEAD 提交哈希、检出分支与脏工作区事实。
     const status = await gitExec(this.deps, nodeId, sourceCwd, ['status', '--porcelain=v2', '--branch'], signal)
     if (!status.ok) {
-      throw new HelmError(
+      throw new HelmxError(
         'worktree_failed',
         `读取目录 ${sourceCwd}（节点 ${nodeId}）状态失败：\n${status.output.trim()}`,
         502,
@@ -198,7 +198,7 @@ export class WorktreeAllocator {
     const parsedStatus = parseStatusPorcelainV2(status.output)
     const baseCommit = parsedStatus.oid
     if (!/^[0-9a-f]{7,64}$/i.test(baseCommit)) {
-      throw new HelmError(
+      throw new HelmxError(
         'worktree_failed',
         `目录 ${sourceCwd}（节点 ${nodeId}）尚无有效 HEAD 提交（${JSON.stringify(baseCommit)}），无法派生隔离 worktree`,
         502,
@@ -208,12 +208,12 @@ export class WorktreeAllocator {
     const baseBranch = parsedStatus.branch
     const dirtySource = parsedStatus.dirty
 
-    // Step D：基于主工作树同级 `.helm-worktrees` 构造路径与受管分支名（不嵌套）。
+    // Step D：基于主工作树同级 `.helmx-worktrees` 构造路径与受管分支名（不嵌套）。
     const pathRules = pathRulesForShape(targetPathShape(authority.mainPath))
     const repoName = pathRules.basename(authority.mainPath).replace(/[^A-Za-z0-9._-]/g, '-') || 'repo'
     const shortId = randomUUID().replaceAll('-', '').slice(0, 8)
-    const branch = `helm/spawn-${shortId}`
-    const worktreeBase = pathRules.join(pathRules.dirname(authority.mainPath), '.helm-worktrees')
+    const branch = `helmx/spawn-${shortId}`
+    const worktreeBase = pathRules.join(pathRules.dirname(authority.mainPath), '.helmx-worktrees')
     const worktreePath = pathRules.join(worktreeBase, `${repoName}-${shortId}`)
 
     // Step E：副作用前拦截含已登记机密的持久化字段。
@@ -263,7 +263,7 @@ export class WorktreeAllocator {
         signal,
       )
       if (!add.ok) {
-        throw new HelmError(
+        throw new HelmxError(
           'worktree_failed',
           `在仓库 ${authority.mainPath}（节点 ${nodeId}）创建 worktree ${worktreePath} 失败：\n${add.output.trim()}`,
           502,
@@ -289,7 +289,7 @@ export class WorktreeAllocator {
         this.store.append(record)
       } catch (error) {
         const cause = error instanceof Error ? error.message : String(error)
-        throw new HelmError(
+        throw new HelmxError(
           'worktree_register_failed',
           `worktree ${worktreePath}（分支 ${branch}，节点 ${nodeId}）已创建，但登记持久化失败（资源坐标保留在 details，未擅自回收；请人工核对后清理或重新登记）：${cause}`,
           502,
@@ -303,7 +303,7 @@ export class WorktreeAllocator {
   bindConversation(worktreePath: string, nodeId: string, conversationId: number): void {
     const id = `${nodeId}:${worktreePath}`
     if (this.store.findById(id) === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'not_found',
         `受管 worktree 记录 ${id} 不存在，无法绑定会话 ${conversationId}`,
         404,

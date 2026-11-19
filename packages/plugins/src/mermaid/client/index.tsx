@@ -16,8 +16,8 @@
  * independent language state, no localStorage).
  */
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { HelmIcon, CopyButton, Callout, usePluginContext, usePluginTranslator } from '@helm/plugin-client'
-import type { MarkdownCodeBlockProps } from '@helm/protocol'
+import { HelmxIcon, CopyButton, Callout, usePluginContext, usePluginTranslator } from '@helmx/plugin-client'
+import type { MarkdownCodeBlockProps } from '@helmx/protocol'
 import { loadMermaid } from './mermaid-loader.ts'
 import { getMermaidConfig } from './mermaid-theme.ts'
 import { MermaidPreviewModal } from './MermaidPreviewModal.tsx'
@@ -93,7 +93,7 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
           const mermaid = await loadMermaid()
           if (isStale()) return
           mermaid.initialize(getMermaidConfig(theme))
-          const id = `helm-mermaid-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`
+          const id = `helmx-mermaid-${theme}-${seq}-${Math.random().toString(36).slice(2, 8)}`
           const { svg: rendered } = await mermaid.render(id, code)
           setCachedSvg(currentKey, rendered)
           // Generation / liveness check: late results are always discarded
@@ -127,7 +127,7 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
             onClick={() => setZoomOpen(true)}
             title={t(MERMAID_ZOOM_IN)}
           >
-            <HelmIcon name="maximize" size={12} />
+            <HelmxIcon name="maximize" size={12} />
             {t(MERMAID_ZOOM_IN)}
           </button>
           <CopyButton text={code} label={t(MERMAID_COPY_SOURCE)} />
@@ -155,7 +155,7 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
                     setRetryCount((n) => n + 1)
                   }}
                 >
-                  <HelmIcon name="refresh-cw" size={12} />
+                  <HelmxIcon name="refresh-cw" size={12} />
                   {t(MERMAID_RETRY)}
                 </button>
               </div>
@@ -167,7 +167,7 @@ export function MermaidCodeBlock({ code }: MarkdownCodeBlockProps): ReactNode {
         ) : (
           <div className="mermaid-placeholder">
             <div className="mermaid-loading-row">
-              <HelmIcon name="loader" size={13} className="spin-slow" />
+              <HelmxIcon name="loader" size={13} className="spin-slow" />
               <span>{t(MERMAID_RENDERING)}</span>
             </div>
             <pre className="code-block-pre code-block-pre-flush selectable" style={{ opacity: 0.5 }}>

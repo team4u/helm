@@ -1,7 +1,7 @@
-import type { ConversationSummary } from '@helm/protocol/browser'
+import type { ConversationSummary } from '@helmx/protocol/browser'
 
 /**
- * 会话亲子关系纯函数模型：仅依赖 HelmStore 的 conversations 摘要列表推导
+ * 会话亲子关系纯函数模型：仅依赖 HelmxStore 的 conversations 摘要列表推导
  * 子树收集，不做任何请求，也不引入平行路由状态。
  */
 

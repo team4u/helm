@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { ConversationSummary } from '@helm/protocol/browser'
+import type { ConversationSummary } from '@helmx/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
-import { HelmIcon, Select, type SelectOption } from '@helm/plugin-client'
+import { HelmxIcon, Select, type SelectOption } from '@helmx/plugin-client'
 import { useNodes, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { nodeOptionLabel } from '../modals/nodes-modal-model.js'
@@ -158,7 +158,7 @@ export function SessionEnvBar({
         />
       </span>
       <span className="composer-env-item composer-env-cwd-wrap">
-        <HelmIcon name="folder" size={12} className="composer-env-cwd-icon" />
+        <HelmxIcon name="folder" size={12} className="composer-env-cwd-icon" />
         <input
           className="input mono composer-env-cwd-input"
           aria-label={t('composer.env.cwdAria')}
@@ -189,7 +189,7 @@ export function SessionEnvBar({
             disabled={saving || validationError !== null}
             onClick={() => void save()}
           >
-            {saving ? <HelmIcon name="loader" size={11} className="spin-slow" /> : <HelmIcon name="check" size={11} />}
+            {saving ? <HelmxIcon name="loader" size={11} className="spin-slow" /> : <HelmxIcon name="check" size={11} />}
             {t('common.save')}
           </button>
           <button type="button" className="btn btn-sm" disabled={saving} onClick={cancel}>

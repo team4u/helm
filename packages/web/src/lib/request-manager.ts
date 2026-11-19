@@ -1,6 +1,6 @@
 /**
  * Keyed HTTP request deduplication, AbortController / epoch cancellation,
- * asset-refresh generation tracking, and lifecycle timers for HelmExternalStore.
+ * asset-refresh generation tracking, and lifecycle timers for HelmxExternalStore.
  */
 import type { ArtifactsSyncWatermark } from './use-unread-sync.js'
 

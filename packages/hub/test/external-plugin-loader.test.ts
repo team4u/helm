@@ -1,5 +1,5 @@
 /**
- * 外部插件目录 `<dataDir>/plugins/<dir>/` 自动发现、容错降级与持久化恢复集成测试（共享 createHelm 实例减少重复冷启动）。
+ * 外部插件目录 `<dataDir>/plugins/<dir>/` 自动发现、容错降级与持久化恢复集成测试（共享 createHelmx 实例减少重复冷启动）。
  */
 import assert from 'node:assert/strict'
 import { existsSync, mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
@@ -61,8 +61,8 @@ let outsideDir = ''
 let sharedApp: HubTestApp
 
 before(async () => {
-  sharedDataDir = await makeTempDir('helm-ext-loader-')
-  outsideDir = await makeTempDir('helm-ext-outside-')
+  sharedDataDir = await makeTempDir('helmx-ext-loader-')
+  outsideDir = await makeTempDir('helmx-ext-outside-')
   const pluginsDir = join(sharedDataDir, 'plugins')
 
   // 1. 健康外部插件（约定入口、plugin.json main、无 name 缺省回退、clientRoot: ./client）
@@ -190,7 +190,7 @@ test('自动发现与全链路启用：约定入口、plugin.json main、缺省 
   assert.equal(((await sharedApp.kernel.plugins.invokeAction('demo-external', 'bump', { step: 5 })) as { count: number }).count, 5)
   assert.deepEqual(sharedApp.kernel.plugins.getPublicDoc('demo-external', 'status').value, { count: 5 })
   const client = await sharedApp.kernel.plugins.getClientModule('demo-external', 'client.tsx')
-  assert.match(client.code, /__helm_shared_react/)
+  assert.match(client.code, /__helmx_shared_react/)
 
   // plugin.json main 指定入口
   assert.equal(list.find((p) => p.id === 'manifest-plugin')?.enabled, false)
@@ -260,12 +260,12 @@ test('loadExternalPlugins 直调：返回新注册 ID 列表，缺失 plugins �
   assert.ok(registered.includes('direct-loader'))
   assert.equal(sharedApp.kernel.plugins.list().find((p) => p.id === 'direct-loader')?.enabled, false)
 
-  const emptyRoot = useTempDir(t, 'helm-ext-empty-')
+  const emptyRoot = useTempDir(t, 'helmx-ext-empty-')
   assert.deepEqual(await loadExternalPlugins(emptyRoot, sharedApp.kernel.plugins), [])
 })
 
 test('pluginEnabled 跨重启恢复：持久化 true 自动启用，持久化 false 保持停用', { timeout: 60_000 }, async (t) => {
-  const dataDir = join(useTempDir(t, 'helm-ext-restart-'), 'hub')
+  const dataDir = join(useTempDir(t, 'helmx-ext-restart-'), 'hub')
   writeConventionPlugin(join(dataDir, 'plugins'), 'stay-on')
   writeConventionPlugin(join(dataDir, 'plugins'), 'stay-off')
 

@@ -5,7 +5,7 @@
  * action (detach).
  */
 import type { ReactNode } from 'react'
-import { StatusLight, formatDurationMs, usePluginContext, usePluginLocale, usePluginTranslator } from '@helm/plugin-client'
+import { StatusLight, formatDurationMs, usePluginContext, usePluginLocale, usePluginTranslator } from '@helmx/plugin-client'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import { useElapsedNowMs } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'

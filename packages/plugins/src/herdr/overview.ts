@@ -4,7 +4,7 @@
  * Data model: authoritative source = the local session.snapshot's panes[] (all panes, incl. human
  * shells); AgentInfo joins by paneId only to add the real five states and state_change_seq (no seq is
  * ever fabricated without an Agent). The registry is only an ownership overlay: a local record + the exact
- * same frozen target + pane.tabId / AgentInfo.name / Agent join all matching counts as helm-managed;
+ * same frozen target + pane.tabId / AgentInfo.name / Agent join all matching counts as helmx-managed;
  * everything else is human (same-ID remote records, pane rebuilds, agent restarts claim nothing), and human
  * rows carry no outcome / pendingAsk or any management info.
  *
@@ -27,13 +27,13 @@ import type { ManagedPane, PaneRegistry } from './panes.js'
 import type { AskCoordinator } from './asks.js'
 import type { HerdrAgentInfo, HerdrAgentStatus, HerdrPaneSnapshotInfo, SessionSnapshotData } from './rpc.js'
 
-/** One overview row: all local panes are the base table; management fields are carried only by helm-managed rows. */
+/** One overview row: all local panes are the base table; management fields are carried only by helmx-managed rows. */
 export interface OverviewPaneRow {
   nodeId: string
   paneId: string
   tabId: string
   workspaceId: string
-  ownedBy: 'helm' | 'human'
+  ownedBy: 'helmx' | 'human'
   /** Real five states: AgentInfo join or PaneInfo.agent_status (officially unknown for shells). */
   agentStatus: HerdrAgentStatus
   /** Exists only for Agent terminals; omitted without an Agent, never fabricated. */
@@ -47,7 +47,7 @@ export interface OverviewPaneRow {
   /** AgentInfo.name (shown after redaction; ownership checks use the raw value, in memory only). */
   agentName?: string
   focused?: boolean
-  /** Managed rows only: the Helm task lifecycle (not the Herdr pane state). */
+  /** Managed rows only: the Helmx task lifecycle (not the Herdr pane state). */
   outcome?: string
   /** Managed rows only: a pending approval exists. */
   pendingAsk?: boolean
@@ -248,7 +248,7 @@ export class OverviewProjector {
       paneId: pane.paneId,
       tabId: pane.tabId,
       workspaceId: pane.workspaceId,
-      ownedBy: record !== undefined ? 'helm' : 'human',
+      ownedBy: record !== undefined ? 'helmx' : 'human',
       agentStatus: agent?.agentStatus ?? pane.agentStatus,
       ...(agent !== undefined ? { stateChangeSeq: agent.stateChangeSeq } : {}),
       ...(pane.cwd !== undefined ? { cwd: redact(pane.cwd) } : {}),

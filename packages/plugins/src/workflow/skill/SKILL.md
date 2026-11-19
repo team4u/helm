@@ -36,7 +36,7 @@ Use `builtin:workflow` for focused task delegation and deterministic multi-agent
 
 ## Saved definitions and recovery
 
-- Use `helm workflows save` for a reusable script and `helm workflows list/get` to inspect the source. Definitions are cross-conversation assets; duplicate names refuse by default.
+- Use `helmx workflows save` for a reusable script and `helmx workflows list/get` to inspect the source. Definitions are cross-conversation assets; duplicate names refuse by default.
 - Use `resumeFromRunId` for ledger checkpoint replay. Completed idempotent nodes are reused without re-execution; uncertain side effects are refused explicitly.
 - `agent(..., { resume })` continues an existing agent conversation. It is different from `resumeFromRunId` and should not be described as ledger replay.
 - Inspect failed runs before resuming. Do not double-trigger an automatic recovery or claim recovery when the underlying execution is unavailable.

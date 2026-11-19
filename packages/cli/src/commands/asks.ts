@@ -1,5 +1,5 @@
 /** AskDoc commands: asks list / answer / cancel. */
-import type { AskSpec } from '@helm/protocol'
+import type { AskSpec } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'

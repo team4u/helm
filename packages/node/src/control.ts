@@ -33,11 +33,11 @@ export const UPGRADE_EXIT_DELAY_MS = 100;
 
 /**
  * Derive deterministic control endpoint from `sha256(dataDir + '\0' + instanceId)`.
- * Unix: `/tmp/helm-node-<hash>.sock`; Windows: `\\.\pipe\helm-node-<hash>`.
+ * Unix: `/tmp/helmx-node-<hash>.sock`; Windows: `\\.\pipe\helmx-node-<hash>`.
  */
 export function controlEndpoint(dataDir: string, instanceId: string): string {
   const hash = createHash('sha256').update(`${dataDir}\0${instanceId}`).digest('hex').slice(0, 16);
-  return process.platform === 'win32' ? `\\\\.\\pipe\\helm-node-${hash}` : `/tmp/helm-node-${hash}.sock`;
+  return process.platform === 'win32' ? `\\\\.\\pipe\\helmx-node-${hash}` : `/tmp/helmx-node-${hash}.sock`;
 }
 
 /** Control-channel response payload. */
@@ -120,7 +120,7 @@ export function validateUpgradeResult(
   raw: unknown,
 ): { previousVersion: string; targetVersion: string; upgraded: boolean; pid?: number } {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
-    throw new UsageError('upgrade response is not a valid object (refusing to assume success; check actual state with helm-node status)', 'invalid_upgrade_result');
+    throw new UsageError('upgrade response is not a valid object (refusing to assume success; check actual state with helmx-node status)', 'invalid_upgrade_result');
   }
   const record = raw as Record<string, unknown>;
   if (record['ok'] !== true) {

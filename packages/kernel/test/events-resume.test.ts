@@ -13,12 +13,12 @@
 import { strict as assert } from 'node:assert'
 import { describe, it } from 'node:test'
 import {
-  HelmError,
+  HelmxError,
   type ConversationSummary,
-  type HelmEventFrame,
-  type HelmResumedFrame,
-  type HelmSnapshot,
-} from '@helm/protocol'
+  type HelmxEventFrame,
+  type HelmxResumedFrame,
+  type HelmxSnapshot,
+} from '@helmx/protocol'
 import { EventHub, type HostDispatchedEvent } from '../src/runtime/events.js'
 import { waitFor } from './helpers.js'
 
@@ -122,7 +122,7 @@ describe('EventHub resume: same-process catch-up', { timeout: 60_000 }, () => {
     const { hub } = makeHub({ bootId: 'b1' })
     const first = connect(hub, 'http://x/api/events')
     await waitFor(() => first.frames.length >= 1)
-    const snap = first.frames[0]?.data as HelmSnapshot
+    const snap = first.frames[0]?.data as HelmxSnapshot
     assert.equal(snap.bootId, 'b1')
     assert.equal(snap.seq, 0)
     await first.abort()
@@ -133,13 +133,13 @@ describe('EventHub resume: same-process catch-up', { timeout: 60_000 }, () => {
       resumed.frames[0],
       {
         event: 'resumed',
-        data: { bootId: 'b1', seq: 0, headSeq: 0, conversationLives: [] } satisfies HelmResumedFrame,
+        data: { bootId: 'b1', seq: 0, headSeq: 0, conversationLives: [] } satisfies HelmxResumedFrame,
       },
       'zero-catch-up resume must start with resumed {bootId, seq, headSeq, conversationLives}',
     )
     hub.publish('notification', { level: 'info', title: 'live after zero catch-up' })
     await waitFor(() => resumed.frames.some((f) => f.event === 'notification'))
-    assert.deepEqual((resumed.frames[1]?.data as HelmEventFrame).event, { type: 'notification', level: 'info', title: 'live after zero catch-up' })
+    assert.deepEqual((resumed.frames[1]?.data as HelmxEventFrame).event, { type: 'notification', level: 'info', title: 'live after zero catch-up' })
     assert.equal(hub.subscriberCount, 1)
     await resumed.abort()
     assert.equal(hub.subscriberCount, 0)
@@ -164,11 +164,11 @@ describe('EventHub resume: same-process catch-up', { timeout: 60_000 }, () => {
     await resumed.abort()
 
     assert.deepEqual(resumed.frames[0]?.data, { bootId: 'b1', seq: 0, headSeq: 5, conversationLives: [] })
-    const notes = resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq)
+    const notes = resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmxEventFrame).seq)
     assert.deepEqual(notes, [1, 2, 3, 4, 5, 6, 7], 'buffered 6..7 seamlessly join replayed 1..5 in exact sequence')
     const titles = resumed.frames
       .filter((f) => f.event === 'notification')
-      .map((f) => ((f.data as HelmEventFrame).event as { title?: string }).title)
+      .map((f) => ((f.data as HelmxEventFrame).event as { title?: string }).title)
     assert.deepEqual(titles, ['n1', 'n2', 'n3', 'n4', 'n5', 'n6', 'n7'])
   })
 })
@@ -189,7 +189,7 @@ describe('EventHub resume: cross-process and gap snapshot fallback', { timeout: 
     await waitFor(() => resumed.frames.length >= 1)
     await resumed.abort()
     assert.equal(resumed.frames[0]?.event, 'snapshot', 'different process must never resume incrementally: emit snapshot')
-    const snap = resumed.frames[0]?.data as HelmSnapshot
+    const snap = resumed.frames[0]?.data as HelmxSnapshot
     assert.equal(snap.bootId, 'b2', 'snapshot conveys new bootId for client credential update')
     assert.equal(snap.seq, 7)
   })
@@ -209,7 +209,7 @@ describe('EventHub resume: cross-process and gap snapshot fallback', { timeout: 
     await covered.abort()
     assert.deepEqual(covered.frames[0]?.data, { bootId: 'b1', seq: 2, headSeq: 5, conversationLives: [] })
     assert.deepEqual(
-      covered.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq),
+      covered.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmxEventFrame).seq),
       [3, 4, 5],
     )
   })
@@ -227,7 +227,7 @@ describe('EventHub resume: cross-process and gap snapshot fallback', { timeout: 
     await waitFor(() => covered.frames.filter((f) => f.event === 'notification').length >= 1)
     await covered.abort()
     assert.deepEqual(
-      covered.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq),
+      covered.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmxEventFrame).seq),
       [3],
     )
   })
@@ -250,7 +250,7 @@ describe('EventHub resume: cross-process and gap snapshot fallback', { timeout: 
     await waitFor(() => after.frames.filter((f) => f.event === 'notification').length >= 2)
     await after.abort()
     assert.deepEqual(
-      after.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq),
+      after.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmxEventFrame).seq),
       [4, 5],
     )
   })
@@ -321,7 +321,7 @@ describe('EventHub resume: pull pacing and backpressure', { timeout: 60_000 }, (
     const resumed = connect(hub, eventsUrl(0, 'b1'))
     await waitFor(() => resumed.frames.filter((f) => f.event === 'notification').length >= 40, 10_000)
     assert.equal(hub.subscriberCount, 1, 'fast consumer stays subscribed throughout large replay')
-    const seqs = resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq)
+    const seqs = resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmxEventFrame).seq)
     assert.deepEqual(seqs, Array.from({ length: 40 }, (_, i) => i + 1), 'replayed sequences stay strictly contiguous')
     await resumed.abort()
     assert.equal(hub.subscriberCount, 0)
@@ -383,7 +383,7 @@ describe('EventHub publish persistence ordering and ring contiguity', { timeout:
         successes.push(seq)
       },
     })
-    const frames: HelmEventFrame[] = []
+    const frames: HelmxEventFrame[] = []
     hub.subscribe((frame) => frames.push(frame))
 
     // Failed persist throws synchronously without polluting watermark, ring, or broadcasts.
@@ -403,7 +403,7 @@ describe('EventHub publish persistence ordering and ring contiguity', { timeout:
     await resumed.abort()
     assert.deepEqual(resumed.frames[0]?.data, { bootId: 'b1', seq: 0, headSeq: 2, conversationLives: [] })
     assert.deepEqual(
-      resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq),
+      resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmxEventFrame).seq),
       [1, 2],
       'replay remains strictly contiguous after failed publish',
     )
@@ -448,7 +448,7 @@ describe('EventHub publish persistence ordering and ring contiguity', { timeout:
     await covered.abort()
     assert.deepEqual(covered.frames[0]?.data, { bootId: 'b1', seq: 2, headSeq: 3, conversationLives: [] })
     assert.deepEqual(
-      covered.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq),
+      covered.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmxEventFrame).seq),
       [3],
     )
   })
@@ -473,7 +473,7 @@ describe('EventHub bootId', { timeout: 60_000 }, () => {
     await waitFor(() => plain.frames.length >= 1)
     await plain.abort()
     assert.equal(plain.frames[0]?.event, 'snapshot')
-    assert.equal((plain.frames[0]?.data as HelmSnapshot).bootId, 'b1')
+    assert.equal((plain.frames[0]?.data as HelmxSnapshot).bootId, 'b1')
   })
 })
 
@@ -512,7 +512,7 @@ describe('EventHub transient conversation.live separation and ring defaults', { 
           hub.publish('conversation.live' as never, {
             live: { conversationId: 1, text: 'x', tools: [] },
           } as never),
-        (err: unknown) => err instanceof HelmError && err.code === 'invalid_event',
+        (err: unknown) => err instanceof HelmxError && err.code === 'invalid_event',
       )
       assert.equal(hub.seq, 0)
       assert.deepEqual(persisted, [])
@@ -538,13 +538,13 @@ describe('EventHub transient conversation.live separation and ring defaults', { 
       try {
         await waitFor(() => resumed.frames.filter((f) => f.event === 'notification').length >= 3)
         assert.equal(resumed.frames[0]?.event, 'resumed')
-        const frameData = resumed.frames[0]?.data as HelmResumedFrame
+        const frameData = resumed.frames[0]?.data as HelmxResumedFrame
         assert.equal(frameData.seq, 0)
         assert.equal(frameData.headSeq, 3)
         assert.equal(frameData.conversationLives?.length, 1)
         assert.equal(frameData.conversationLives?.[0]?.text, 'delta-1499')
         assert.deepEqual(
-          resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmEventFrame).seq),
+          resumed.frames.filter((f) => f.event === 'notification').map((f) => (f.data as HelmxEventFrame).seq),
           [1, 2, 3],
         )
       } finally {
@@ -555,7 +555,7 @@ describe('EventHub transient conversation.live separation and ring defaults', { 
     }
   })
 
-  it('publishTransientLive broadcasts redacted HelmTransientLiveFrame on /api/events and dispatches to hostDispatcher', { timeout: 60_000 }, async () => {
+  it('publishTransientLive broadcasts redacted HelmxTransientLiveFrame on /api/events and dispatches to hostDispatcher', { timeout: 60_000 }, async () => {
     const { hub } = makeHub({ bootId: 'b1' })
     hub.redactFn = (text) => text.replaceAll('sk-secret-xyz', '[REDACTED]')
     const dispatched: HostDispatchedEvent[] = []
@@ -624,7 +624,7 @@ describe('EventHub transient conversation.live separation and ring defaults', { 
       const resumed = connect(hub, eventsUrl(0, 'b1'))
       try {
         await waitFor(() => resumed.frames.some((f) => f.event === 'resumed'))
-        const frame = resumed.frames[0]?.data as HelmResumedFrame
+        const frame = resumed.frames[0]?.data as HelmxResumedFrame
         assert.deepEqual(frame.conversationLives, [
           {
             conversationId: 2,
@@ -651,7 +651,7 @@ describe('EventHub transient conversation.live separation and ring defaults', { 
       try {
         await waitFor(() => resumed.frames.filter((f) => f.event === 'notification').length >= 300)
         assert.equal(resumed.frames[0]?.event, 'resumed', 'default 1024-frame ring covers 300 frames without falling back to snapshot')
-        const head = resumed.frames[0]?.data as HelmResumedFrame
+        const head = resumed.frames[0]?.data as HelmxResumedFrame
         assert.equal(head.seq, 0)
         assert.equal(head.headSeq, 300)
       } finally {

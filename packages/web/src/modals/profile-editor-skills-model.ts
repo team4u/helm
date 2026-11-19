@@ -10,7 +10,7 @@
  * must never silently delete them.
  */
 
-import type { Profile, SkillSummary } from '@helm/protocol/browser'
+import type { Profile, SkillSummary } from '@helmx/protocol/browser'
 
 /** The three edit modes of the skills section: follow all (skills=undefined) / allowlist / explicitly none (skills=[]). */
 export type SkillsEditMode = 'all' | 'allowlist' | 'none'

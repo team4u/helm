@@ -16,22 +16,22 @@
  * runner: tsx --test；每测试显式 timeout: 60_000 防死锁。
  */
 
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { AskService } from '../../kernel/src/runtime/asks.js'
-import { HelmStore } from '../../kernel/src/runtime/store.js'
-import { openHelmDatabase } from '../../kernel/src/runtime/sqlite.js'
+import { HelmxStore } from '../../kernel/src/runtime/store.js'
+import { openHelmxDatabase } from '../../kernel/src/runtime/sqlite.js'
 import { SecretStash } from '../../kernel/src/services/index.js'
 import { AskCoordinator } from '../src/herdr/asks.js'
 
 let rootDir: string
 
 before(() => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-askseq-retry-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-askseq-retry-'))
 })
 
 after(() => {
@@ -41,13 +41,13 @@ after(() => {
 interface Ctx {
   service: AskService
   coordinator: AskCoordinator
-  store: HelmStore
+  store: HelmxStore
   close(): Promise<void>
 }
 
 async function openCtx(): Promise<Ctx> {
-  const db = await openHelmDatabase(join(rootDir, `a-${Math.random().toString(36).slice(2)}`))
-  const store = new HelmStore(db)
+  const db = await openHelmxDatabase(join(rootDir, `a-${Math.random().toString(36).slice(2)}`))
+  const store = new HelmxStore(db)
   await store.load()
   const stash = new SecretStash()
   const service = new AskService({
@@ -131,7 +131,7 @@ describe('seqResolver 重试 ID：coordinator + 真实 AskService', () => {
       // 旧 ID 已被结算，重复回答显式 409。
       await assert.rejects(
         ctx.service.answerAsk(firstId, { decision: 'allow-y' }),
-        (e: unknown) => e instanceof HelmError && e.code === 'ask_already_settled',
+        (e: unknown) => e instanceof HelmxError && e.code === 'ask_already_settled',
       )
     } finally {
       await ctx.close()
@@ -158,7 +158,7 @@ describe('seqResolver 重试 ID：coordinator + 真实 AskService', () => {
       await createPending(ctx.service, 'herdr:local:w1:p2:11')
       await assert.rejects(
         ctx.service.answerAsk('herdr:local:w1:p2:11', { decision: 'allow-y' }),
-        (e: unknown) => e instanceof HelmError && e.code === 'ask_state_unavailable',
+        (e: unknown) => e instanceof HelmxError && e.code === 'ask_state_unavailable',
       )
     } finally {
       await ctx.close()

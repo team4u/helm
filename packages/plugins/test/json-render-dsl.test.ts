@@ -163,7 +163,7 @@ test('Table rowActions: $row 注入后 input 保持数字类型、target 插值�
   const rowScope: EvalScope = { ...scope, $row: row }
 
   const archiveAction = resolveSpecAction(
-    { type: 'helm:action', actionId: 'archive_worker', input: { workerConversationId: '{$row.conversationId}' } },
+    { type: 'helmx:action', actionId: 'archive_worker', input: { workerConversationId: '{$row.conversationId}' } },
     rowScope,
   )
   assert.equal(archiveAction.kind, 'action')
@@ -174,7 +174,7 @@ test('Table rowActions: $row 注入后 input 保持数字类型、target 插值�
   }
 
   const openAction = resolveSpecAction(
-    { type: 'helm:open', target: 'conversation:{$row.conversationId}' },
+    { type: 'helmx:open', target: 'conversation:{$row.conversationId}' },
     rowScope,
   )
   assert.equal(openAction.kind, 'open')
@@ -189,7 +189,7 @@ test('Table rowActions: split 打开（superagent timelineRenderer 真实写法�
     $data: { entry: { data: { meta: { workerId: 12 } } } },
   }
   const action = resolveSpecAction(
-    { type: 'helm:open', target: 'conversation:{$data.entry.data.meta.workerId}', split: true },
+    { type: 'helmx:open', target: 'conversation:{$data.entry.data.meta.workerId}', split: true },
     scope,
   )
   assert.equal(action.kind, 'open')
@@ -206,7 +206,7 @@ test('Table rowActions: split 打开（superagent timelineRenderer 真实写法�
 test('Switch: 新布尔值注入 $value 后 action input 保持 boolean', { timeout: 60_000 }, () => {
   const scope: EvalScope = { $docs: { routing: { routerMode: true } }, $value: false }
   const action = resolveSpecAction(
-    { type: 'helm:action', actionId: 'set_router_mode', input: { enabled: '{$value}' } },
+    { type: 'helmx:action', actionId: 'set_router_mode', input: { enabled: '{$value}' } },
     scope,
   )
   assert.equal(action.kind, 'action')
@@ -216,12 +216,12 @@ test('Switch: 新布尔值注入 $value 后 action input 保持 boolean', { time
   }
 })
 
-test('spec-action: helm:send 目标解析与非法载荷显式拒绝', { timeout: 60_000 }, () => {
+test('spec-action: helmx:send 目标解析与非法载荷显式拒绝', { timeout: 60_000 }, () => {
   assert.equal(parseSendTarget('conversation:42'), 42)
   assert.equal(parseSendTarget('42'), 42)
   assert.equal(parseSendTarget('conversation:abc'), null)
 
-  const send = resolveSpecAction({ type: 'helm:send', target: 'conversation:7', text: '开始巡检' }, {})
+  const send = resolveSpecAction({ type: 'helmx:send', target: 'conversation:7', text: '开始巡检' }, {})
   assert.equal(send.kind, 'send')
   if (send.kind === 'send') {
     assert.equal(send.conversationId, 7)
@@ -230,7 +230,7 @@ test('spec-action: helm:send 目标解析与非法载荷显式拒绝', { timeout
 
   assert.equal(resolveSpecAction(null, {}).kind, 'invalid')
   assert.equal(resolveSpecAction({ type: 'unknown' }, {}).kind, 'invalid')
-  assert.equal(resolveSpecAction({ type: 'helm:open', target: '' }, {}).kind, 'invalid')
+  assert.equal(resolveSpecAction({ type: 'helmx:open', target: '' }, {}).kind, 'invalid')
 })
 
 // ---------------------------------------------------------------------------
@@ -265,12 +265,12 @@ test('Table rowActions 回归: 外层 scope 不预求值，行级点击时 $row 
   const rowActionsTemplate = [
     {
       label: '查看',
-      action: { type: 'helm:open', target: 'conversation:{$row.conversationId}' },
+      action: { type: 'helmx:open', target: 'conversation:{$row.conversationId}' },
     },
     {
       label: '归档',
       action: {
-        type: 'helm:action',
+        type: 'helmx:action',
         actionId: 'archive_worker',
         input: { workerConversationId: '{$row.conversationId}' },
       },
@@ -304,8 +304,8 @@ test('Table rowActions 回归: 若在外层 scope 预求值，target 会变成�
   assert.equal(premature, 'conversation:')
   // 修复后 TableImpl 保留原始模板至行级 scope 点击时才求值，
   // 行级求值结果始终携带真实 id（见上一个回归测试），坏值不再可能产生。
-  // 此外 helm:send 对坏 target 显式拒绝（不静默降级）：
-  assert.equal(resolveSpecAction({ type: 'helm:send', target: premature, text: 'x' }, {}).kind, 'invalid')
+  // 此外 helmx:send 对坏 target 显式拒绝（不静默降级）：
+  assert.equal(resolveSpecAction({ type: 'helmx:send', target: premature, text: 'x' }, {}).kind, 'invalid')
 })
 
 // ---------------------------------------------------------------------------

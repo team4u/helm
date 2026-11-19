@@ -24,7 +24,7 @@ import { pathToFileURL } from 'node:url'
 import type { TranscriptContext } from '@earendil-works/pi-ai'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { HelmError, type AgentExecutionInfo, type AgentGateResult } from '@helm/protocol'
+import { HelmxError, type AgentExecutionInfo, type AgentGateResult } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 
 const require = createRequire(import.meta.url)
@@ -76,7 +76,7 @@ async function runSeederUntilSigkill(
     env: {
       PATH: process.env.PATH ?? '',
       HOME: seedDir,
-      HELM_DATA_DIR: dataDir,
+      HELMX_DATA_DIR: dataDir,
     },
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -129,7 +129,7 @@ async function runSeederUntilSigkill(
 }
 
 test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid ID, wrong parent, and concurrent lock', { timeout: 60_000 }, async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-reattach-boundary-'))
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-reattach-boundary-'))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
 
   const { models, faux } = createFaux()
@@ -166,7 +166,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
         resume: String(childId),
         reattach: { conversationId: childId },
       }),
-    (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
   )
   await assert.rejects(
     () =>
@@ -177,7 +177,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
         fork: true,
         reattach: { conversationId: childId },
       }),
-    (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
   )
 
   // 2) Invalid reattach shapes / non-positive or non-safe-integer conversationId / missing requestId
@@ -190,7 +190,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
           requestId: 'req-bad-id',
           reattach: { conversationId: badConvId },
         }),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
     )
   }
   await assert.rejects(
@@ -201,7 +201,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
         requestId: 'req-empty',
         reattach: {},
       }),
-    (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
   )
   await assert.rejects(
     () =>
@@ -211,7 +211,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
         requestId: 'req-rel-cwd',
         reattach: { conversationId: childId, effectiveCwd: 'relative/path' },
       }),
-    (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
   )
   await assert.rejects(
     () =>
@@ -220,7 +220,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
         prompt: 'missing requestId',
         reattach: { conversationId: childId },
       }),
-    (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
   )
 
   // 3) Missing conversation, root without parent chain, wrong parent ownership (404 not_found, never create fake child)
@@ -237,7 +237,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
           requestId: 'req-wrong-owner',
           reattach: { conversationId: targetId },
         }),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found' && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found' && err.status === 404,
     )
   }
 
@@ -250,7 +250,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
         requestId: 'req-exec-only',
         reattach: { executionId: 'pane-1' },
       }),
-    (err: unknown) => err instanceof HelmError && err.code === 'unsupported_runtime' && err.status === 400,
+    (err: unknown) => err instanceof HelmxError && err.code === 'unsupported_runtime' && err.status === 400,
   )
 
   assert.equal(runtime.listConversations().length, convCountBefore, 'rejected paths must never create conversations')
@@ -313,7 +313,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
         requestId: 'req-concurrent',
         reattach: { conversationId: slowChildId },
       }),
-    (err: unknown) => err instanceof HelmError && err.code === 'subagent_in_use' && err.status === 409,
+    (err: unknown) => err instanceof HelmxError && err.code === 'subagent_in_use' && err.status === 409,
   )
   releaseTool()
   assert.equal(await firstRun, 'slow child done')
@@ -326,7 +326,7 @@ test('spawnAgent reattach strong boundary validation: mutual exclusion, invalid 
 
 test('PluginToolSpec.replay: safe replays across runtime.close() and SIGKILL; unsafe never replays', { timeout: 60_000 }, async (t) => {
   // ---- A) Replay replay: 'safe' plugin tool after graceful runtime.close() ----
-  const closeDir = mkdtempSync(join(tmpdir(), 'helm-plugin-replay-close-'))
+  const closeDir = mkdtempSync(join(tmpdir(), 'helmx-plugin-replay-close-'))
   t.after(() => rmSync(closeDir, { recursive: true, force: true }))
 
   let firstCalls = 0
@@ -424,8 +424,8 @@ test('PluginToolSpec.replay: safe replays across runtime.close() and SIGKILL; un
   )
 
   // ---- B) Real SIGKILL crash: safe plugin tool auto-replays, unsafe never replays ----
-  const killDir = mkdtempSync(join(tmpdir(), 'helm-plugin-replay-sigkill-'))
-  const seedDir = mkdtempSync(join(tmpdir(), 'helm-plugin-replay-seed-'))
+  const killDir = mkdtempSync(join(tmpdir(), 'helmx-plugin-replay-sigkill-'))
+  const seedDir = mkdtempSync(join(tmpdir(), 'helmx-plugin-replay-seed-'))
   t.after(() => {
     rmSync(seedDir, { recursive: true, force: true })
     rmSync(killDir, { recursive: true, force: true })
@@ -442,7 +442,7 @@ import { join } from 'node:path'
 import { KernelRuntime } from ${JSON.stringify(KERNEL_RUNTIME_SRC)}
 import { createModels } from ${JSON.stringify(PI_AI_MODELS_URL)}
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from ${JSON.stringify(PI_AI_FAUX_URL)}
-const dataDir = process.env.HELM_DATA_DIR
+const dataDir = process.env.HELMX_DATA_DIR
 const faux = fauxProvider()
 const models = createModels()
 models.setProvider(faux.provider)
@@ -571,7 +571,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
   } as Record<string, unknown>
 
   // ---- Scenario 1: with schema + gate, close() while safe plugin tool runs, call register_structured_output and pass gate after restart ----
-  const dir1 = mkdtempSync(join(tmpdir(), 'helm-reattach-close-schema-'))
+  const dir1 = mkdtempSync(join(tmpdir(), 'helmx-reattach-close-schema-'))
   t.after(() => rmSync(dir1, { recursive: true, force: true }))
   const childDir1 = join(dir1, 'work-1')
   mkdirSync(childDir1, { recursive: true })
@@ -692,7 +692,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
   assert.equal(r1b.listConversations().length, 2, 'reattach must not create an extra child conversation')
 
   // ---- Scenario 2: register_structured_output already committed before crash; post-restart emits plain text only, accepted backfill skips follow-up prompt ----
-  const dir2 = mkdtempSync(join(tmpdir(), 'helm-reattach-close-prefilled-'))
+  const dir2 = mkdtempSync(join(tmpdir(), 'helmx-reattach-close-prefilled-'))
   t.after(() => rmSync(dir2, { recursive: true, force: true }))
   let enteredSecondTool!: () => void
   const waitSecondTool = new Promise<void>((resolve) => {
@@ -792,7 +792,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
   assert.equal(await countUserEntries(r2b, childId2), 1)
 
   // ---- Scenario 3: interrupted during :schema-heal follow-up turn; reattach deduplicates :schema-heal idempotently (zero duplicate prompt) ----
-  const dir3 = mkdtempSync(join(tmpdir(), 'helm-reattach-close-heal-'))
+  const dir3 = mkdtempSync(join(tmpdir(), 'helmx-reattach-close-heal-'))
   t.after(() => rmSync(dir3, { recursive: true, force: true }))
   let enteredHealTool!: () => void
   const waitHealTool = new Promise<void>((resolve) => {
@@ -893,7 +893,7 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
   assert.equal(await countUserEntries(r3b, childId3), 2, 'exactly one pi.user for initial turn and one for :schema-heal (zero duplicates)')
 
   // ---- Scenario 4: plain-text turn already persisted before close() (in-memory lastAssistant unpopulated); reattach reads text directly and runs gate ----
-  const dir4 = mkdtempSync(join(tmpdir(), 'helm-reattach-close-plain-'))
+  const dir4 = mkdtempSync(join(tmpdir(), 'helmx-reattach-close-plain-'))
   t.after(() => rmSync(dir4, { recursive: true, force: true }))
   writeFileSync(join(dir4, 'plain-gate.txt'), 'pass\n', 'utf8')
   const { models: m4a, faux: f4a } = createFaux()
@@ -949,8 +949,8 @@ test('spawnAgent(requestId + reattach.conversationId) resumes in-place across ru
 })
 
 test('spawnAgent(requestId + reattach.conversationId) recovers in-place across SIGKILL (committed schema backfill, gate verification, zero duplicate messages)', { timeout: 60_000 }, async (t) => {
-  const dir = mkdtempSync(join(tmpdir(), 'helm-reattach-sigkill-'))
-  const seedDir = mkdtempSync(join(tmpdir(), 'helm-reattach-sigkill-seed-'))
+  const dir = mkdtempSync(join(tmpdir(), 'helmx-reattach-sigkill-'))
+  const seedDir = mkdtempSync(join(tmpdir(), 'helmx-reattach-sigkill-seed-'))
   t.after(() => {
     rmSync(seedDir, { recursive: true, force: true })
     rmSync(dir, { recursive: true, force: true })
@@ -976,7 +976,7 @@ import { join } from 'node:path'
 import { KernelRuntime } from ${JSON.stringify(KERNEL_RUNTIME_SRC)}
 import { createModels } from ${JSON.stringify(PI_AI_MODELS_URL)}
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from ${JSON.stringify(PI_AI_FAUX_URL)}
-const dataDir = process.env.HELM_DATA_DIR
+const dataDir = process.env.HELMX_DATA_DIR
 const childDir = join(dataDir, 'child-workspace')
 const faux = fauxProvider()
 const models = createModels()
@@ -1070,8 +1070,8 @@ await new Promise(() => {})
   }
 
   // ---- B) SIGKILL before calling register_structured_output; calls tool on first post-restart turn and passes schema + gate ----
-  const dirPost = mkdtempSync(join(tmpdir(), 'helm-reattach-sigkill-post-'))
-  const seedDirPost = mkdtempSync(join(tmpdir(), 'helm-reattach-sigkill-post-seed-'))
+  const dirPost = mkdtempSync(join(tmpdir(), 'helmx-reattach-sigkill-post-'))
+  const seedDirPost = mkdtempSync(join(tmpdir(), 'helmx-reattach-sigkill-post-seed-'))
   t.after(() => {
     rmSync(seedDirPost, { recursive: true, force: true })
     rmSync(dirPost, { recursive: true, force: true })
@@ -1089,7 +1089,7 @@ import { join } from 'node:path'
 import { KernelRuntime } from ${JSON.stringify(KERNEL_RUNTIME_SRC)}
 import { createModels } from ${JSON.stringify(PI_AI_MODELS_URL)}
 import { fauxAssistantMessage, fauxProvider, fauxToolCall } from ${JSON.stringify(PI_AI_FAUX_URL)}
-const dataDir = process.env.HELM_DATA_DIR
+const dataDir = process.env.HELMX_DATA_DIR
 const childDir = join(dataDir, 'work-post')
 const faux = fauxProvider()
 const models = createModels()

@@ -54,8 +54,8 @@ Chat UI blocks use a standalone spec with no owning plugin: they cannot subscrib
       { "nodeId": "build-01", "status": "offline", "diskFreeGb": null }
     ] },
     { "component": "ActionBar", "actions": [
-      { "label": "Re-inspect", "icon": "refresh-cw", "variant": "primary", "action": { "type": "helm:send", "target": "current", "text": "Please re-inspect all nodes" } },
-      { "label": "Open assistant", "icon": "terminal", "action": { "type": "helm:open", "target": "conversation:1", "split": true } }
+      { "label": "Re-inspect", "icon": "refresh-cw", "variant": "primary", "action": { "type": "helmx:send", "target": "current", "text": "Please re-inspect all nodes" } },
+      { "label": "Open assistant", "icon": "terminal", "action": { "type": "helmx:open", "target": "conversation:1", "split": true } }
     ] }
   ]
 }

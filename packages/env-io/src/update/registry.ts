@@ -10,7 +10,7 @@ import fs from 'node:fs/promises';
 import rawFs from 'node:fs';
 import { createHash } from 'node:crypto';
 import process from 'node:process';
-import { isStrictSemver } from '@helm/protocol';
+import { isStrictSemver } from '@helmx/protocol';
 import { UpgradeRejectedError } from './errors.js';
 
 export const DEFAULT_REGISTRY = 'https://registry.npmjs.org';
@@ -23,23 +23,23 @@ export const TARBALL_TIMEOUT_MS = 180_000;
 const normalizeRegistry = (url: string | undefined): string => (url ?? '').trim().replace(/\/+$/, '');
 
 /**
- * RPC registry allowlist: permits only the official npm registry or `HELM_NPM_REGISTRY`.
+ * RPC registry allowlist: permits only the official npm registry or `HELMX_NPM_REGISTRY`.
  * Rejects any other explicit URL with `UpgradeRejectedError`.
  */
 export function filterRpcRegistryUrl(registryUrl?: string): string | undefined {
   const requested = normalizeRegistry(registryUrl);
   if (!requested) return undefined;
   if (requested === DEFAULT_REGISTRY) return requested;
-  const envRegistry = normalizeRegistry(process.env.HELM_NPM_REGISTRY);
+  const envRegistry = normalizeRegistry(process.env.HELMX_NPM_REGISTRY);
   if (envRegistry && requested === envRegistry) return requested;
   throw new UpgradeRejectedError(
-    `untrusted npm registry rejected: ${requested} (only ${DEFAULT_REGISTRY} or HELM_NPM_REGISTRY is permitted)`,
+    `untrusted npm registry rejected: ${requested} (only ${DEFAULT_REGISTRY} or HELMX_NPM_REGISTRY is permitted)`,
   );
 }
 
-/** Resolve the effective registry URL: explicit argument, then `HELM_NPM_REGISTRY`, then npmjs. */
+/** Resolve the effective registry URL: explicit argument, then `HELMX_NPM_REGISTRY`, then npmjs. */
 export function resolveRegistryUrl(explicit?: string): string {
-  return normalizeRegistry(explicit || process.env.HELM_NPM_REGISTRY || DEFAULT_REGISTRY);
+  return normalizeRegistry(explicit || process.env.HELMX_NPM_REGISTRY || DEFAULT_REGISTRY);
 }
 
 async function fetchJsonWithTimeout(url: string, fetchImpl: typeof fetch, timeoutMs: number): Promise<unknown> {
@@ -173,7 +173,7 @@ export function computeSri(filePath: string): Promise<string> {
  * Fetch the exact-version manifest, download its tarball to `destPath`, and verify the
  * SHA-512 SRI against the registry-declared integrity — the single verified-download
  * seam shared by release staging and consumer installers (Hub payload extraction).
- * Diagnostics preserve the original helm-node wording so consumers' error contracts
+ * Diagnostics preserve the original helmx-node wording so consumers' error contracts
  * stay byte-stable.
  */
 export async function downloadVerifiedTarball(

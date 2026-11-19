@@ -1,8 +1,8 @@
 /** Web 宿主会话归档标记与纯 tags 变换。 */
-import type { ConversationSummary } from '@helm/protocol/browser'
+import type { ConversationSummary } from '@helmx/protocol/browser'
 
 /** 人工归档 tag（Web 宿主命名空间标记，不参与插件 sidebar.section 规则）。 */
-export const ARCHIVED_TAG = 'helm:archived'
+export const ARCHIVED_TAG = 'helmx:archived'
 
 /** 会话是否已人工归档。 */
 export function isConversationArchived(conv: Pick<ConversationSummary, 'tags'>): boolean {

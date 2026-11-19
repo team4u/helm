@@ -21,12 +21,12 @@ import {
   subscribeSessionDoc,
 } from '../src/lib/session-docs.js'
 import { usePluginSessionDocsMap } from '../src/lib/store-context.js'
-import { usePluginSessionDocValue, usePluginSessionDocState } from '@helm/plugin-client'
+import { usePluginSessionDocValue, usePluginSessionDocState } from '@helmx/plugin-client'
 import { createPluginClientHostPort } from '../src/lib/plugin-client-host.js'
 import { makeTestStore } from './helpers/store.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { TestStoreProvider } from './helpers/host-store.js'
-import type { HelmStoreValue } from '../src/lib/types.js'
+import type { HelmxStoreValue } from '../src/lib/types.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -58,19 +58,19 @@ const multiplexFrame = (
 type ProbeResult = { value: unknown; diagnostics: { error?: string; connected: boolean; deleted: boolean; hasValue: boolean } }
 
 interface Harness {
-  rerenderStore: (store: HelmExternalStore) => void
+  rerenderStore: (store: HelmxExternalStore) => void
   unmount: () => void
 }
 
 /** 真实 store 的 actions 即携带 session-docs 具名函数（与生产一致）。 */
-const stableSessionDocStore = (overrides: Partial<HelmStoreValue> = {}): HelmExternalStore =>
+const stableSessionDocStore = (overrides: Partial<HelmxStoreValue> = {}): HelmxExternalStore =>
   makeTestStore({
     ...overrides,
   })
 
 /** 挂载双探针组件（单值 hook + 诊断 hook + map hook），Flaps 收集最新结果。 */
 function mountProbes(
-  initialStore: HelmExternalStore,
+  initialStore: HelmxExternalStore,
   opts: { strict?: boolean; docNames?: string[] } = {},
 ): { reads: () => ProbeResult; mapReads: () => Record<string, unknown>; harness: Harness } {
   const reads: ProbeResult[] = []
@@ -90,7 +90,7 @@ function mountProbes(
     e(TestStoreProvider, { value: currentStore }, e(Probes))
   let root: Root | undefined
   const harness: Harness = {
-    rerenderStore: (store: HelmExternalStore) => {
+    rerenderStore: (store: HelmxExternalStore) => {
       currentStore = store
       act(() => { root!.render(renderTree()) })
     },

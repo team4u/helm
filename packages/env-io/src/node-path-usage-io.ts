@@ -1,7 +1,7 @@
 /**
- * Real `node:fs/promises` adapter implementing `PathUsageIo` (`@helm/env-io`).
+ * Real `node:fs/promises` adapter implementing `PathUsageIo` (`@helmx/env-io`).
  *
- * Shared by `@helm/kernel` (local Hub scans) and `@helm/node` (remote daemon) so filesystem
+ * Shared by `@helmx/kernel` (local Hub scans) and `@helmx/node` (remote daemon) so filesystem
  * semantics are never duplicated. Errors preserve their `node:fs` `code` property (`ENOENT`,
  * `EACCES`, `ESRCH`, etc.) for fail-closed classification by `path-usage.ts`.
  */

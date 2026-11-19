@@ -8,16 +8,16 @@
  * - Assemble model-visible multimodal content when image attachments are present (plain text / text block + ImageContent base64).
  */
 import { join } from 'node:path'
-import type { ArtifactMetadata, ConversationAttachmentRef } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { ArtifactMetadata, ConversationAttachmentRef } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { FileNotFoundError, type ArtifactService } from '../services/index.js'
-import type { HelmStore } from './store.js'
+import type { HelmxStore } from './store.js'
 
 /** Image MIME types: predicate set for assembling multimodal ImageContent blocks from attachments. */
 const IMAGE_MIMES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 
 interface ConversationAttachmentsHost {
-  readonly store: HelmStore
+  readonly store: HelmxStore
   readonly artifactsSvc: ArtifactService
   readonly dataDir: string
 }
@@ -55,12 +55,12 @@ export class ConversationAttachments {
     for (const artifactId of unique) {
       const metadata = await this.host.artifactsSvc.get(artifactId).catch((error: unknown) => {
         if (error instanceof FileNotFoundError) {
-          throw new HelmError('not_found', `attachment artifact not found: ${artifactId}`, 404, { artifactId })
+          throw new HelmxError('not_found', `attachment artifact not found: ${artifactId}`, 404, { artifactId })
         }
         throw error
       })
       if (!this.isArtifactAuthorized(conversationId, metadata.conversationId)) {
-        throw new HelmError(
+        throw new HelmxError(
           'artifact_forbidden',
           `artifact ${artifactId} does not belong to conversation ${conversationId} or its ancestor chain; refusing unauthorized attachment`,
           403,
@@ -83,7 +83,7 @@ export class ConversationAttachments {
   ): Promise<{ id: string; name: string; mimeType: string; size: number; absPath: string }> {
     const [resolved] = await this.resolveAuthorizedAttachments(conversationId, [artifactId])
     if (resolved === undefined) {
-      throw new HelmError('not_found', `attachment artifact not found: ${artifactId}`, 404, { artifactId })
+      throw new HelmxError('not_found', `attachment artifact not found: ${artifactId}`, 404, { artifactId })
     }
     return { ...resolved.ref, absPath: resolved.absPath }
   }
@@ -94,7 +94,7 @@ export class ConversationAttachments {
   ): string {
     const lines = resolved.map(
       ({ ref, absPath }) =>
-        `- ${ref.name} (id=${ref.id}, mime=${ref.mimeType}, size=${ref.size} bytes, path=${absPath}, pull=\`helm artifacts get ${ref.id} --output ./${ref.name}\`)`,
+        `- ${ref.name} (id=${ref.id}, mime=${ref.mimeType}, size=${ref.size} bytes, path=${absPath}, pull=\`helmx artifacts get ${ref.id} --output ./${ref.name}\`)`,
     )
     return `[Attached Files]\n${lines.join('\n')}`
   }
@@ -113,7 +113,7 @@ export class ConversationAttachments {
   > {
     const lines = resolved.map(
       ({ ref, absPath }) =>
-        `- ${ref.name} (id=${ref.id}, mime=${ref.mimeType}, size=${ref.size} bytes, path=${absPath}, pull=\`helm artifacts get ${ref.id} --output ./${ref.name}\`)`,
+        `- ${ref.name} (id=${ref.id}, mime=${ref.mimeType}, size=${ref.size} bytes, path=${absPath}, pull=\`helmx artifacts get ${ref.id} --output ./${ref.name}\`)`,
     )
     const attachedBlock = `[Attached Files]\n${lines.join('\n')}`
     const modelText = effectiveText.length > 0 ? `${effectiveText}\n\n${attachedBlock}` : attachedBlock

@@ -10,9 +10,9 @@ import {
   resolveLocalizedText,
   type CommandSpec,
   type ConversationSummary,
-  type HelmLocale,
+  type HelmxLocale,
   type NotificationEvent,
-} from '@helm/protocol/browser'
+} from '@helmx/protocol/browser'
 import { matchesUiScope } from './types.js'
 
 /** 宿主保留的会话内管理命令斜杠词；插件 slash 声明不得覆盖（后端注册边界拒绝，前端防御性跳过）。 */
@@ -85,7 +85,7 @@ export function commandActionPluginId(cmd: QualifiedCommand): string {
 }
 
 /** 命令面板行 hint：优先插件声明 description（按 locale 解析的显示文案），回退 action 寻址（pluginId / actionId）。 */
-export function commandHint(spec: CommandSpec, pluginId: string, locale: HelmLocale): string {
+export function commandHint(spec: CommandSpec, pluginId: string, locale: HelmxLocale): string {
   const description =
     spec.description !== undefined ? resolveLocalizedText(spec.description, locale) : undefined
   if (description !== undefined && description !== '') return description
@@ -111,7 +111,7 @@ export function buildSlashMenuItems(
   visibleSkills: ReadonlyArray<{ id: string; name: string }>,
   pluginSlash: ReadonlyArray<QualifiedCommand>,
   runPluginCommand: (cmd: QualifiedCommand) => void,
-  locale: HelmLocale,
+  locale: HelmxLocale,
 ): SlashMenuItem[] {
   const builtin: SlashMenuItem[] = [
     { id: '/new', label: '/new', hint: 'Start new topic', apply: '/new' },
@@ -168,7 +168,7 @@ export interface PluginSlashExecDeps {
   invokePluginAction: (pluginId: string, actionId: string, input: unknown, conversationId?: number) => Promise<unknown>
   pushNotice: (notice: NotificationEvent) => void
   /** 通知正文中命令 title（LocalizedText 显示文案）的解析 locale。 */
-  locale: HelmLocale
+  locale: HelmxLocale
   conversationId?: number
 }
 

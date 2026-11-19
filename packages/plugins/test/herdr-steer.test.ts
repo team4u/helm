@@ -1,5 +1,5 @@
 /**
- * builtin:herdr steer 动作与 HerdrExecutor.steerPane 测试（helm 侧闭环）。
+ * builtin:herdr steer 动作与 HerdrExecutor.steerPane 测试（helmx 侧闭环）。
  *
  * fixture 语义（真实协议，herdr 0.9.5 / protocol 22）：SteerFakeTransport 按
  * 官方 agent.prompt(target, text, wait?) 形状模拟——首轮/自愈 prompt 携带
@@ -31,7 +31,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { HelmError, type AskResult, type ConversationSummary } from '@helm/protocol'
+import { HelmxError, type AskResult, type ConversationSummary } from '@helmx/protocol'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createHerdrPlugin } from '../src/herdr.js'
 import { completeBackend } from '../../kernel/test/helpers/host-backend-stub.js'
@@ -51,7 +51,7 @@ import {
 } from './helpers/plugin-test-env.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { parsePong, SEND_KEYS_CAS_CAPABILITY } from '../src/herdr/rpc.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 
 // ---------------------------------------------------------------------------
 // 纯契约：parsePong 真实形状
@@ -76,7 +76,7 @@ test('契约: parsePong 真实形状解析（未知能力字段忽略；sendKeys
   assert.equal(parsePong({ type: 'pong', version: 'v', protocol: 22, capabilities: null }).sendKeysCas, false)
   assert.throws(
     () => parsePong({ type: 'pong', version: 'v', protocol: 22, capabilities: { [SEND_KEYS_CAS_CAPABILITY]: 'yes' } }),
-    (error: unknown) => (error as HelmError).code === 'herdr_protocol_violation',
+    (error: unknown) => (error as HelmxError).code === 'herdr_protocol_violation',
   )
 })
 
@@ -127,7 +127,7 @@ class SteerFakeTransport implements HerdrTransport {
     let pane = this.panes.get(id)
     // target 语义（真实协议）：paneId 或受管 agentName（CLI 退出后 name 失效）。
     if (pane === undefined) pane = [...this.panes.values()].find((p) => p.name === id)
-    if (!pane) throw new HelmError('agent_not_found', `no pane ${id}`, 404)
+    if (!pane) throw new HelmxError('agent_not_found', `no pane ${id}`, 404)
     return pane
   }
 
@@ -148,7 +148,7 @@ class SteerFakeTransport implements HerdrTransport {
         const tabId = `${workspaceId}:t${n}`
         const paneCwd = (params['cwd'] as string) ?? '/tmp'
         // 生产 readLocalOutput 经真实 fs canonicalPath：pane cwd 必须真实存在。
-        mkdirSync(join(paneCwd, '.helm'), { recursive: true })
+        mkdirSync(join(paneCwd, '.helmx'), { recursive: true })
         this.panes.set(paneId, {
           paneId, tabId, workspaceId,
           agentStatus: 'idle', seq: 1, cwd: paneCwd,
@@ -163,7 +163,7 @@ class SteerFakeTransport implements HerdrTransport {
       case 'tab.close': {
         const tabId = params['tab_id'] as string
         const tab = this.tabs.get(tabId)
-        if (!tab) throw new HelmError('tab_not_found', `no tab ${tabId}`, 404)
+        if (!tab) throw new HelmxError('tab_not_found', `no tab ${tabId}`, 404)
         tab.closed = true
         // 真实服务器关 tab 后窗格消失：后续针对该窗格的 RPC 一律 agent_not_found，
         // 在途 agent.wait 轮询也据此退出（不残留长定时器）。
@@ -191,18 +191,18 @@ class SteerFakeTransport implements HerdrTransport {
         const deadline = typeof params['timeout_ms'] === 'number' ? Date.now() + (params['timeout_ms'] as number) : undefined
         for (let i = 0; i < 4_000; i += 1) {
           if (!this.panes.has(pane.paneId)) {
-            throw new HelmError('agent_not_found', `pane ${pane.paneId} 已关闭`, 404)
+            throw new HelmxError('agent_not_found', `pane ${pane.paneId} 已关闭`, 404)
           }
           if (until.length === 0 || until.includes(pane.agentStatus)) {
             return { type: 'agent_info', agent: agentInfoOf(pane) }
           }
           if (deadline !== undefined && Date.now() >= deadline) {
             this.onWaitTimeout?.(pane)
-            throw new HelmError('timeout', 'agent.wait 预算耗尽（无状态变化）', 408)
+            throw new HelmxError('timeout', 'agent.wait 预算耗尽（无状态变化）', 408)
           }
           await delay(10)
         }
-        throw new HelmError('timeout', 'timed out waiting for agent status', 408)
+        throw new HelmxError('timeout', 'timed out waiting for agent status', 408)
       }
       case 'agent.prompt': {
         // 分支判别（真实协议形状）：任务/自愈 prompt 携带 wait；插话不携带
@@ -218,10 +218,10 @@ class SteerFakeTransport implements HerdrTransport {
           if (this.exitCliOnSteer) pane.name = undefined
           // 真实 admission：launch_pending / blocked / 无 known_agent 零写入拒绝。
           if (pane.launchPending === true) {
-            throw new HelmError('agent_not_ready', 'agent 仍在启动（launch_pending），输入未写入', 409)
+            throw new HelmxError('agent_not_ready', 'agent 仍在启动（launch_pending），输入未写入', 409)
           }
           if (pane.agentStatus === 'blocked') {
-            throw new HelmError('agent_blocked', 'agent blocked（等待审批），输入未写入', 409)
+            throw new HelmxError('agent_blocked', 'agent blocked（等待审批），输入未写入', 409)
           }
           this.paneOf(params['target']) // 无 known_agent（CLI 退出）零写入拒绝。
 
@@ -234,7 +234,7 @@ class SteerFakeTransport implements HerdrTransport {
           this.orderLog.push('steer-prompt')
           this.emit({ type: 'pane.updated', paneId: pane.paneId })
           if (this.failAfterSteerWrite) {
-            throw new HelmError('herdr_timeout', '插话写入后连接中断（模拟不确定投递）', 504)
+            throw new HelmxError('herdr_timeout', '插话写入后连接中断（模拟不确定投递）', 504)
           }
           return { type: 'agent_prompted', agent: agentInfoOf(pane) }
         }
@@ -256,7 +256,7 @@ class SteerFakeTransport implements HerdrTransport {
         const pane = this.paneOf(params['target'])
         const expected = params['expected_state_seq']
         if (typeof expected !== 'number' || expected !== pane.seq) {
-          throw new HelmError('stale_state', `expected_state_seq=${String(expected)} 与当前 ${pane.seq} 不符，按键未发送`, 409)
+          throw new HelmxError('stale_state', `expected_state_seq=${String(expected)} 与当前 ${pane.seq} 不符，按键未发送`, 409)
         }
         // 按键被消费：审批解除，CLI 继续工作。
         pane.seq += 1
@@ -269,21 +269,21 @@ class SteerFakeTransport implements HerdrTransport {
       case 'session.snapshot':
         return { type: 'session_snapshot', snapshot: { version: 'test', protocol: 22, workspaces: [], tabs: [], panes: [], agents: [] } }
       default:
-        throw new HelmError('method_not_found', `fake transport 不支持 ${method}`, 400)
+        throw new HelmxError('method_not_found', `fake transport 不支持 ${method}`, 400)
     }
   }
 
   async readOutput(_target: HerdrTarget, cwd: string, fileName: string): Promise<string> {
     this.orderLog.push('read-output')
-    const content = this.outputFiles.get(`${cwd}/.helm/${fileName}`)
-    if (content === undefined) throw new HelmError('herdr_output_missing', `交接文件不存在: ${cwd}/.helm/${fileName}`, 404)
+    const content = this.outputFiles.get(`${cwd}/.helmx/${fileName}`)
+    if (content === undefined) throw new HelmxError('herdr_output_missing', `交接文件不存在: ${cwd}/.helmx/${fileName}`, 404)
     return content
   }
 
   async removeOutput(_target: HerdrTarget, cwd: string, fileName: string): Promise<void> {
     this.orderLog.push('remove-output')
     this.removeOutputCalls.push(fileName)
-    this.outputFiles.delete(`${cwd}/.helm/${fileName}`)
+    this.outputFiles.delete(`${cwd}/.helmx/${fileName}`)
   }
 
   async runGate(): Promise<{ ok: boolean; output: string }> {
@@ -354,7 +354,7 @@ interface Env {
 }
 
 async function makeEnv(options: { transport?: SteerFakeTransport; startupTimeoutMs?: number } = {}): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-herdr-steer-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-herdr-steer-'))
   const parentCwd = join(dataDir, 'parent')
   mkdirSync(parentCwd, { recursive: true })
   const transport = options.transport ?? new SteerFakeTransport()
@@ -383,16 +383,16 @@ async function makeEnv(options: { transport?: SteerFakeTransport; startupTimeout
     conversations,
     getConversation: (id: number) => {
       const found = conversations.get(id)
-      if (found === undefined) throw new HelmError('not_found', `会话不存在: ${id}`, 404, { conversationId: id })
+      if (found === undefined) throw new HelmxError('not_found', `会话不存在: ${id}`, 404, { conversationId: id })
       return found
     },
     listConversations: () => [...conversations.values()],
     nodeIpc: {
       isOnline: () => true,
-      call: async () => { throw new HelmError('unsupported', '本 steer fixture 无节点 IPC', 501) },
-      subscribe: async () => { throw new HelmError('unsupported', '本 steer fixture 无节点 IPC 订阅', 501) },
+      call: async () => { throw new HelmxError('unsupported', '本 steer fixture 无节点 IPC', 501) },
+      subscribe: async () => { throw new HelmxError('unsupported', '本 steer fixture 无节点 IPC 订阅', 501) },
     },
-    buildSpawnEnv: (_conversationId: number, cwd: string) => ({ HELM_TOKEN: 'SECRET-TOKEN', HELM_CWD: cwd }),
+    buildSpawnEnv: (_conversationId: number, cwd: string) => ({ HELMX_TOKEN: 'SECRET-TOKEN', HELMX_CWD: cwd }),
     runGate: async () => {
       gateCalls.push(1)
       gateEnteredRes()
@@ -481,7 +481,7 @@ async function spawnRun(
     signal,
   } as never).then((hookOutcome) => {
     if (hookOutcome.action === 'handled') return hookOutcome.result
-    throw new HelmError('herdr_spawn_unhandled', 'spawn 未被 herdr 插件接管（fixture 缺陷）', 500)
+    throw new HelmxError('herdr_spawn_unhandled', 'spawn 未被 herdr 插件接管（fixture 缺陷）', 500)
   })
   // 兄弟 catch：close 统一等待前（如断言失败提前进 finally）不得成为 unhandled
   // rejection；close 仍直接 await 同一 Promise 做真实终局判定。
@@ -516,14 +516,14 @@ async function taskPromptDelivered(env: Env): Promise<void> {
 
 /** 任务/自愈 prompt 文本引用的交接文件名。 */
 function taskFileNameOf(text: string): string {
-  const name = text.match(/[Ww]rite[\s\S]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+  const name = text.match(/[Ww]rite[\s\S]*?\.helmx\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
   assert.ok(name !== undefined, `任务文本应含交接文件名：${text.slice(-400)}`)
   return name
 }
 
 /** 插话文本要求写入的新交接文件名。 */
 function steerNewFileNameOf(text: string): string {
-  const name = text.match(/the new file [^\n]*?\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+  const name = text.match(/the new file [^\n]*?\.helmx\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
   assert.ok(name !== undefined, `插话文本应含新交接文件名：${text.slice(-400)}`)
   return name
 }
@@ -561,10 +561,10 @@ async function rejectsSteer(env: Env, input: Record<string, unknown>, code: stri
     caught = error
   }
   const actual = caught as { code?: string; message?: string; status?: number; details?: unknown } | null
-  assert.ok(caught instanceof Error || caught instanceof HelmError, `应抛错误（实际 ${String(caught)}）`)
+  assert.ok(caught instanceof Error || caught instanceof HelmxError, `应抛错误（实际 ${String(caught)}）`)
   assert.equal(actual?.code, code, `错误码应为 ${code}（实际 ${actual?.code}: ${actual?.message}）`)
-  if (status !== undefined && caught instanceof HelmError) assert.equal(caught.status, status)
-  return { code: actual?.code ?? '', message: actual?.message ?? '', ...(caught instanceof HelmError ? { status: caught.status, details: caught.details } : {}) }
+  if (status !== undefined && caught instanceof HelmxError) assert.equal(caught.status, status)
+  return { code: actual?.code ?? '', message: actual?.message ?? '', ...(caught instanceof HelmxError ? { status: caught.status, details: caught.details } : {}) }
 }
 
 // ---------------------------------------------------------------------------
@@ -583,7 +583,7 @@ test('steer: task 阶段 working 时单次投递现有 agent.prompt（无 wait/�
     assert.equal(out['steered'], true)
     assert.equal(out['nodeId'], 'local')
     assert.equal(out['executionId'], pane().paneId)
-    assert.equal(out['ownership'], 'helm')
+    assert.equal(out['ownership'], 'helmx')
     assert.equal(out['guardLevel'], 'preflight', '预检语义如实回报，不伪称 CAS')
     assert.equal(out['stateChangeSeq'], preSeq, 'stateChangeSeq 为预检观测水位')
     // 投递请求形状（真实协议）：仅 target（受管 agentName）+ text。
@@ -604,11 +604,11 @@ test('steer: task 阶段 working 时单次投递现有 agent.prompt（无 wait/�
     assert.equal(oldFile, originalFile, '作废声明指向原交接文件')
     assert.notEqual(newFile, originalFile, '新文件名必须全新唯一')
     // 任务收尾：按最新指导写新文件 -> done -> 结果返回；新旧文件成功后清理。
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${newFile}`, 'done-guided')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${newFile}`, 'done-guided')
     env.transport.advancePane(pane().paneId, 'done')
     assert.equal(await promise, 'done-guided')
-    assert.equal(existsSync(join(pane().cwd, '.helm', newFile)), false, '新交接文件成功后被清理')
-    assert.equal(existsSync(join(pane().cwd, '.helm', originalFile)), false, '作废旧文件成功后被清理')
+    assert.equal(existsSync(join(pane().cwd, '.helmx', newFile)), false, '新交接文件成功后被清理')
+    assert.equal(existsSync(join(pane().cwd, '.helmx', originalFile)), false, '作废旧文件成功后被清理')
   } finally {
     await env.close()
   }
@@ -628,7 +628,7 @@ test('steer: 预检身份漂移（name 变化）拒绝且零投递，原任务�
     assert.deepEqual(env.transport.steerDelivered, [])
     assert.equal(steerPromptCalls(env).length, 0)
     const original = taskFileNameOf(taskPromptCalls(env)[0]!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${original}`, 'ok')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${original}`, 'ok')
     env.transport.advancePane(pane().paneId, 'done')
     assert.equal(await promise, 'ok')
   } finally {
@@ -661,7 +661,7 @@ test('steer: 预检已 idle 拒绝（不新建回合），原任务按原文件�
     await taskPromptDelivered(env)
     const original = taskFileNameOf(taskPromptCalls(env)[0]!.params['text'] as string)
     // 首轮完成：结果已按原路径落盘，终端 idle。
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${original}`, 'first-turn-ok')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${original}`, 'first-turn-ok')
     env.transport.advancePane(pane().paneId, 'idle')
     await rejectsSteer(env, steerInput(pane()), 'herdr_steer_not_working', 409)
     assert.equal(steerPromptCalls(env).length, 0)
@@ -685,7 +685,7 @@ test('steer: 预检 launch_pending 拒绝，原任务不受扰', { timeout: 60_0
     assert.equal(steerPromptCalls(env).length, 0)
     assert.deepEqual(env.transport.steerDelivered, [])
     const original = taskFileNameOf(taskPromptCalls(env)[0]!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${original}`, 'ok')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${original}`, 'ok')
     env.transport.advancePane(pane().paneId, 'done')
     assert.equal(await promise, 'ok')
   } finally {
@@ -707,7 +707,7 @@ test('steer: 预检后刚转 idle——服务端 admission 接受并接续新回
     assert.equal(out['guardLevel'], 'preflight')
     await waitFor(() => pane().agentStatus === 'working')
     const newFile = steerFileOf(env, 0)
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${newFile}`, 'continued-turn')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${newFile}`, 'continued-turn')
     env.transport.advancePane(pane().paneId, 'done')
     assert.equal(await promise, 'continued-turn')
   } finally {
@@ -731,7 +731,7 @@ test('steer: 预检后变 blocked——服务端 admission 确定零写入拒绝
     env.answerAsk(env.askIds()[0]!, { decision: 'allow-enter' })
     await waitFor(() => pane().agentStatus === 'working')
     const original = taskFileNameOf(taskPromptCalls(env)[0]!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${original}`, 'after-approval')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${original}`, 'after-approval')
     env.transport.advancePane(pane().paneId, 'done')
     assert.equal(await promise, 'after-approval', '零写入拒绝不得扰动原任务或重定向交接路径')
   } finally {
@@ -753,7 +753,7 @@ test('steer: 预检后 CLI 退出（无 known_agent）——服务端 agent_not_
     assert.deepEqual(env.transport.steerDelivered, [])
     env.transport.exitCliOnSteer = false
     const original = taskFileNameOf(taskPromptCalls(env)[0]!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${original}`, 'ok')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${original}`, 'ok')
     env.transport.advancePane(pane().paneId, 'done')
     assert.equal(await promise, 'ok')
   } finally {
@@ -769,7 +769,7 @@ test('steer: 投递后连接中断（不确定投递）单次不重发；原任�
     await taskPromptDelivered(env)
     await waitFor(() => pane().agentStatus === 'working')
     const original = taskFileNameOf(taskPromptCalls(env)[0]!.params['text'] as string)
-    const resultFile = `${pane().cwd}/.helm/${original}`
+    const resultFile = `${pane().cwd}/.helmx/${original}`
     env.transport.failAfterSteerWrite = true
     await rejectsSteer(env, steerInput(pane()), 'herdr_timeout')
     assert.equal(steerPromptCalls(env).length, 1, '不确定结果绝不重发')
@@ -784,7 +784,7 @@ test('steer: 投递后连接中断（不确定投递）单次不重发；原任�
     } catch (error) {
       caught = error
     }
-    assert.ok(caught instanceof HelmError)
+    assert.ok(caught instanceof HelmxError)
     assert.equal(caught.code, 'herdr_steer_uncertain', '不确定投递使原任务显式失败')
     assert.ok(caught.message.includes('uncertain'), '诊断含不确定原因')
     assert.equal(existsSync(resultFile), true, '失败保留现场：旧结果文件不被删除')
@@ -810,10 +810,10 @@ test('steer: 后续插话不能覆盖前次不确定投递，任务仍显式失�
     assert.equal(steerPromptCalls(env).length, 1, '未确认前不得再次向终端投递')
     assert.equal(env.transport.steerDelivered.length, 1)
     const original = taskFileNameOf(taskPromptCalls(env)[0]!.params['text'] as string)
-    const originalPath = `${pane().cwd}/.helm/${original}`
+    const originalPath = `${pane().cwd}/.helmx/${original}`
     env.transport.outputFiles.set(originalPath, 'old-result')
     env.transport.advancePane(pane().paneId, 'done')
-    await assert.rejects(promise, (error: unknown) => (error as HelmError).code === 'herdr_steer_uncertain')
+    await assert.rejects(promise, (error: unknown) => (error as HelmxError).code === 'herdr_steer_uncertain')
     assert.equal(existsSync(originalPath), true)
     assert.equal(taskPromptCalls(env).length, 1, '不能以交接自愈掩盖不确定投递')
   } finally {
@@ -828,18 +828,18 @@ test('steer: 旧结果迟到写回不能冒充——结算只认最新唯一文�
     const { promise, pane } = await spawnRun(env)
     await taskPromptDelivered(env)
     const original = taskFileNameOf(taskPromptCalls(env)[0]!.params['text'] as string)
-    const originalPath = `${pane().cwd}/.helm/${original}`
+    const originalPath = `${pane().cwd}/.helmx/${original}`
     env.transport.outputFiles.set(originalPath, 'v1')
     await waitFor(() => pane().agentStatus === 'working')
     await env.host.invokeAction('builtin:herdr', 'steer', steerInput(pane()))
     // 插话后旧路径又被迟到写回（旧回合的残写）。
     env.transport.outputFiles.set(originalPath, 'v1-late-writeback')
     const newFile = steerFileOf(env, 0)
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${newFile}`, 'v2-guided')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${newFile}`, 'v2-guided')
     env.transport.advancePane(pane().paneId, 'done')
     assert.equal(await promise, 'v2-guided', '必须以最新唯一文件结算，旧路径残写不得冒充')
     assert.equal(existsSync(originalPath), false, '作废旧文件成功后被清理')
-    assert.equal(existsSync(join(pane().cwd, '.helm', newFile)), false)
+    assert.equal(existsSync(join(pane().cwd, '.helmx', newFile)), false)
   } finally {
     await env.close()
   }
@@ -862,7 +862,7 @@ test('steer: 连续插话只接受最新业务文件（旧插话文件迟到无�
     assert.notEqual(firstFile, latestFile)
     // CLI 只执行了第一次指导的写盘（旧插话文件迟到写回），最新文件缺失。
     env.transport.promptStatus = 'idle'
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${firstFile}`, 'first-guidance-only')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${firstFile}`, 'first-guidance-only')
     env.transport.advancePane(pane().paneId, 'done')
     // 结算进入有界等待（新文件未出现）：等后续回合起步，预算耗尽不自诊成功。
     await waitFor(() => env.transport.calls.some((c) =>
@@ -873,13 +873,13 @@ test('steer: 连续插话只接受最新业务文件（旧插话文件迟到无�
     ), 15_000)
     // 预算耗尽后落到一次自愈：追问按最新文件名索取。
     env.transport.onPrompt = (p, text) => {
-      const name = text.match(/\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
-      if (name !== undefined) env.transport.outputFiles.set(`${p.cwd}/.helm/${name}`, 'healed-latest')
+      const name = text.match(/\.helmx\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+      if (name !== undefined) env.transport.outputFiles.set(`${p.cwd}/.helmx/${name}`, 'healed-latest')
     }
     assert.equal(await promise, 'healed-latest', '自愈只按最新文件名兜底，旧插话文件不得冒充')
     const healText = taskPromptCalls(env)[1]!.params['text'] as string
     assert.ok(healText.includes(latestFile), '自愈追问必须指向最新业务文件')
-    assert.equal(existsSync(join(pane().cwd, '.helm', firstFile)), false, '旧插话文件成功后被清理')
+    assert.equal(existsSync(join(pane().cwd, '.helmx', firstFile)), false, '旧插话文件成功后被清理')
     assert.equal(taskPromptCalls(env).length, 2, '自愈恰好一次')
   } finally {
     await env.close()
@@ -893,7 +893,7 @@ test('steer: 投递后仍 idle 且新文件未出现——有界等待后续回�
     const { promise, pane } = await spawnRun(env)
     await taskPromptDelivered(env)
     const original = taskFileNameOf(taskPromptCalls(env)[0]!.params['text'] as string)
-    const originalPath = `${pane().cwd}/.helm/${original}`
+    const originalPath = `${pane().cwd}/.helmx/${original}`
     env.transport.outputFiles.set(originalPath, 'v1')
     await waitFor(() => pane().agentStatus === 'working')
     // 投递成功但 CLI 队列尚未起步：终端恰在此时转 idle（新回合未开始）。
@@ -914,7 +914,7 @@ test('steer: 投递后仍 idle 且新文件未出现——有界等待后续回�
     pane().seq += 1
     env.transport.emit({ type: 'pane.updated', paneId: pane().paneId })
     const newFile = steerFileOf(env, 0)
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${newFile}`, 'v2-guided')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${newFile}`, 'v2-guided')
     env.transport.advancePane(pane().paneId, 'done')
     assert.equal(await promise, 'v2-guided', '必须以新回合结果结算，不得以 v1 成功')
     assert.equal(existsSync(originalPath), false, '成功交接后旧文件被清理')
@@ -941,7 +941,7 @@ test('steer: 等待预算耗尽时刚开始工作，复查状态后继续等待�
     ))
     assert.equal(taskPromptCalls(env).length, 1, '仍工作时不得提前发起交接自愈')
     const fileName = steerFileOf(env, 0)
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${fileName}`, 'late-started-result')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${fileName}`, 'late-started-result')
     env.transport.advancePane(pane().paneId, 'done')
     assert.equal(await promise, 'late-started-result')
   } finally {
@@ -958,15 +958,15 @@ test('steer: JSON 业务 Schema 不变（新文件同扩展 .json，Schema 校�
     })
     await taskPromptDelivered(env)
     const original = taskFileNameOf(taskPromptCalls(env)[0]!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${original}`, JSON.stringify({ value: 1 }))
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${original}`, JSON.stringify({ value: 1 }))
     await waitFor(() => pane().agentStatus === 'working')
     await env.host.invokeAction('builtin:herdr', 'steer', steerInput(pane()))
     const newFile = steerFileOf(env, 0)
     assert.ok(newFile.endsWith('.json'), '新文件保持同扩展（schema 任务为 json）')
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${newFile}`, JSON.stringify({ value: 42 }))
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${newFile}`, JSON.stringify({ value: 42 }))
     env.transport.advancePane(pane().paneId, 'done')
     assert.deepEqual(await promise, { value: 42 }, '有效 JSON 业务 Schema 交付不变')
-    assert.equal(existsSync(join(pane().cwd, '.helm', original)), false)
+    assert.equal(existsSync(join(pane().cwd, '.helmx', original)), false)
   } finally {
     await env.close()
   }
@@ -983,7 +983,7 @@ test('steer: run/父会话强匹配——跨轨道插话拒绝', { timeout: 60_0
     await rejectsSteer(env, steerInput(pane(), { parentConversationId: 2 }), 'herdr_steer_context_mismatch', 409)
     assert.deepEqual(env.transport.steerDelivered, [])
     const original = taskFileNameOf(taskPromptCalls(env)[0]!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${original}`, 'ok')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${original}`, 'ok')
     env.transport.advancePane(pane().paneId, 'done')
     assert.equal(await promise, 'ok')
   } finally {
@@ -1005,7 +1005,7 @@ test('steer: 直调授权——非祖先 caller 拒绝（自报 conversationId �
     assert.equal(out['steered'], true)
     assert.equal(out['guardLevel'], 'preflight')
     const newFile = steerFileOf(env, 0)
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${newFile}`, 'ok')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${newFile}`, 'ok')
     env.transport.advancePane(pane().paneId, 'done')
     assert.equal(await promise, 'ok')
   } finally {
@@ -1027,7 +1027,7 @@ test('steer: 按 pane 互斥——在途 steer 期间重入拒绝', { timeout: 6
     assert.equal((await first)['steered'], true)
     assert.deepEqual(env.transport.steerDelivered.map((d) => d.text.includes('改用方案B')), [true], '仅第一条投递')
     const newFile = steerFileOf(env, 0)
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${newFile}`, 'ok')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${newFile}`, 'ok')
     env.transport.advancePane(pane().paneId, 'done')
     assert.equal(await promise, 'ok')
   } finally {
@@ -1041,8 +1041,8 @@ test('steer: startup 阶段（agent 未就绪）拒绝插话', { timeout: 60_000
     env.transport.holdStartup = true
     // 任务 prompt 一到就落盘交接文件（防读文件时序悬挂任务）。
     env.transport.onPrompt = (pane, text) => {
-      const name = text.match(/\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
-      if (name !== undefined) env.transport.outputFiles.set(`${pane.cwd}/.helm/${name}`, 'ok')
+      const name = text.match(/\.helmx\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+      if (name !== undefined) env.transport.outputFiles.set(`${pane.cwd}/.helmx/${name}`, 'ok')
     }
     const { promise, pane } = await spawnRun(env)
     await waitFor(() => env.transport.calls.some((c) => c.method === 'agent.start'))
@@ -1075,7 +1075,7 @@ test('steer: handoff 阶段（交接自愈等待中）拒绝插话；settled 后
     assert.equal((err.details as Record<string, unknown>)['phase'], 'handoff')
     // 自愈追问返回 idle 后补写文件完成任务。
     const healName = taskFileNameOf(taskPromptCalls(env)[1]!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${healName}`, 'healed')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${healName}`, 'healed')
     env.transport.advancePane(pane().paneId, 'idle')
     assert.equal(await promise, 'healed')
     // keepalive（已结算保活）：无在途任务，按非运行拒绝。
@@ -1090,8 +1090,8 @@ test('steer: 原 task 挂在 Gate 期间拒绝插话；Gate 恰好一次不被�
   try {
     env.transport.promptStatus = 'working'
     env.transport.onPrompt = (pane, text) => {
-      const name = text.match(/\.helm\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
-      if (name !== undefined) env.transport.outputFiles.set(`${pane.cwd}/.helm/${name}`, 'gated-result')
+      const name = text.match(/\.helmx\/(wf-out-[A-Za-z0-9_.-]+\.(?:json|md))/)?.[1]
+      if (name !== undefined) env.transport.outputFiles.set(`${pane.cwd}/.helmx/${name}`, 'gated-result')
     }
     const { promise, pane } = await spawnRun(env, { gate: 'true' })
     await taskPromptDelivered(env)
@@ -1123,7 +1123,7 @@ test('steer: run 取消交错——取消后不发送新 prompt，在途单次�
     await waitFor(() => steerPromptCalls(env).length >= 1)
     abort()
     // 原任务以 aborted 真实终局（等待而非 sleep）。
-    await assert.rejects(promise, (error: unknown) => (error as HelmError).code === 'aborted')
+    await assert.rejects(promise, (error: unknown) => (error as HelmxError).code === 'aborted')
     // 在途单次请求如实终局：窗格已关闭，服务端以 agent_not_found 拒绝（零写入）。
     await assert.rejects(steerPromise, (error: unknown) => (error as { code?: string }).code === 'agent_not_found')
     assert.equal(env.transport.steerDelivered.length, 0, '取消后零写入')
@@ -1174,7 +1174,7 @@ test('steer: 窗格不受管 / nodeId 不一致 / 未连接均显式拒绝', { t
     // 非法 nodeId。
     await rejectsSteer(env, steerInput(pane(), { nodeId: 'bad node!' }), 'validation_error', 400)
     const original = taskFileNameOf(taskPromptCalls(env)[0]!.params['text'] as string)
-    env.transport.outputFiles.set(`${pane().cwd}/.helm/${original}`, 'ok')
+    env.transport.outputFiles.set(`${pane().cwd}/.helmx/${original}`, 'ok')
     env.transport.advancePane(pane().paneId, 'done')
     assert.equal(await promise, 'ok')
   } finally {

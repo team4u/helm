@@ -5,10 +5,10 @@ import {
   pluginErrorStageLabel,
   type PluginUsageItem,
 } from './plugin-card-model.js'
-import type { HelmLocale, PluginSummary } from '@helm/protocol/browser'
-import { DEFAULT_HELM_LOCALE, resolveLocalizedText } from '@helm/protocol/browser'
+import type { HelmxLocale, PluginSummary } from '@helmx/protocol/browser'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/protocol/browser'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
-import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helm/plugin-client'
+import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helmx/plugin-client'
 import { createWebTranslator } from '../i18n/catalog.js'
 import { useOptionalGroupedUi, useOptionalLocale, useOptionalStoreActions } from '../lib/store-context.js'
 import {
@@ -61,7 +61,7 @@ export interface PluginConfigFormProps {
   pluginId: string
   config: PluginConfigResponse
   /** 配置字段 label/description（LocalizedText）的解析 locale。 */
-  locale: HelmLocale
+  locale: HelmxLocale
   onSaved: () => void
 }
 
@@ -136,7 +136,7 @@ export function PluginConfigForm({
     <div className="flex-col">
       <div className="config-fields flex-col">
         {entries.map(([key, schema]) => {
-          const fieldId = `helm-plugin-config-${pluginId}-${key}`
+          const fieldId = `helmx-plugin-config-${pluginId}-${key}`
           const source = config.sources?.[key]
           // 必填且无 default 的字段无值可回退，禁止清除（后端同样会拒绝）。
           const isRequiredWithoutDefault = schema.required === true && schema.default === undefined
@@ -145,7 +145,7 @@ export function PluginConfigForm({
           return (
             <div key={key} className="form-grid plugin-config-row">
               <label htmlFor={fieldId} className="form-grid-label plugin-config-field-label">
-                {schema.secret === true && <HelmIcon name="lock" size={11} />}
+                {schema.secret === true && <HelmxIcon name="lock" size={11} />}
                 <span className="plugin-config-field-name">
                   {schema.label !== undefined ? resolveLocalizedText(schema.label, locale) || key : key}
                 </span>
@@ -220,7 +220,7 @@ export function PluginConfigForm({
                     onClick={() => void resetField(key)}
                     title={schema.secret ? t('plugins.config.clearSecretTitle') : t('plugins.config.resetDefaultTitle')}
                   >
-                    <HelmIcon name="rotate-ccw" size={11} />
+                    <HelmxIcon name="rotate-ccw" size={11} />
                     <span>{schema.secret ? t('plugins.config.clear') : t('plugins.config.reset')}</span>
                   </button>
                 )}
@@ -231,13 +231,13 @@ export function PluginConfigForm({
       </div>
       {error && (
         <div className="callout callout-error" role="alert">
-          <HelmIcon name="alert-circle" size={13} />
+          <HelmxIcon name="alert-circle" size={13} />
           <span className="callout-text selectable">{error}</span>
         </div>
       )}
       <div>
         <button className="btn btn-primary btn-sm" disabled={saving} onClick={() => void save()}>
-          <HelmIcon name="check" size={12} />
+          <HelmxIcon name="check" size={12} />
           <span>{saved ? t('plugins.config.saved') : t('plugins.config.save')}</span>
         </button>
       </div>
@@ -270,7 +270,7 @@ export function PluginDetailDrawer({
   const actions = useOptionalStoreActions()
   // LocalizedText 显示元数据（插件名 / 配置字段 label / 设置面板 label）按
   // store 权威 locale 解析；保留无 Provider 的 SSR 渲染容忍（缺省英文桥接）。
-  const locale = storeLocale ?? DEFAULT_HELM_LOCALE
+  const locale = storeLocale ?? DEFAULT_HELMX_LOCALE
   const t = useMemo(() => createWebTranslator(locale), [locale])
   const [config, setConfig] = useState<(PluginConfigResponse & { pluginId: string }) | null>(null)
   const [loadingConfig, setLoadingConfig] = useState(false)
@@ -454,7 +454,7 @@ export function PluginDetailDrawer({
                   )}
                   {plugin?.locked && (
                     <span className="badge badge-warn" title={t('plugins.card.lockedTitle')}>
-                      <HelmIcon name="lock" size={10} />
+                      <HelmxIcon name="lock" size={10} />
                       <span>{t('plugins.resident')}</span>
                     </span>
                   )}
@@ -465,7 +465,7 @@ export function PluginDetailDrawer({
                         deps: plugin.dependencies.join(t('plugins.desc.listSeparator')),
                       })}
                     >
-                      <HelmIcon name="network" size={10} />
+                      <HelmxIcon name="network" size={10} />
                       <span>{t('plugins.drawer.dependenciesCount', { count: plugin.dependencies.length })}</span>
                     </span>
                   )}
@@ -494,7 +494,7 @@ export function PluginDetailDrawer({
                 aria-label={t('common.close')}
                 title={t('common.close')}
               >
-                <HelmIcon name="x" size={14} />
+                <HelmxIcon name="x" size={14} />
               </button>
             </DialogClose>
           </div>
@@ -511,12 +511,12 @@ export function PluginDetailDrawer({
                     <span className="text-subtle">{t('plugins.drawer.currentStatus')}</span>
                     {isPluginFailed(plugin) ? (
                       <span className="badge badge-err" title={t('plugins.drawer.errorBadgeTitle')}>
-                        <HelmIcon name="alert-circle" size={10} />
+                        <HelmxIcon name="alert-circle" size={10} />
                         <span>{t('plugins.status.error')}</span>
                       </span>
                     ) : plugin.enabled ? (
                       <span className="badge badge-ok">
-                        <HelmIcon name="check" size={10} />
+                        <HelmxIcon name="check" size={10} />
                         <span>{t('common.enabled')}</span>
                       </span>
                     ) : (
@@ -545,7 +545,7 @@ export function PluginDetailDrawer({
                             })
                           }
                         >
-                          <HelmIcon name="play" size={12} />
+                          <HelmxIcon name="play" size={12} />
                           <span>{t('plugins.openView')}</span>
                         </button>
                         <button
@@ -563,7 +563,7 @@ export function PluginDetailDrawer({
                             )
                           }
                         >
-                          <HelmIcon name="columns" size={12} />
+                          <HelmxIcon name="columns" size={12} />
                           <span>{t('plugins.drawer.openSplit')}</span>
                         </button>
                       </>
@@ -576,12 +576,12 @@ export function PluginDetailDrawer({
                     >
                       {plugin.enabled ? (
                         <>
-                          <HelmIcon name="square" size={12} />
+                          <HelmxIcon name="square" size={12} />
                           <span>{t('plugins.drawer.disablePlugin')}</span>
                         </>
                       ) : (
                         <>
-                          <HelmIcon name="play" size={12} />
+                          <HelmxIcon name="play" size={12} />
                           <span>{t('plugins.drawer.enablePlugin')}</span>
                         </>
                       )}
@@ -591,7 +591,7 @@ export function PluginDetailDrawer({
 
                 {actionError && (
                   <div className="callout callout-error" role="alert">
-                    <HelmIcon name="alert-circle" size={13} />
+                    <HelmxIcon name="alert-circle" size={13} />
                     <span className="callout-text selectable">{actionError}</span>
                   </div>
                 )}
@@ -600,7 +600,7 @@ export function PluginDetailDrawer({
                 {plugin?.managed && (
                   <div className="plugin-drawer-section plugin-package-section">
                     <h4 className="plugin-drawer-section-title">
-                      <HelmIcon name="boxes" size={13} />
+                      <HelmxIcon name="boxes" size={13} />
                       <span>{t('plugins.package.sectionTitle')}</span>
                     </h4>
                     <div className="plugin-package-meta">
@@ -630,11 +630,11 @@ export function PluginDetailDrawer({
                     </div>
                     <div className="plugin-package-actions">
                       <button className="btn btn-sm" disabled={packageOp !== 'idle'} onClick={() => void handleUpdatePackage()}>
-                        <HelmIcon name="refresh-cw" size={12} />
+                        <HelmxIcon name="refresh-cw" size={12} />
                         <span>{packageOp === 'updating' ? t('plugins.package.updating') : t('plugins.package.checkUpdates')}</span>
                       </button>
                       <button className="btn btn-danger btn-sm" disabled={packageOp !== 'idle'} onClick={() => setConfirmRemoveOpen(true)}>
-                        <HelmIcon name="trash-2" size={12} />
+                        <HelmxIcon name="trash-2" size={12} />
                         <span>{packageOp === 'removing' ? t('plugins.package.uninstalling') : t('plugins.package.uninstallPlugin')}</span>
                       </button>
                     </div>
@@ -644,7 +644,7 @@ export function PluginDetailDrawer({
                 {/* Failure diagnostics box: structured stage, error code and full message */}
                 {plugin.error && (
                   <div className="callout callout-error" role="alert">
-                    <HelmIcon name="alert-circle" size={13} />
+                    <HelmxIcon name="alert-circle" size={13} />
                     <div className="plugin-diagnostic-body">
                       <div className="plugin-diagnostic-title">{t('plugins.drawer.diagnosticTitle')}</div>
                       <div className="text-subtle">
@@ -661,7 +661,7 @@ export function PluginDetailDrawer({
                 {/* 409 plugin_in_use confirmation: informed forced disable */}
                 {inUseConfirm && (
                   <div className="callout callout-warn" role="alert">
-                    <HelmIcon name="alert-triangle" size={13} />
+                    <HelmxIcon name="alert-triangle" size={13} />
                     <div className="plugin-inuse-body">
                       <div className="plugin-diagnostic-title">{t('plugins.drawer.inUseTitle')}</div>
                       <div className="text-subtle">{t('plugins.drawer.inUseHint')}</div>
@@ -677,7 +677,7 @@ export function PluginDetailDrawer({
                           {t('common.cancel')}
                         </button>
                         <button type="button" className="btn btn-danger btn-sm" disabled={toggling} onClick={() => void handleForceDisable()}>
-                          <HelmIcon name="square" size={12} />
+                          <HelmxIcon name="square" size={12} />
                           <span>{t('plugins.drawer.forceDisable')}</span>
                         </button>
                       </div>
@@ -688,14 +688,14 @@ export function PluginDetailDrawer({
                 {/* Capability inventory */}
                 <div className="plugin-drawer-section">
                   <h4 className="plugin-drawer-section-title">
-                    <HelmIcon name="boxes" size={13} />
+                    <HelmxIcon name="boxes" size={13} />
                     <span>{t('plugins.drawer.capabilities')}</span>
                   </h4>
                   <div className="plugin-drawer-capabilities">
                     {/* Tools */}
                     <div className="plugin-capability-group">
                       <div className="plugin-capability-group-header">
-                        <HelmIcon name="wrench" size={11} />
+                        <HelmxIcon name="wrench" size={11} />
                         <span className="plugin-capability-group-title">
                           Tools ({plugin.tools.length})
                         </span>
@@ -716,7 +716,7 @@ export function PluginDetailDrawer({
                     {/* Actions */}
                     <div className="plugin-capability-group">
                       <div className="plugin-capability-group-header">
-                        <HelmIcon name="zap" size={11} />
+                        <HelmxIcon name="zap" size={11} />
                         <span className="plugin-capability-group-title">
                           Actions ({plugin.actions.length})
                         </span>
@@ -737,7 +737,7 @@ export function PluginDetailDrawer({
                     {/* Hooks */}
                     <div className="plugin-capability-group">
                       <div className="plugin-capability-group-header">
-                        <HelmIcon name="layers" size={11} />
+                        <HelmxIcon name="layers" size={11} />
                         <span className="plugin-capability-group-title">
                           Hooks ({plugin.hooks.length})
                         </span>
@@ -760,17 +760,17 @@ export function PluginDetailDrawer({
                 {/* Dynamic configuration options */}
                 <div className="plugin-drawer-section">
                   <h4 className="plugin-drawer-section-title">
-                    <HelmIcon name="sliders" size={13} />
+                    <HelmxIcon name="sliders" size={13} />
                     <span>{t('plugins.drawer.configuration')}</span>
                   </h4>
                   {loadingConfig ? (
                     <div className="loading-state">
-                      <HelmIcon name="loader" size={13} className="spin-slow" />
+                      <HelmxIcon name="loader" size={13} className="spin-slow" />
                       <span>{t('plugins.drawer.loadingConfig')}</span>
                     </div>
                   ) : configError ? (
                     <div className="callout callout-error" role="alert">
-                      <HelmIcon name="alert-circle" size={13} />
+                      <HelmxIcon name="alert-circle" size={13} />
                       <span className="callout-text selectable">{configError}</span>
                     </div>
                   ) : config && config.pluginId === plugin.id ? (
@@ -789,7 +789,7 @@ export function PluginDetailDrawer({
                 {settingsPanels.length > 0 && (
                   <div className="plugin-drawer-section">
                     <h4 className="plugin-drawer-section-title">
-                      <HelmIcon name="layout" size={13} />
+                      <HelmxIcon name="layout" size={13} />
                       <span>
                         {settingsPanels.length > 1
                           ? t('plugins.drawer.settingsPanelsCount', { count: settingsPanels.length })
@@ -864,7 +864,7 @@ export function PluginDetailDrawer({
                   disabled={packageOp === 'removing'}
                   onClick={() => void handleRemovePackage()}
                 >
-                  <HelmIcon name="trash-2" size={12} />
+                  <HelmxIcon name="trash-2" size={12} />
                   <span>{packageOp === 'removing' ? t('plugins.package.uninstalling') : t('plugins.package.confirmUninstall')}</span>
                 </button>
               </AlertDialogAction>

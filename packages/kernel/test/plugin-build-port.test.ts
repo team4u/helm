@@ -1,6 +1,6 @@
 /**
  * Kernel contract tests for the plugin build port (PluginBuildProvider):
- * Kernel does not depend on esbuild / @helm/plugin-build at runtime; all build capabilities are
+ * Kernel does not depend on esbuild / @helmx/plugin-build at runtime; all build capabilities are
  * explicitly injected via PluginHostOptions.buildProvider. This suite locks down the honest failure
  * boundary when omitted (never silently dropping UI or falling back to a built-in compiler) and
  * verifies the full pipeline once injected.
@@ -21,8 +21,8 @@ import assert from 'node:assert/strict'
 import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import { HelmError, type PluginDefinition } from '@helm/protocol'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { HelmxError, type PluginDefinition } from '@helmx/protocol'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { PluginHost } from '../src/plugins/plugin-host.js'
 import { UiRegistry } from '../src/plugins/ui-registry.js'
 import { doctorPluginDir } from '../src/plugins/plugin-doctor.js'
@@ -32,7 +32,7 @@ import { MemoryDocStore, cleanupDir, makeTempDir } from './helpers.js'
 let dataDir: string
 
 beforeEach(async () => {
-  dataDir = await makeTempDir('helm-build-port-')
+  dataDir = await makeTempDir('helmx-build-port-')
 })
 
 afterEach(async () => {
@@ -61,7 +61,7 @@ test('UiRegistry: client-referenced declaration without provider rejects with un
         'markdownCodeBlock',
         clientRoot,
       ),
-    (err: unknown) => err instanceof HelmError && err.code === 'unsupported_client_build' && err.status === 501,
+    (err: unknown) => err instanceof HelmxError && err.code === 'unsupported_client_build' && err.status === 501,
   )
   // Succeeds once provider is injected (never silently drops frontend UI).
   const withProvider = new UiRegistry(createPluginBuildProvider())
@@ -83,7 +83,7 @@ test('PluginHost.getClientModule: serving without provider fails with identical 
   await host.register(def)
   await assert.rejects(
     host.getClientModule('p:serve-no-provider', 'index.tsx'),
-    (err: unknown) => err instanceof HelmError && err.code === 'unsupported_client_build',
+    (err: unknown) => err instanceof HelmxError && err.code === 'unsupported_client_build',
   )
   await host.dispose()
 })
@@ -98,7 +98,7 @@ test('backend-ts-loader: TS load without transform rejects with unsupported_back
   // (matching external-plugin-ts / plugin-dx-loop pattern).
   const { execFileSync } = await import('node:child_process')
   const loaderUrl = pathToFileURL(fileURLToPath(new URL('../src/plugins/backend-ts-loader.ts', import.meta.url))).href
-  const providerUrl = import.meta.resolve('@helm/plugin-build')
+  const providerUrl = import.meta.resolve('@helmx/plugin-build')
   const childSrc = `
 const { registerPluginTsRoot } = await import(${JSON.stringify(loaderUrl)})
 const { createPluginBuildProvider } = await import(${JSON.stringify(providerUrl)})
@@ -193,7 +193,7 @@ test('KernelRuntime: registering client-referenced plugin without buildProvider 
         },
       }),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError, `expected HelmError: ${String(err)}`)
+        assert.ok(err instanceof HelmxError, `expected HelmxError: ${String(err)}`)
         assert.equal(err.code, 'unsupported_client_build')
         return true
       },

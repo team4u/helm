@@ -2,11 +2,11 @@
  * MarkdownView / CodeBlockView: SDK delegation components for the host's
  * standard Markdown capabilities.
  *
- * The host (@helm/web) injects the real implementation via
+ * The host (@helmx/web) injects the real implementation via
  * PluginClientHostContext.markdown (artifact links, markdown.codeBlock
  * extensions, streaming chunking, syntax highlighting); these components only
  * forward through the port, so plugin source `import { MarkdownView } from
- * '@helm/plugin-client'` gets the same rendering power as the host. A missing
+ * '@helmx/plugin-client'` gets the same rendering power as the host. A missing
  * port (outside the host Provider) throws explicitly — never silently
  * degrading to unstyled plain text.
  */

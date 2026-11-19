@@ -14,12 +14,12 @@ import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
 import { Harness } from '@earendil-works/pi-durable'
 import { createRegistry } from '@earendil-works/pi-durable'
-import type { ConversationLive } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { ConversationLive } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { ConversationTracker, type TrackerEvents } from '../src/runtime/conversations.js'
 import { deriveConversationLive, type InboxItemLike } from '../src/runtime/entries.js'
-import { openHelmDatabase } from '../src/runtime/sqlite.js'
-import { HelmStore, type ConvMeta } from '../src/runtime/store.js'
+import { openHelmxDatabase } from '../src/runtime/sqlite.js'
+import { HelmxStore, type ConvMeta } from '../src/runtime/store.js'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { cleanupDir, makeFauxModels, makeTempDir, waitFor } from './helpers.js'
 
@@ -56,9 +56,9 @@ function convMeta(id: number): ConvMeta {
 describe('deriveConversationLive queuedInputs', { timeout: 60_000 }, () => {
   it('places steer ahead of followUp while preserving within-mode order and field mappings', { timeout: 60_000 }, () => {
     const inbox: InboxItemLike[] = [
-      { id: 11, mode: 'followUp', entry: { kind: 'helm.input', data: { id: 'fu-1', text: 'queued follow-up', origin: 'human', createdAt: 200 } } },
-      { id: 12, mode: 'steer', entry: { kind: 'helm.input', data: { id: 'st-1', text: 'steer instruction', origin: 'agent', createdAt: 100 } } },
-      { id: 13, mode: 'steer', entry: { kind: 'helm.input', data: { id: 'st-2', text: 'second steer', origin: 'trigger', createdAt: 150 } } },
+      { id: 11, mode: 'followUp', entry: { kind: 'helmx.input', data: { id: 'fu-1', text: 'queued follow-up', origin: 'human', createdAt: 200 } } },
+      { id: 12, mode: 'steer', entry: { kind: 'helmx.input', data: { id: 'st-1', text: 'steer instruction', origin: 'agent', createdAt: 100 } } },
+      { id: 13, mode: 'steer', entry: { kind: 'helmx.input', data: { id: 'st-2', text: 'second steer', origin: 'trigger', createdAt: 150 } } },
     ]
     const live = deriveConversationLive(7, undefined, 999, inbox)
     assert.deepEqual(live.queuedInputs?.map((q) => q.id), ['st-1', 'st-2', 'fu-1'])
@@ -73,13 +73,13 @@ describe('deriveConversationLive queuedInputs', { timeout: 60_000 }, () => {
     assert.equal(third!.createdAt, 200)
   })
 
-  it('skips invalid items: write mode, non-helm.input, or missing id/text produce no queuedInput', { timeout: 60_000 }, () => {
+  it('skips invalid items: write mode, non-helmx.input, or missing id/text produce no queuedInput', { timeout: 60_000 }, () => {
     const inbox: InboxItemLike[] = [
-      { id: 1, mode: 'write', entry: { kind: 'helm.note', data: { id: 'w', text: 'write' } } },
-      { id: 2, mode: 'steer', entry: { kind: 'pi.user', data: { id: 'x', text: 'non-helm.input' } } },
-      { id: 3, mode: 'followUp', entry: { kind: 'helm.input', data: { text: 'missing id' } } },
-      { id: 4, mode: 'followUp', entry: { kind: 'helm.input', data: { id: 'no-text' } } },
-      { id: 5, mode: 'steer', entry: { kind: 'helm.input', data: { id: 'ok-1', text: 'valid item' } } },
+      { id: 1, mode: 'write', entry: { kind: 'helmx.note', data: { id: 'w', text: 'write' } } },
+      { id: 2, mode: 'steer', entry: { kind: 'pi.user', data: { id: 'x', text: 'non-helmx.input' } } },
+      { id: 3, mode: 'followUp', entry: { kind: 'helmx.input', data: { text: 'missing id' } } },
+      { id: 4, mode: 'followUp', entry: { kind: 'helmx.input', data: { id: 'no-text' } } },
+      { id: 5, mode: 'steer', entry: { kind: 'helmx.input', data: { id: 'ok-1', text: 'valid item' } } },
     ]
     const live = deriveConversationLive(1, undefined, 50, inbox)
     assert.deepEqual(live.queuedInputs?.map((q) => q.id), ['ok-1'])
@@ -95,7 +95,7 @@ describe('deriveConversationLive queuedInputs', { timeout: 60_000 }, () => {
         id: 9,
         mode: 'steer',
         entry: {
-          kind: 'helm.input',
+          kind: 'helmx.input',
           data: {
             id: 'q-1',
             text: 'with attachment',
@@ -106,7 +106,7 @@ describe('deriveConversationLive queuedInputs', { timeout: 60_000 }, () => {
     ])
     assert.equal(withAttachments.queuedInputs?.[0]?.attachments?.length, 1)
     const emptyAttachments = deriveConversationLive(1, undefined, 10, [
-      { id: 9, mode: 'steer', entry: { kind: 'helm.input', data: { id: 'q-2', text: 'empty attachment', attachments: [] } } },
+      { id: 9, mode: 'steer', entry: { kind: 'helmx.input', data: { id: 'q-2', text: 'empty attachment', attachments: [] } } },
     ])
     assert.equal(emptyAttachments.queuedInputs?.[0]?.attachments, undefined)
     const none = deriveConversationLive(1, undefined, 10, [])
@@ -122,7 +122,7 @@ describe('ConversationTracker queuedInputs real-time events', { timeout: 60_000 
   let root = ''
 
   before(async () => {
-    root = await makeTempDir('helm-queued-')
+    root = await makeTempDir('helmx-queued-')
   })
 
   after(async () => {
@@ -133,14 +133,14 @@ describe('ConversationTracker queuedInputs real-time events', { timeout: 60_000 
   async function openTracker(): Promise<{
     tracker: ConversationTracker
     harness: Harness
-    store: HelmStore
+    store: HelmxStore
     lives: ConversationLive[]
     faux: FauxHandle
     close: () => Promise<void>
   }> {
     const dir = join(root, `t-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`)
-    const database = await openHelmDatabase(dir)
-    const store = new HelmStore(database)
+    const database = await openHelmxDatabase(dir)
+    const store = new HelmxStore(database)
     await store.load()
     const { models, faux } = makeFauxModels()
     const registry = createRegistry()
@@ -171,7 +171,7 @@ describe('ConversationTracker queuedInputs real-time events', { timeout: 60_000 
         await harness.close(BACKGROUND_CONTEXT)
         const err = await store.close()
         await database.close()
-        if (err !== undefined) throw new HelmError('store_flush_failed', String(err), 500)
+        if (err !== undefined) throw new HelmxError('store_flush_failed', String(err), 500)
       },
     }
   }
@@ -197,7 +197,7 @@ describe('ConversationTracker queuedInputs real-time events', { timeout: 60_000 
         {
           type: 'input',
           content: 'first turn question',
-          entry: { kind: 'helm.input', data: { id: 'base-1', text: 'first turn question', origin: 'human', createdAt: 1 } },
+          entry: { kind: 'helmx.input', data: { id: 'base-1', text: 'first turn question', origin: 'human', createdAt: 1 } },
           requestId: 'base-1',
         },
         BACKGROUND_CONTEXT,
@@ -212,7 +212,7 @@ describe('ConversationTracker queuedInputs real-time events', { timeout: 60_000 
           type: 'input',
           content: 'queued follow-up input',
           whenBusy: 'followUp',
-          entry: { kind: 'helm.input', data: { id: 'q-fu', text: 'queued follow-up input', origin: 'human', createdAt: 2 } },
+          entry: { kind: 'helmx.input', data: { id: 'q-fu', text: 'queued follow-up input', origin: 'human', createdAt: 2 } },
           requestId: 'q-fu',
         },
         BACKGROUND_CONTEXT,
@@ -222,7 +222,7 @@ describe('ConversationTracker queuedInputs real-time events', { timeout: 60_000 
           type: 'input',
           content: 'steer supplement input',
           whenBusy: 'steer',
-          entry: { kind: 'helm.input', data: { id: 'q-st', text: 'steer supplement input', origin: 'human', createdAt: 3 } },
+          entry: { kind: 'helmx.input', data: { id: 'q-st', text: 'steer supplement input', origin: 'human', createdAt: 3 } },
           requestId: 'q-st',
         },
         BACKGROUND_CONTEXT,
@@ -234,7 +234,7 @@ describe('ConversationTracker queuedInputs real-time events', { timeout: 60_000 
       assert.deepEqual(queuedFrame.queuedInputs!.map((q) => q.id), ['q-st', 'q-fu'])
       assert.deepEqual(queuedFrame.queuedInputs!.map((q) => q.mode), ['steer', 'followUp'])
 
-      // After turn 1 finishes and followUp drains: new run writes helm.input entry and removes both items from queuedInputs.
+      // After turn 1 finishes and followUp drains: new run writes helmx.input entry and removes both items from queuedInputs.
       faux.appendResponses([fauxAssistantMessage('second turn answer')])
       await conv.waitForIdle(BACKGROUND_CONTEXT)
       await waitFor(
@@ -261,7 +261,7 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
   let root = ''
 
   before(async () => {
-    root = await makeTempDir('helm-queued-snap-')
+    root = await makeTempDir('helmx-queued-snap-')
   })
 
   after(async () => {
@@ -367,8 +367,8 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
       await assert.rejects(
         () => kernel.submitInput(conv.id, 'input to be rejected', { whenBusy: 'reject' }),
         (err: unknown) => {
-          const helmErr = err as { name?: string; code?: string; status?: number }
-          return helmErr?.name === 'HelmError' && helmErr?.code === 'conversation_busy' && helmErr?.status === 409
+          const helmxErr = err as { name?: string; code?: string; status?: number }
+          return helmxErr?.name === 'HelmxError' && helmxErr?.code === 'conversation_busy' && helmxErr?.status === 409
         },
       )
       // Release gate: run completes and queued items drain.
@@ -380,13 +380,13 @@ describe('KernelRuntime snapshot conversationLives', { timeout: 60_000 }, () => 
         const live = findLive(kernel, conv.id)
         return live === undefined || (live.queuedInputs?.length ?? 0) === 0
       }, 5_000)
-      // Persisted helm.input entry carries effective whenBusy ('steer' when omitted).
+      // Persisted helmx.input entry carries effective whenBusy ('steer' when omitted).
       const detail = await kernel.getConversationDetail(conv.id, { limit: 50 })
       const stored = detail.entries
-        .filter((e) => e.kind === 'helm.input')
+        .filter((e) => e.kind === 'helmx.input')
         .map((e) => (e.data ?? {}) as { text?: string; whenBusy?: string })
         .find((d) => d.text === 'omitted whenBusy supplement')
-      assert.equal(stored?.whenBusy, 'steer', 'persisted helm.input entry must record effective default steer')
+      assert.equal(stored?.whenBusy, 'steer', 'persisted helmx.input entry must record effective default steer')
     } finally {
       await kernel.close()
     }

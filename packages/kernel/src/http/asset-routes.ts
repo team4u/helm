@@ -6,8 +6,8 @@
  * Artifact content reads carry three defense lines: metadata shape gate (the store is not a trusted boundary) +
  * three-layer realpath symlink-escape guard + truthful 404 on ENOENT.
  */
-import { HelmError, isArtifactKind } from '@helm/protocol'
-import type { ArtifactMetadata } from '@helm/protocol'
+import { HelmxError, isArtifactKind } from '@helmx/protocol'
+import type { ArtifactMetadata } from '@helmx/protocol'
 import { realpath as nodeFsRealpath, readFile as nodeFsReadFile } from 'node:fs/promises'
 import { join as joinPath, sep as PATH_SEP } from 'node:path'
 import { MAX_ARTIFACT_BYTES } from '../services/artifacts.js'
@@ -61,7 +61,7 @@ function assertArtifactMetadataShape(metadata: ArtifactMetadata): void {
     !isArtifactKind(metadata.kind) ||
     typeof metadata.path !== 'string'
   ) {
-    throw new HelmError('artifact_metadata_illegal', `invalid artifact metadata: ${metadata.id}`, 500)
+    throw new HelmxError('artifact_metadata_illegal', `invalid artifact metadata: ${metadata.id}`, 500)
   }
   const parts = metadata.path.split('/')
   if (
@@ -71,7 +71,7 @@ function assertArtifactMetadataShape(metadata: ArtifactMetadata): void {
     parts[2] === undefined || parts[2].length === 0 ||
     parts[2] === '.' || parts[2] === '..'
   ) {
-    throw new HelmError('artifact_metadata_illegal', `invalid artifact registration path: ${metadata.path}`, 500)
+    throw new HelmxError('artifact_metadata_illegal', `invalid artifact registration path: ${metadata.path}`, 500)
   }
 }
 
@@ -89,19 +89,19 @@ async function readArtifactBytes(kernel: KernelRuntimeLike, metadata: ArtifactMe
   const convRootReal = await nodeFsRealpath(joinPath(artifactsRootReal, String(metadata.conversationId)))
   // The conversation directory itself must not be a symlink escaping the artifacts root.
   if (!convRootReal.startsWith(artifactsRootReal + PATH_SEP)) {
-    throw new HelmError('artifact_path_illegal', 'artifact conversation directory escapes artifacts root; read rejected', 500)
+    throw new HelmxError('artifact_path_illegal', 'artifact conversation directory escapes artifacts root; read rejected', 500)
   }
   const target = joinPath(convRootReal, metadata.path.split('/')[2]!)
   const targetReal = await nodeFsRealpath(target)
   if (targetReal !== convRootReal && !targetReal.startsWith(convRootReal + PATH_SEP)) {
-    throw new HelmError('artifact_path_illegal', 'artifact registration path escapes allowed root', 500)
+    throw new HelmxError('artifact_path_illegal', 'artifact registration path escapes allowed root', 500)
   }
   try {
     const buffer = await nodeFsReadFile(targetReal)
     return new Uint8Array(buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength))
   } catch (error) {
     if (error instanceof Error && (error as NodeJS.ErrnoException).code === 'ENOENT') {
-      throw new HelmError('artifact_file_missing', `artifact file missing: ${metadata.id}`, 404)
+      throw new HelmxError('artifact_file_missing', `artifact file missing: ${metadata.id}`, 404)
     }
     throw error
   }
@@ -153,8 +153,8 @@ export async function postConversationArtifact(
     try {
       body = await readJsonBody(ctx.request, jsonMaxBytes)
     } catch (error) {
-      if (error instanceof HelmError && error.code === 'body_too_large') {
-        throw new HelmError('artifact_too_large', `request body exceeds ${jsonMaxBytes} byte limit`, 413, {
+      if (error instanceof HelmxError && error.code === 'body_too_large') {
+        throw new HelmxError('artifact_too_large', `request body exceeds ${jsonMaxBytes} byte limit`, 413, {
           maxBytes: jsonMaxBytes,
         })
       }
@@ -212,7 +212,7 @@ export async function postConversationArtifact(
         await kernel.getConversationDetail(cid, { limit: 1 })
         return true
       } catch (error) {
-        if (error instanceof HelmError && error.code === 'not_found') return false
+        if (error instanceof HelmxError && error.code === 'not_found') return false
         throw error
       }
     },
@@ -239,7 +239,7 @@ export async function handleSkillsDomain(
   if (third === undefined && method === 'GET') {
     const path = ctx.url.searchParams.get('path') ?? undefined
     if (path !== undefined && !isSafeRelativePath(path)) {
-      throw new HelmError('path_traversal', `skill file path out of bounds: ${skillId}/${path}`, 400)
+      throw new HelmxError('path_traversal', `skill file path out of bounds: ${skillId}/${path}`, 400)
     }
     const text = await kernel.skills.readFile(skillId, path)
     return jsonOk(redactor, { text })

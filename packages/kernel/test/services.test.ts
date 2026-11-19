@@ -1,5 +1,5 @@
 /**
- * Helm kernel service layer tests: real filesystem behavior without fake runtimes.
+ * Helmx kernel service layer tests: real filesystem behavior without fake runtimes.
  * Covers: paths/atomic-file, profiles/skills (traversal & symlink rejection), watcher,
  * SecretStash isolation, AuthService scrypt/tokens, credentials 0600 without leaks,
  * and ArtifactService spill thresholds & UTF-8 safety.
@@ -13,17 +13,17 @@ import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  HelmError,
+  HelmxError,
   PLUGIN_UI_METHOD_NAMES,
   PLUGIN_HOOK_NAMES,
   RESERVED_SLASH_COMMANDS,
   PLUGIN_CLIENT_SHARED_EXPORTS,
   CORE_CLI_COMMAND_PATHS,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import {
-  HELM_CLI_SKILL_MD,
-  HELM_CLI_SKILL_AND_PLUGIN_DEV_MD,
-  HELM_CLI_SKILL_ASSET,
+  HELMX_CLI_SKILL_MD,
+  HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD,
+  HELMX_CLI_SKILL_ASSET,
   renderSkillTemplate,
 } from '../../plugins/src/profile/assets.js'
 import { MANAGED_EXEC_ENV_VARS } from '../src/env/scoped-env.js'
@@ -56,7 +56,7 @@ import {
 } from '../src/services/index.js'
 
 const testDir = dirname(fileURLToPath(import.meta.url))
-const scratchRoot = await mkdtemp(join(tmpdir(), 'helm-svc-e2e-'))
+const scratchRoot = await mkdtemp(join(tmpdir(), 'helmx-svc-e2e-'))
 let scratchSeq = 0
 
 /** Isolated temporary dataDir per test (real file semantics). */
@@ -69,7 +69,7 @@ async function freshDataDir(): Promise<string> {
 
 /** Temporary source file for register/spill tests. */
 async function tempSourceFile(content: string | Uint8Array): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), 'helm-src-'))
+  const dir = await mkdtemp(join(tmpdir(), 'helmx-src-'))
   const path = join(dir, `src-${Date.now()}-${Math.random().toString(36).slice(2)}`)
   await writeFile(path, content)
   return path
@@ -92,15 +92,15 @@ async function expectReject(fn: () => Promise<unknown>, re: RegExp): Promise<unk
 test('paths: resolveDataDir priority (override > env > default) and ensureDataDir directory layout', { timeout: 60_000 }, async () => {
   const dir = await freshDataDir()
   assert.equal(resolveDataDir(dir), dir)
-  const prev = process.env.HELM_DATA_DIR
+  const prev = process.env.HELMX_DATA_DIR
   const envDir = join(scratchRoot, 'env-dir')
-  process.env.HELM_DATA_DIR = envDir
+  process.env.HELMX_DATA_DIR = envDir
   try {
     assert.equal(resolveDataDir(), envDir)
     assert.equal(resolveDataDir(dir), dir)
   } finally {
-    if (prev === undefined) delete process.env.HELM_DATA_DIR
-    else process.env.HELM_DATA_DIR = prev
+    if (prev === undefined) delete process.env.HELMX_DATA_DIR
+    else process.env.HELMX_DATA_DIR = prev
   }
   assert.throws(() => resolveDataDir(''), /empty/)
   assert.throws(() => resolveDataDir('relative/path'), /absolute path/)
@@ -265,16 +265,16 @@ test('skills: strictly rejects absolute paths, .. traversal, backslashes, and sy
   await assert.rejects(() => skills.readFile('../demo'), /illegal skill id/)
 })
 
-test('profiles: SYSTEM_DEFAULT Layer 0 contains helm-cli guidance and HELM_CONVERSATION_ID without generative UI component catalogs', { timeout: 60_000 }, async () => {
+test('profiles: SYSTEM_DEFAULT Layer 0 contains helmx-cli guidance and HELMX_CONVERSATION_ID without generative UI component catalogs', { timeout: 60_000 }, async () => {
   const dataDir = await freshDataDir()
   const profiles = new ProfileService(dataDir)
   await profiles.ensureDefault()
   const system = await profiles.getSystem('assistant')
   assert.ok(system.includes('# System Prompt'))
-  assert.ok(system.includes('helm-cli'), 'must guide loading helm-cli skill')
-  assert.ok(system.includes('HELM_CONVERSATION_ID'), 'must document managed environment vars')
+  assert.ok(system.includes('helmx-cli'), 'must guide loading helmx-cli skill')
+  assert.ok(system.includes('HELMX_CONVERSATION_ID'), 'must document managed environment vars')
   assert.ok(system.includes('load_skill'), 'must reference load_skill for on-demand loading')
-  for (const component of ['MetricGrid', 'CheckboxGroup', 'ActionBar', 'BarList', 'KeyValueList', 'Accordion', 'helm:action', 'helm:open', 'helm:send']) {
+  for (const component of ['MetricGrid', 'CheckboxGroup', 'ActionBar', 'BarList', 'KeyValueList', 'Accordion', 'helmx:action', 'helmx:open', 'helmx:send']) {
     assert.ok(!system.includes(component), `SYSTEM_DEFAULT must not contain Layer 2 details: ${component}`)
   }
   for (const name of ['generative-ui', 'app-builder']) {
@@ -283,92 +283,92 @@ test('profiles: SYSTEM_DEFAULT Layer 0 contains helm-cli guidance and HELM_CONVE
   assert.ok(system.includes('artifact:<id>'), 'must retain artifact registration and inline render rule')
 })
 
-test('helm-cli skill assets stay synchronized with UI extensions and runtime capabilities (drift guard)', { timeout: 60_000 }, () => {
-  assert.ok(!HELM_CLI_SKILL_MD.includes('references/generative-ui.md'), 'must not reference migrated generative-ui.md')
-  assert.ok(!Object.hasOwn(HELM_CLI_SKILL_ASSET.references, 'workflows-and-agents.md'), 'workflow reference belongs to builtin:workflow, not helm-cli')
-  assert.ok(!HELM_CLI_SKILL_MD.includes('helm workflows'), 'workflow CLI guidance belongs to builtin:workflow, not helm-cli')
-  assert.ok(HELM_CLI_SKILL_MD.includes("the current turn's available skill descriptions"), 'available skill catalog must drive extension docs')
+test('helmx-cli skill assets stay synchronized with UI extensions and runtime capabilities (drift guard)', { timeout: 60_000 }, () => {
+  assert.ok(!HELMX_CLI_SKILL_MD.includes('references/generative-ui.md'), 'must not reference migrated generative-ui.md')
+  assert.ok(!Object.hasOwn(HELMX_CLI_SKILL_ASSET.references, 'workflows-and-agents.md'), 'workflow reference belongs to builtin:workflow, not helmx-cli')
+  assert.ok(!HELMX_CLI_SKILL_MD.includes('helmx workflows'), 'workflow CLI guidance belongs to builtin:workflow, not helmx-cli')
+  assert.ok(HELMX_CLI_SKILL_MD.includes("the current turn's available skill descriptions"), 'available skill catalog must drive extension docs')
   for (const optionalSkill of ['generative-ui', 'app-builder']) {
-    assert.ok(!HELM_CLI_SKILL_MD.includes(optionalSkill), `core CLI skill must not name optional skill ${optionalSkill}`)
+    assert.ok(!HELMX_CLI_SKILL_MD.includes(optionalSkill), `core CLI skill must not name optional skill ${optionalSkill}`)
   }
 
-  assert.ok(HELM_CLI_SKILL_MD.includes('--conversation'), 'SKILL.md should document --conversation for session doc reads')
-  assert.ok(HELM_CLI_SKILL_MD.includes('--watch'), 'SKILL.md should document --watch subscriptions')
+  assert.ok(HELMX_CLI_SKILL_MD.includes('--conversation'), 'SKILL.md should document --conversation for session doc reads')
+  assert.ok(HELMX_CLI_SKILL_MD.includes('--watch'), 'SKILL.md should document --watch subscriptions')
 
   assert.ok(
-    HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(`Frontend ${PLUGIN_UI_METHOD_NAMES.length} ctx.ui registration methods`),
+    HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(`Frontend ${PLUGIN_UI_METHOD_NAMES.length} ctx.ui registration methods`),
     `should document ${PLUGIN_UI_METHOD_NAMES.length} ctx.ui registration methods`,
   )
   for (const method of PLUGIN_UI_METHOD_NAMES) {
     assert.ok(
-      HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(method),
+      HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(method),
       `plugin-dev reference must include ctx.ui registration method ${method}`,
     )
   }
 
   for (const hook of PLUGIN_HOOK_NAMES) {
     assert.ok(
-      HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(hook),
+      HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(hook),
       `plugin-dev reference must include backend hook ${hook}`,
     )
   }
 
   for (const slash of RESERVED_SLASH_COMMANDS) {
     assert.ok(
-      HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(slash),
+      HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(slash),
       `plugin-dev reference must include reserved slash command ${slash}`,
     )
   }
 
   for (const exportName of PLUGIN_CLIENT_SHARED_EXPORTS) {
     assert.ok(
-      HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(exportName),
-      `plugin-dev reference must include @helm/plugin-client export ${exportName}`,
+      HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(exportName),
+      `plugin-dev reference must include @helmx/plugin-client export ${exportName}`,
     )
   }
 
   for (const api of ['ctx.sessionDoc', 'composer', 'ctx.host.forkConversation(id, { entryId?, title? })', 'fork_empty_history']) {
-    assert.ok(HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(api), `plugin-dev reference must include ${api}`)
+    assert.ok(HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD.includes(api), `plugin-dev reference must include ${api}`)
   }
   assert.ok(
-    HELM_CLI_SKILL_MD.includes('helm conversations fork [id] [--current] [--entry-id <n>] [--title <t>]'),
-    'SKILL.md should document optional --entry-id on helm conversations fork',
+    HELMX_CLI_SKILL_MD.includes('helmx conversations fork [id] [--current] [--entry-id <n>] [--title <t>]'),
+    'SKILL.md should document optional --entry-id on helmx conversations fork',
   )
-  assert.ok(HELM_CLI_SKILL_AND_PLUGIN_DEV_MD.includes('sp.<key>'), 'should document sp./ssp. deep-link namespaces')
+  assert.ok(HELMX_CLI_SKILL_AND_PLUGIN_DEV_MD.includes('sp.<key>'), 'should document sp./ssp. deep-link namespaces')
 
   for (const cmdPath of CORE_CLI_COMMAND_PATHS) {
     const parts = cmdPath.split(' ')
     if (parts.length === 1) {
       assert.ok(
-        HELM_CLI_SKILL_MD.includes(`helm ${cmdPath}`),
-        `SKILL.md should contain single-word core command "helm ${cmdPath}"`,
+        HELMX_CLI_SKILL_MD.includes(`helmx ${cmdPath}`),
+        `SKILL.md should contain single-word core command "helmx ${cmdPath}"`,
       )
     } else {
       const [root, sub] = parts
-      const pattern = new RegExp(`helm ${root} [\\w|]*\\b${sub}\\b`)
-      const matched = HELM_CLI_SKILL_MD.includes(`helm ${cmdPath}`) || pattern.test(HELM_CLI_SKILL_MD)
+      const pattern = new RegExp(`helmx ${root} [\\w|]*\\b${sub}\\b`)
+      const matched = HELMX_CLI_SKILL_MD.includes(`helmx ${cmdPath}`) || pattern.test(HELMX_CLI_SKILL_MD)
       assert.ok(
         matched,
-        `SKILL.md should contain (directly or via compact alternation) core command "helm ${cmdPath}"`,
+        `SKILL.md should contain (directly or via compact alternation) core command "helmx ${cmdPath}"`,
       )
     }
   }
 
   for (const envVar of MANAGED_EXEC_ENV_VARS) {
     assert.ok(
-      HELM_CLI_SKILL_MD.includes(envVar),
+      HELMX_CLI_SKILL_MD.includes(envVar),
       `SKILL.md should contain managed environment variable ${envVar}`,
     )
   }
 
   assert.ok(
-    !HELM_CLI_SKILL_ASSET.skillMd.includes('{{') && !HELM_CLI_SKILL_ASSET.skillMd.includes('}}'),
-    'HELM_CLI_SKILL_ASSET.skillMd must leave zero template placeholders',
+    !HELMX_CLI_SKILL_ASSET.skillMd.includes('{{') && !HELMX_CLI_SKILL_ASSET.skillMd.includes('}}'),
+    'HELMX_CLI_SKILL_ASSET.skillMd must leave zero template placeholders',
   )
-  for (const [refName, refContent] of Object.entries(HELM_CLI_SKILL_ASSET.references)) {
+  for (const [refName, refContent] of Object.entries(HELMX_CLI_SKILL_ASSET.references)) {
     assert.ok(
       !refContent.includes('{{') && !refContent.includes('}}'),
-      `HELM_CLI_SKILL_ASSET reference "${refName}" must leave zero template placeholders`,
+      `HELMX_CLI_SKILL_ASSET reference "${refName}" must leave zero template placeholders`,
     )
   }
 
@@ -385,7 +385,7 @@ test('helm-cli skill assets stay synchronized with UI extensions and runtime cap
 
   assert.throws(
     () => renderSkillTemplate('hello {{UNKNOWN_VAR}}', {}),
-    (err: unknown) => err instanceof HelmError && err.code === 'unreplaced_skill_placeholder',
+    (err: unknown) => err instanceof HelmxError && err.code === 'unreplaced_skill_placeholder',
   )
 })
 
@@ -410,7 +410,7 @@ test('skills: ensureSkill managed overrides — bootstrap, restore source on res
   await assert.rejects(
     () => skills.writeFile('demo-asset', 'SKILL.md', 'tamper'),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError)
+      assert.ok(err instanceof HelmxError)
       assert.equal(err.code, 'managed_skill_readonly')
       assert.equal(err.status, 403)
       return true
@@ -419,7 +419,7 @@ test('skills: ensureSkill managed overrides — bootstrap, restore source on res
   await assert.rejects(
     () => skills.writeFile('demo-asset', 'references/other.md', 'tamper'),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError)
+      assert.ok(err instanceof HelmxError)
       assert.equal(err.code, 'managed_skill_readonly')
       return true
     },
@@ -643,12 +643,12 @@ test('profiles: skills tri-state (omitted default, empty array persisted, allowl
   assert.deepEqual(onDiskNone.skills, [], 'empty array must persist intact')
 
   // 3. Non-empty allowlist: duplicates stripped; unknown IDs permitted for forward compatibility
-  await profiles.save({ id: 'p-white', name: 'allowlist', tags: [], skills: ['helm-cli', 'watchdog-playbooks', 'helm-cli', 'future-skill'] })
-  assert.deepEqual((await profiles.get('p-white'))?.skills, ['helm-cli', 'watchdog-playbooks', 'future-skill'])
+  await profiles.save({ id: 'p-white', name: 'allowlist', tags: [], skills: ['helmx-cli', 'watchdog-playbooks', 'helmx-cli', 'future-skill'] })
+  assert.deepEqual((await profiles.get('p-white'))?.skills, ['helmx-cli', 'watchdog-playbooks', 'future-skill'])
 
   // Invalid values rejected
   await assert.rejects(
-    () => profiles.save({ id: 'p-bad', tags: [], skills: 'helm-cli' } as unknown as Parameters<ProfileService['save']>[0]),
+    () => profiles.save({ id: 'p-bad', tags: [], skills: 'helmx-cli' } as unknown as Parameters<ProfileService['save']>[0]),
     /skills must be a string array/,
   )
   await assert.rejects(
@@ -1243,13 +1243,13 @@ test('cross-process lock regression: concurrent CLI-protocol process and Credent
   const tsxCli = require.resolve('tsx/cli')
   const repoRoot = dirname(testDir)
   const cliEntry = join(repoRoot, 'packages', 'cli', 'src', 'index.ts')
-  const dataDir = join(tmpdir(), `helm-xproc-${process.pid}-${Date.now()}`)
+  const dataDir = join(tmpdir(), `helmx-xproc-${process.pid}-${Date.now()}`)
   const credFile = join(dataDir, 'credentials.json')
 
   const runCliChild = (password: string): Promise<{ code: number | null; err: string }> =>
     new Promise((resolve, reject) => {
       const child = spawn(process.execPath, [tsxCli, cliEntry, 'login', '--password', password, '--json'], {
-        env: { ...process.env, HELM_DATA_DIR: dataDir, HELM_HUB_URL: 'http://127.0.0.1:1', HELM_TOKEN: '' },
+        env: { ...process.env, HELMX_DATA_DIR: dataDir, HELMX_HUB_URL: 'http://127.0.0.1:1', HELMX_TOKEN: '' },
         stdio: ['ignore', 'ignore', 'pipe'],
       })
       let err = ''

@@ -9,7 +9,7 @@
  *   new Notification；若 new Notification 抛错（Android Chrome 首载 SW 尚未
  *   缓存完成）且存在 getRegistration，异步探测 getRegistration('/') 补发并诚实
  *   同步返回 false；
- * - 点击回传：`helm:notification-click` 优先命中并一次性清理 clickId 回调，
+ * - 点击回传：`helmx:notification-click` 优先命中并一次性清理 clickId 回调，
  *   无回调时仅对 `/#` 开头路径更新 window.location.hash；
  * - sw.js 沙箱行为校验：skipWaiting / clients.claim / notificationclick 同源窗口
  *   优先聚焦并 postMessage，无窗口则 openWindow，恶意跨源相对路径安全回退 `/`；
@@ -211,7 +211,7 @@ test('请求抛出（旧回调形态返回 undefined / 宿主异常）：回退�
 
 test('权限未授予时投递返回 false 且不构造通知', { timeout: 60_000 }, () => {
   const instances = installFakeNotification({ permission: 'denied' })
-  assert.equal(showBrowserNotification({ title: 'Helm conversation completed' }), false)
+  assert.equal(showBrowserNotification({ title: 'Helmx conversation completed' }), false)
   assert.equal(instances.length, 0)
   uninstallNotification()
 })
@@ -227,17 +227,17 @@ test('权限授予后无 SW 时回退 new Notification：透传 title/body/tag/i
   }
   try {
     const delivered = showBrowserNotification({
-      title: 'Helm conversation completed',
+      title: 'Helmx conversation completed',
       body: '#2 重构侧栏',
-      tag: 'helm-conv-2',
+      tag: 'helmx-conv-2',
       onClick: () => clicked.push('navigate'),
     })
     assert.equal(delivered, true)
     assert.equal(instances.length, 1)
     const notification = instances[0]!
-    assert.equal(notification.title, 'Helm conversation completed')
+    assert.equal(notification.title, 'Helmx conversation completed')
     assert.equal(notification.options.body, '#2 重构侧栏')
-    assert.equal(notification.options.tag, 'helm-conv-2')
+    assert.equal(notification.options.tag, 'helmx-conv-2')
     assert.equal(notification.options.icon, '/icon-192.png')
     assert.equal(clicked.length, 0)
     notification.onclick?.({} as Event)
@@ -314,9 +314,9 @@ test('SW 激活态通过 registration.showNotification 投递（兼容 Android C
 
     let clickCount = 0
     const delivered = showBrowserNotification({
-      title: 'Helm conversation completed',
+      title: 'Helmx conversation completed',
       body: '#42 PWA 通知链路',
-      tag: 'helm-conv-42',
+      tag: 'helmx-conv-42',
       url: '/#/c/42',
       onClick: () => {
         clickCount += 1
@@ -325,9 +325,9 @@ test('SW 激活态通过 registration.showNotification 投递（兼容 Android C
     assert.equal(delivered, true)
     assert.equal(sw.shownNotifications.length, 1)
     const sent = sw.shownNotifications[0]!
-    assert.equal(sent.title, 'Helm conversation completed')
+    assert.equal(sent.title, 'Helmx conversation completed')
     assert.equal(sent.options.body, '#42 PWA 通知链路')
-    assert.equal(sent.options.tag, 'helm-conv-42')
+    assert.equal(sent.options.tag, 'helmx-conv-42')
     assert.equal(sent.options.icon, '/icon-192.png')
     assert.equal(sent.options.badge, '/notification-badge-96.png')
     assert.equal(sent.options.data?.url, '/#/c/42')
@@ -335,11 +335,11 @@ test('SW 激活态通过 registration.showNotification 投递（兼容 Android C
     assert.ok(typeof clickId === 'string' && clickId.length > 0)
 
     // 首次点击命中并清理回调
-    sw.dispatchMessage({ type: 'helm:notification-click', url: '/#/c/42', tag: 'helm-conv-42', clickId })
+    sw.dispatchMessage({ type: 'helmx:notification-click', url: '/#/c/42', tag: 'helmx-conv-42', clickId })
     assert.equal(clickCount, 1)
 
     // 同一 clickId 再次收到消息不再重复调用原回调
-    sw.dispatchMessage({ type: 'helm:notification-click', url: '/#/c/42', tag: 'helm-conv-42', clickId })
+    sw.dispatchMessage({ type: 'helmx:notification-click', url: '/#/c/42', tag: 'helmx-conv-42', clickId })
     assert.equal(clickCount, 1)
   } finally {
     uninstallNotification()
@@ -347,21 +347,21 @@ test('SW 激活态通过 registration.showNotification 投递（兼容 Android C
   }
 })
 
-test('helm:notification-click 无匹配回调时：仅对 /# 开头相对路径更新 window.location.hash', { timeout: 60_000 }, async () => {
+test('helmx:notification-click 无匹配回调时：仅对 /# 开头相对路径更新 window.location.hash', { timeout: 60_000 }, async () => {
   const sw = installFakeServiceWorker({ active: true })
   const originalHash = window.location.hash
   try {
     window.location.hash = '#/settings/profiles'
     await registerBrowserNotificationServiceWorker()
 
-    sw.dispatchMessage({ type: 'helm:notification-click', url: '/#/c/99', tag: 'helm-conv-99' })
+    sw.dispatchMessage({ type: 'helmx:notification-click', url: '/#/c/99', tag: 'helmx-conv-99' })
     assert.equal(window.location.hash, '#/c/99')
 
     // 忽略非 /# 开头或外部路径
-    sw.dispatchMessage({ type: 'helm:notification-click', url: 'https://evil.example/#/c/1' })
+    sw.dispatchMessage({ type: 'helmx:notification-click', url: 'https://evil.example/#/c/1' })
     assert.equal(window.location.hash, '#/c/99')
 
-    sw.dispatchMessage({ type: 'helm:notification-click', url: '/api/health' })
+    sw.dispatchMessage({ type: 'helmx:notification-click', url: '/api/health' })
     assert.equal(window.location.hash, '#/c/99')
 
     // 无关消息类型忽略
@@ -387,7 +387,7 @@ test('SW showNotification 异常或异步失败时清理 handler；超上限按 
       },
     })
     assert.equal(delivered, false)
-    throwingSw.dispatchMessage({ type: 'helm:notification-click', clickId: 'helm-click-1', url: '/' })
+    throwingSw.dispatchMessage({ type: 'helmx:notification-click', clickId: 'helmx-click-1', url: '/' })
     assert.equal(clicked, false)
   } finally {
     uninstallNotification()
@@ -409,7 +409,7 @@ test('SW showNotification 异常或异步失败时清理 handler；超上限按 
     assert.equal(delivered, true)
     const clickId = rejectingSw.shownNotifications[0]!.options.data?.clickId
     await flushMicrotasks()
-    rejectingSw.dispatchMessage({ type: 'helm:notification-click', clickId, url: '/' })
+    rejectingSw.dispatchMessage({ type: 'helmx:notification-click', clickId, url: '/' })
     assert.equal(clicked, false)
   } finally {
     uninstallNotification()
@@ -431,9 +431,9 @@ test('SW showNotification 异常或异步失败时清理 handler；超上限按 
     }
     const oldestId = capSw.shownNotifications[0]!.options.data?.clickId
     const newestId = capSw.shownNotifications[104]!.options.data?.clickId
-    capSw.dispatchMessage({ type: 'helm:notification-click', clickId: oldestId, url: '/' })
+    capSw.dispatchMessage({ type: 'helmx:notification-click', clickId: oldestId, url: '/' })
     assert.deepEqual(fired, [], '最旧的 handler 应已被淘汰')
-    capSw.dispatchMessage({ type: 'helm:notification-click', clickId: newestId, url: '/#/c/105' })
+    capSw.dispatchMessage({ type: 'helmx:notification-click', clickId: newestId, url: '/#/c/105' })
     assert.deepEqual(fired, [105])
   } finally {
     uninstallNotification()
@@ -453,7 +453,7 @@ test('Android Chrome 首载未缓存 SW 时 new Notification 抛 TypeError：诚
     const syncDelivered = showBrowserNotification({
       title: '等待你的处理',
       body: '待处理输入/审批：#7 测试',
-      tag: 'helm-conv-7',
+      tag: 'helmx-conv-7',
       url: '/#/c/7',
       onClick: () => {
         clicked += 1
@@ -468,14 +468,14 @@ test('Android Chrome 首载未缓存 SW 时 new Notification 抛 TypeError：诚
     assert.equal(sw.shownNotifications[0]!.options.badge, '/notification-badge-96.png')
 
     const clickId = sw.shownNotifications[0]!.options.data?.clickId
-    sw.dispatchMessage({ type: 'helm:notification-click', url: '/#/c/7', tag: 'helm-conv-7', clickId })
+    sw.dispatchMessage({ type: 'helmx:notification-click', url: '/#/c/7', tag: 'helmx-conv-7', clickId })
     assert.equal(clicked, 1)
 
     // 探测已缓存 registration，后续投递直接同步走 SW 并返回 true
     const nextDelivered = showBrowserNotification({
-      title: 'Helm conversation completed',
+      title: 'Helmx conversation completed',
       body: '#7 测试',
-      tag: 'helm-conv-7',
+      tag: 'helmx-conv-7',
       url: '/#/c/7',
     })
     assert.equal(nextDelivered, true)
@@ -518,7 +518,7 @@ test('public/sw.js 沙箱运行时：生命周期接管、优先聚焦同源窗�
   }> = []
 
   const fakeSelf = {
-    location: { origin: 'https://helm.example' },
+    location: { origin: 'https://helmx.example' },
     skipWaiting: () => {
       skipWaitingCalls += 1
       return Promise.resolve()
@@ -564,7 +564,7 @@ test('public/sw.js 沙箱运行时：生命周期接管、优先聚焦同源窗�
 
   // 1) 存在多个同源窗口时，优先选择 focused 窗口，调用 focus 并 postMessage
   const unfocusedClient = {
-    url: 'https://helm.example/#/settings/profiles',
+    url: 'https://helmx.example/#/settings/profiles',
     focused: false,
     visibilityState: 'hidden',
     focusCalls: 0,
@@ -575,7 +575,7 @@ test('public/sw.js 沙箱运行时：生命周期接管、优先聚焦同源窗�
     postMessage: (msg: unknown) => unfocusedClient.posted.push(msg),
   }
   const focusedClient = {
-    url: 'https://helm.example/#/c/1',
+    url: 'https://helmx.example/#/c/1',
     focused: true,
     visibilityState: 'visible',
     focusCalls: 0,
@@ -601,7 +601,7 @@ test('public/sw.js 沙箱运行时：生命周期接管、优先聚焦同源窗�
   let closedCount = 0
   await waitForEvent('notificationclick', {
     notification: {
-      tag: 'helm-conv-12',
+      tag: 'helmx-conv-12',
       data: { url: '/#/c/12', clickId: 'c-1' },
       close: () => {
         closedCount += 1
@@ -613,7 +613,7 @@ test('public/sw.js 沙箱运行时：生命周期接管、优先聚焦同源窗�
   assert.equal(unfocusedClient.posted.length, 0)
   assert.equal(focusedClient.focusCalls, 1)
   assert.deepEqual(structuredClone(focusedClient.posted), [
-    { type: 'helm:notification-click', url: '/#/c/12', tag: 'helm-conv-12', clickId: 'c-1' },
+    { type: 'helmx:notification-click', url: '/#/c/12', tag: 'helmx-conv-12', clickId: 'c-1' },
   ])
 
   // 2) 恶意 URL 校（协议相对 //、反斜杠 /\、绝对外域）：统一降级回 '/'
@@ -621,7 +621,7 @@ test('public/sw.js 沙箱运行时：生命周期接管、优先聚焦同源窗�
   for (const unsafeUrl of ['//evil.example/x', '/\\evil.example/x', 'https://evil.example/#/c/1']) {
     await waitForEvent('notificationclick', {
       notification: {
-        tag: 'helm-conv-1',
+        tag: 'helmx-conv-1',
         data: { url: unsafeUrl, clickId: 'c-2' },
         close: () => {},
       },
@@ -637,12 +637,12 @@ test('public/sw.js 沙箱运行时：生命周期接管、优先聚焦同源窗�
   openWindowCalls = []
   await waitForEvent('notificationclick', {
     notification: {
-      tag: 'helm-conv-55',
+      tag: 'helmx-conv-55',
       data: { url: '/#/c/55', clickId: 'c-3' },
       close: () => {},
     },
   })
-  assert.deepEqual(openWindowCalls, ['https://helm.example/#/c/55'])
+  assert.deepEqual(openWindowCalls, ['https://helmx.example/#/c/55'])
 })
 
 test('isPageActive：仅在页面可见且窗口聚焦时返回 true；无 document 或缺 hasFocus 返回 false', { timeout: 60_000 }, () => {

@@ -4,7 +4,7 @@ import { mkdtemp, mkdir, rm, writeFile, symlink, readFile } from 'node:fs/promis
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createServer, type Server, type Socket } from 'node:net'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 
 import {
   HERDR_CALL_TIMEOUT_MS,
@@ -47,7 +47,7 @@ function withTimeout<T>(promise: Promise<T>, ms = 8000): Promise<T> {
 }
 
 async function tempRoot(t: TestContext): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), 'helm-transport-'))
+  const root = await mkdtemp(join(tmpdir(), 'helmx-transport-'))
   t.after(() => rm(root, { recursive: true, force: true }))
   return root
 }
@@ -165,13 +165,13 @@ describe('herdr transport wire', () => {
       const req = JSON.parse(line)
       assert.equal(req.method, 'tab.create')
       assert.equal(req.params.cwd, '/tmp/demo')
-      assert.equal(req.params.env['HELM_TOKEN'], secret())
+      assert.equal(req.params.env['HELMX_TOKEN'], secret())
       write(JSON.stringify({ id: req.id, result: { type: 'tab_created', tab: { tab_id: 'w1:t2' }, root_pane: { pane_id: 'w1:p9' } } }))
     })
     socketPath = await listen(server)
     const transport = createHerdrTransport()
     const result = (await withTimeout(
-      transport.call({ socketPath }, 'tab.create', { cwd: '/tmp/demo', env: { HELM_TOKEN: secret() } }),
+      transport.call({ socketPath }, 'tab.create', { cwd: '/tmp/demo', env: { HELMX_TOKEN: secret() } }),
     )) as Record<string, unknown>
     assert.equal(result['type'], 'tab_created')
     await close(server)
@@ -284,7 +284,7 @@ describe('herdr transport wire', () => {
     socketPath = await listen(server)
     const transport = createHerdrTransport()
     const result = await withTimeout(
-      transport.call({ socketPath }, 'agent.start', { name: 'helm-wf-1', kind: 'agy', pane_id: 'w1:p1', timeout_ms: 30000 }),
+      transport.call({ socketPath }, 'agent.start', { name: 'helmx-wf-1', kind: 'agy', pane_id: 'w1:p1', timeout_ms: 30000 }),
       5000,
     )
     assert.equal((result as Record<string, unknown>)['type'], 'agent_started')
@@ -767,15 +767,15 @@ describe('herdr transport output files', () => {
 
   before(async () => {
     workDir = await mkdtemp(join(tmpdir(), 'herdr-files-'))
-    await mkdir(join(workDir, '.helm'), { recursive: true })
+    await mkdir(join(workDir, '.helmx'), { recursive: true })
   })
 
   after(async () => {
     await rm(workDir, { recursive: true, force: true })
   })
 
-  it('readOutput 只允许 .helm/wf-out-*.json|md', { timeout: 60_000 }, async () => {
-    await writeFile(join(workDir, '.helm', 'wf-out-agent1.json'), '{"ok":true}', 'utf8')
+  it('readOutput 只允许 .helmx/wf-out-*.json|md', { timeout: 60_000 }, async () => {
+    await writeFile(join(workDir, '.helmx', 'wf-out-agent1.json'), '{"ok":true}', 'utf8')
     const transport = createHerdrTransport()
     const content = await withTimeout(transport.readOutput({}, workDir, 'wf-out-agent1.json'))
     assert.equal(content, '{"ok":true}')
@@ -792,7 +792,7 @@ describe('herdr transport output files', () => {
   it('readOutput 拒绝软链与缺失文件', { timeout: 60_000 }, async () => {
     const outside = join(workDir, 'outside.json')
     await writeFile(outside, '{}', 'utf8')
-    await symlink(outside, join(workDir, '.helm', 'wf-out-link.json'))
+    await symlink(outside, join(workDir, '.helmx', 'wf-out-link.json'))
     const transport = createHerdrTransport()
     // O_NOFOLLOW 打开时点拒绝（ELOOP）：软链波定性为逃逸尝试而非普通非文件。
     await assert.rejects(
@@ -801,36 +801,36 @@ describe('herdr transport output files', () => {
     )
     await assert.rejects(
       transport.readOutput({}, workDir, 'wf-out-missing.json'),
-      (err: unknown) => err instanceof HelmError && err.code === 'herdr_output_missing' && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.code === 'herdr_output_missing' && err.status === 404,
     )
   })
 
   it('removeOutput 对 ENOENT 幂等，对软链拒绝', { timeout: 60_000 }, async () => {
     const transport = createHerdrTransport()
     await transport.removeOutput({}, workDir, 'wf-out-never-existed.md')
-    await writeFile(join(workDir, '.helm', 'wf-out-gone.md'), 'x', 'utf8')
+    await writeFile(join(workDir, '.helmx', 'wf-out-gone.md'), 'x', 'utf8')
     await transport.removeOutput({}, workDir, 'wf-out-gone.md')
     await assert.rejects(
       transport.readOutput({}, workDir, 'wf-out-gone.md'),
-      (err: unknown) => err instanceof HelmError && err.code === 'herdr_output_missing',
+      (err: unknown) => err instanceof HelmxError && err.code === 'herdr_output_missing',
     )
     const outside = join(workDir, 'outside2.md')
     await writeFile(outside, 'x', 'utf8')
-    await symlink(outside, join(workDir, '.helm', 'wf-out-link2.md'))
+    await symlink(outside, join(workDir, '.helmx', 'wf-out-link2.md'))
     await assert.rejects(
       transport.removeOutput({}, workDir, 'wf-out-link2.md'),
       (err: unknown) => err instanceof HerdrTransportError && err.code === 'herdr_output_not_file',
     )
   })
 
-  it('.helm 为软链时读写均拒绝', { timeout: 60_000 }, async () => {
+  it('.helmx 为软链时读写均拒绝', { timeout: 60_000 }, async () => {
     const root = await mkdtemp(join(tmpdir(), 'herdr-escape-'))
     const cwd = join(root, 'task')
     const outside = join(root, 'outside')
     await mkdir(cwd)
     await mkdir(outside)
     await writeFile(join(outside, 'wf-out-parent.json'), '{"private":true}')
-    await symlink(outside, join(cwd, '.helm'))
+    await symlink(outside, join(cwd, '.helmx'))
     const transport = createHerdrTransport({ subscribeAckTimeoutMs: 250 })
     await assert.rejects(transport.readOutput({}, cwd, 'wf-out-parent.json'), (err: unknown) => err instanceof HerdrTransportError && (err.code === 'herdr_output_escaping' || err.code === 'herdr_output_not_file'))
     await assert.rejects(transport.removeOutput({}, cwd, 'wf-out-parent.json'), (err: unknown) => err instanceof HerdrTransportError && (err.code === 'herdr_output_escaping' || err.code === 'herdr_output_not_file'))
@@ -839,7 +839,7 @@ describe('herdr transport output files', () => {
   })
 
   for (const remote of [false, true]) {
-    it(`${remote ? '远端节点' : '本机'}缺少 .helm 目录时读取为缺文件，删除保持幂等`, { timeout: 60_000 }, async (t) => {
+    it(`${remote ? '远端节点' : '本机'}缺少 .helmx 目录时读取为缺文件，删除保持幂等`, { timeout: 60_000 }, async (t) => {
       const root = await tempRoot(t)
       const { transport, target } = remote
         ? await channelFixture(t, () => {})
@@ -954,7 +954,7 @@ describe('herdr transport remote (node channel)', () => {
     for (const nodeId of ['', 'root@10.0.0.3', 'user@work_host', '2001:db8::1', '[2001:db8::1]', 'a'.repeat(129), '-oProxyCommand=evil', '-oProxyCommand=bad', 'user@host;bad', 'a b', 'x\ny']) {
       assert.equal(isValidNodeId(nodeId), false, `非法节点：${JSON.stringify(nodeId)}`)
     }
-    assert.equal(isValidSessionName('helm-wf-1'), true)
+    assert.equal(isValidSessionName('helmx-wf-1'), true)
     assert.equal(isValidSessionName('../escape'), false)
   })
 
@@ -970,20 +970,20 @@ describe('herdr transport remote (node channel)', () => {
   it('call 经节点通道完成 NDJSON 往返且机密只在 JSON 结构内', { timeout: 60_000 }, async (t) => {
     const fixture = await nodeFixture(t, (request, socket) => {
       const req = request as { id: string; method: string; params: { env?: Record<string, string> } }
-      assert.equal(req.id, 'helm-remote-1')
+      assert.equal(req.id, 'helmx-remote-1')
       assert.equal(req.method, 'tab.create')
-      assert.equal(req.params.env?.['HELM_TOKEN'], secret())
+      assert.equal(req.params.env?.['HELMX_TOKEN'], secret())
       socket.end(`${JSON.stringify({ id: req.id, result: { type: 'tab_created', tab: { tab_id: 'w1:t2' } } })}\n`)
     })
     const channel = new MutableNodeChannel()
     channel.nodes.set('build-box', { online: true, channel: fixture.channel })
     const transport = createHerdrTransport({ nodeChannel: channel })
     const result = (await withTimeout(
-      transport.call({ nodeId: 'build-box', socketPath: fixture.socketPath }, 'tab.create', { env: { HELM_TOKEN: secret() } }),
+      transport.call({ nodeId: 'build-box', socketPath: fixture.socketPath }, 'tab.create', { env: { HELMX_TOKEN: secret() } }),
     )) as Record<string, unknown>
     assert.equal(result['type'], 'tab_created')
     // 机密只在 JSON 结构内部传输；socketPath 等经通道入参传递，绝不进入任何 argv。
-    assert.equal((fixture.requests[0]?.params.env as Record<string, string> | undefined)?.['HELM_TOKEN'], secret())
+    assert.equal((fixture.requests[0]?.params.env as Record<string, string> | undefined)?.['HELMX_TOKEN'], secret())
   })
 
   it('无限期 agent.wait 在对端保持半开且不响应时也能被 abort 立即终止', { timeout: 60_000 }, async (t) => {

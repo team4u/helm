@@ -1,5 +1,5 @@
 /**
- * `helm-node` upgrade handoff CLI/IPC tests (`stdio activate/activated` protocol acceptance).
+ * `helmx-node` upgrade handoff CLI/IPC tests (`stdio activate/activated` protocol acceptance).
  *
  * Uses real multi-process execution: real candidate child process (`child_process` stdio IPC
  * protocol fixture) + real Hub fixture (`http.Server` + `WebSocketServer` + `birpc`).
@@ -25,10 +25,10 @@ import http from 'node:http';
 import { createRequire } from 'node:module';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helm/test-kit/node';
+import { makeTempDir as tempDir, waitFor as kitWaitFor } from '@helmx/test-kit/node';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createBirpc } from 'birpc';
-import type { EnvExecOutputEvent } from '@helm/protocol';
+import type { EnvExecOutputEvent } from '@helmx/protocol';
 import { bindIdentityFromJoinToken } from '../src/daemon/index.js';
 import { UpgradeCommitUnconfirmedError, type StagedNodeRelease } from '../src/daemon/upgrader.js';
 import { prepareNodeReplacement, type HandoffPidRecord } from '../src/daemon/upgrade-handoff.js';
@@ -48,7 +48,7 @@ async function runCli(argv: string[], io: Partial<NodeCliIo> = {}): Promise<Capt
   let out = '';
   let err = '';
   const code = await runNodeCli(argv, {
-    // Strip host-managed HELM_* variables so INSTANCE_ID/CONTROL_ENDPOINT never disable launcher
+    // Strip host-managed HELMX_* variables so INSTANCE_ID/CONTROL_ENDPOINT never disable launcher
     // mode during foreground start, and Hub/dataDir/credentials come strictly from test inputs.
     env: sanitizedHostEnv(),
     out: (t) => (out += t),
@@ -156,7 +156,7 @@ async function startHubFixture(options: { expectedToken: string }): Promise<HubF
 /**
  * Candidate protocol fixture script: registers with real Hub (triggering ready=registered),
  * awaits `activate`, replies `activated`, and detaches from parent IPC.
- * Controlled via `HELM_FIXTURE_MODE`:
+ * Controlled via `HELMX_FIXTURE_MODE`:
  *  - 'candidate' (default): normal protocol behavior;
  *  - 'no-ack': receives activate without replying activated (simulates lost ACK);
  *  - 'vanish': closes parent IPC after ready=registered while staying alive (simulates dead IPC
@@ -166,17 +166,17 @@ async function startHubFixture(options: { expectedToken: string }): Promise<HubF
  */
 const CANDIDATE_SCRIPT = `
 const http = require('node:http');
-const WebSocket = require(process.env.HELM_FIXTURE_WS_PATH);
-const mode = process.env.HELM_FIXTURE_MODE ?? 'candidate';
-const instanceId = process.env.HELM_NODE_INSTANCE_ID;
-const hubUrl = process.env.HELM_HUB_URL_FIXTURE;
-const attempt = process.env.HELM_NODE_UPGRADE_ATTEMPT;
+const WebSocket = require(process.env.HELMX_FIXTURE_WS_PATH);
+const mode = process.env.HELMX_FIXTURE_MODE ?? 'candidate';
+const instanceId = process.env.HELMX_NODE_INSTANCE_ID;
+const hubUrl = process.env.HELMX_HUB_URL_FIXTURE;
+const attempt = process.env.HELMX_NODE_UPGRADE_ATTEMPT;
 
 // Connect directly to Hub /ws/node to exercise protocol layer without running full daemon.
 // birpc v2 compact framing: request {t:'q',m:method,a:[args],i:id}, response {t:'s',i:id,r:result}.
 const ws = new WebSocket(hubUrl.replace(/^http/, 'ws') + '/ws/node');
 ws.on('open', () => {
-  ws.send(JSON.stringify({ t: 'q', m: 'register', a: [{ nodeId: process.env.HELM_FIXTURE_NODE_ID ?? 'fixture-node', token: process.env.HELM_FIXTURE_TOKEN ?? 'fix:s', hostname: 'fix', platform: process.platform, ...(attempt ? { upgradeAttemptId: attempt } : {}) }], i: 'r1' }));
+  ws.send(JSON.stringify({ t: 'q', m: 'register', a: [{ nodeId: process.env.HELMX_FIXTURE_NODE_ID ?? 'fixture-node', token: process.env.HELMX_FIXTURE_TOKEN ?? 'fix:s', hostname: 'fix', platform: process.platform, ...(attempt ? { upgradeAttemptId: attempt } : {}) }], i: 'r1' }));
 });
 ws.on('message', (raw) => {
   const text = typeof raw === 'string' ? raw : Buffer.from(raw).toString('utf8');
@@ -184,19 +184,19 @@ ws.on('message', (raw) => {
   if (msg && msg.t === 's' && msg.i === 'r1') {
     const ok = msg.r && msg.r.ok === true;
     const state = ok ? 'registered' : 'starting';
-    try { process.send({ type: 'helm-node.ready', pid: process.pid, instanceId, state }); } catch {}
+    try { process.send({ type: 'helmx-node.ready', pid: process.pid, instanceId, state }); } catch {}
     if (mode === 'exit') { try { process.disconnect(); process.exit(0); } catch {} }
     if (ok && mode === 'vanish') setTimeout(() => { try { process.disconnect(); } catch {} }, 30);
   }
 });
 ws.on('error', () => {
   if (mode === 'exit') { try { process.exit(0); } catch {} }
-  else { try { process.send({ type: 'helm-node.ready', pid: process.pid, instanceId, state: 'starting' }); } catch {} }
+  else { try { process.send({ type: 'helmx-node.ready', pid: process.pid, instanceId, state: 'starting' }); } catch {} }
 });
 if (mode === 'starting' || mode === 'exit') {
   // Report starting immediately without registering.
   setTimeout(() => {
-    try { process.send({ type: 'helm-node.ready', pid: process.pid, instanceId, state: 'starting' }); } catch {}
+    try { process.send({ type: 'helmx-node.ready', pid: process.pid, instanceId, state: 'starting' }); } catch {}
     if (mode === 'exit') { process.exit(0); }
   }, 30);
   if (mode === 'starting') {
@@ -204,13 +204,13 @@ if (mode === 'starting' || mode === 'exit') {
   }
 }
 process.on('message', (message) => {
-  if (!message || message.type !== 'helm-node.activate') return;
+  if (!message || message.type !== 'helmx-node.activate') return;
   if (message.pid !== process.pid || message.attemptId !== attempt) {
-    try { process.send({ type: 'helm-node.activate-rejected', attemptId: message.attemptId, reason: 'context mismatch' }); } catch {}
+    try { process.send({ type: 'helmx-node.activate-rejected', attemptId: message.attemptId, reason: 'context mismatch' }); } catch {}
     return;
   }
   if (mode === 'no-ack' || mode === 'vanish') return; // Drop ACK (no-ack simulates lost receipt; vanish simulates dead IPC)
-  try { process.send({ type: 'helm-node.activated', attemptId: message.attemptId }); } catch {}
+  try { process.send({ type: 'helmx-node.activated', attemptId: message.attemptId }); } catch {}
   try { if (process.connected) process.disconnect(); } catch {}
 });
 // Parent disconnect before activation terminates candidate per protocol.
@@ -293,14 +293,14 @@ async function prepareWithFixture(options: {
         writePidRecord: store.writePidRecord,
         removePidFile: store.removePidFile,
         env: {
-          // Strip host-managed HELM_* variables so test baseline is clean before explicit fixture overrides.
+          // Strip host-managed HELMX_* variables so test baseline is clean before explicit fixture overrides.
           ...sanitizedHostEnv(),
-          HELM_FIXTURE_MODE: options.mode,
-          HELM_HUB_URL_FIXTURE: options.hubUrl,
-          HELM_FIXTURE_NODE_ID: 'cand-node',
-          HELM_FIXTURE_TOKEN: 'cand:s',
-          HELM_FIXTURE_WS_PATH: wsModulePath,
-          HELM_VERSION_OVERRIDE: '0.1.0',
+          HELMX_FIXTURE_MODE: options.mode,
+          HELMX_HUB_URL_FIXTURE: options.hubUrl,
+          HELMX_FIXTURE_NODE_ID: 'cand-node',
+          HELMX_FIXTURE_TOKEN: 'cand:s',
+          HELMX_FIXTURE_WS_PATH: wsModulePath,
+          HELMX_VERSION_OVERRIDE: '0.1.0',
         },
         ...(options.readyTimeoutMs !== undefined ? { readyTimeoutMs: options.readyTimeoutMs } : {}),
         ...(options.activateAckTimeoutMs !== undefined ? { activateAckTimeoutMs: options.activateAckTimeoutMs } : {}),
@@ -313,7 +313,7 @@ async function prepareWithFixture(options: {
 }
 
 test('prepareNodeReplacement: real IPC ready -> activate -> activated writes new pid on commit', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-ok-');
+  const dir = await tempDir('helmx-handoff-ok-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -349,7 +349,7 @@ test('prepareNodeReplacement: real IPC ready -> activate -> activated writes new
 });
 
 test('prepareNodeReplacement rejects candidate reporting starting and keeps old pid', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-starting-');
+  const dir = await tempDir('helmx-handoff-starting-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -361,7 +361,7 @@ test('prepareNodeReplacement rejects candidate reporting starting and keeps old 
 });
 
 test('prepareNodeReplacement errors explicitly on immediate candidate exit', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-exit-');
+  const dir = await tempDir('helmx-handoff-exit-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -372,7 +372,7 @@ test('prepareNodeReplacement errors explicitly on immediate candidate exit', { t
 });
 
 test('prepareNodeReplacement throws UpgradeCommitUnconfirmedError when activate ACK is lost without rollback or killing candidate', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-noack-');
+  const dir = await tempDir('helmx-handoff-noack-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -417,7 +417,7 @@ test('prepareNodeReplacement throws UpgradeCommitUnconfirmedError when activate 
 });
 
 test('prepareNodeReplacement rolls back safely if candidate disconnects IPC after ready without 10m dead window', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-vanish-');
+  const dir = await tempDir('helmx-handoff-vanish-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -458,7 +458,7 @@ test('prepareNodeReplacement rolls back safely if candidate disconnects IPC afte
 });
 
 test('prepareNodeReplacement: abort before activate kills candidate without touching pid record', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-abort-');
+  const dir = await tempDir('helmx-handoff-abort-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -485,7 +485,7 @@ test('prepareNodeReplacement: abort before activate kills candidate without touc
 // ---------------------------------------------------------------------------
 
 test('upgrade --check queries offline without starting daemon (injected fetch fixture)', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-check-');
+  const dir = await tempDir('helmx-handoff-check-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -497,8 +497,8 @@ test('upgrade --check queries offline without starting daemon (injected fetch fi
   assert.equal(await fs.stat(path.join(dir, 'node.pid')).then(() => true, () => false), false, '--check must not start daemon');
 });
 
-test('upgrade without managed daemon explicitly tells user to run helm-node start first', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-norun-');
+test('upgrade without managed daemon explicitly tells user to run helmx-node start first', { timeout: 60_000 }, async (t) => {
+  const dir = await tempDir('helmx-handoff-norun-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -506,7 +506,7 @@ test('upgrade without managed daemon explicitly tells user to run helm-node star
   const r = await runCli(['upgrade', '--data-dir', dir, '--json']);
   assert.equal(r.code, 1);
   const envelope = JSON.parse(r.err) as { error: { message: string } };
-  assert.match(envelope.error.message, /run helm-node start/);
+  assert.match(envelope.error.message, /run helmx-node start/);
 });
 
 test('upgrade flag validation: --check is mutually exclusive with --version and --force', { timeout: 60_000 }, async () => {
@@ -540,7 +540,7 @@ async function startManagedDaemon(t: test.TestContext, dir: string, hubUrl: stri
 }
 
 test('control channel upgrade request: rejects clearly when unready/invalid and keeps stop/status functional', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-ctl-');
+  const dir = await tempDir('helmx-handoff-ctl-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -595,7 +595,7 @@ test('control channel upgrade request: rejects clearly when unready/invalid and 
 });
 
 test('start -d: stop rejects with upgrade_in_progress while upgrade runs (real isUpgrading state)', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-busy-');
+  const dir = await tempDir('helmx-handoff-busy-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -651,7 +651,7 @@ test('start -d: stop rejects with upgrade_in_progress while upgrade runs (real i
 // ---------------------------------------------------------------------------
 
 test('foreground start without control env acts as launcher: spawns and tracks managed daemon', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-launcher-');
+  const dir = await tempDir('helmx-handoff-launcher-');
   t.after(async () => {
     await runCli(['stop', '--data-dir', dir, '--json']).catch(() => undefined);
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -668,7 +668,7 @@ test('foreground start without control env acts as launcher: spawns and tracks m
   let child: ChildProcess | undefined;
   child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), cliEntry, 'start', '--data-dir', dir], {
     stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...sanitizedHostEnv(), HELM_HUB_URL: hub.url, HELM_NODE_LAUNCHER_POLL_MS: '100' },
+    env: { ...sanitizedHostEnv(), HELMX_HUB_URL: hub.url, HELMX_NODE_LAUNCHER_POLL_MS: '100' },
   });
   let stdout = '';
   child.stdout?.on('data', (c: Buffer) => (stdout += c.toString('utf8')));
@@ -695,7 +695,7 @@ test('foreground start without control env acts as launcher: spawns and tracks m
 // ---------------------------------------------------------------------------
 
 test('USAGE lists upgrade command and flags; status prints actual running version', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-usage-');
+  const dir = await tempDir('helmx-handoff-usage-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -817,7 +817,7 @@ async function writePidRecordRaw(dir: string, record: HandoffPidRecord): Promise
 }
 
 test('launcher shutdown awaits slow stop replies (>200ms) before returning', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-slowstop-');
+  const dir = await tempDir('helmx-handoff-slowstop-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -868,7 +868,7 @@ test('launcher shutdown awaits slow stop replies (>200ms) before returning', { t
 });
 
 test('upgrade output keeps replacement pid from result and renders old pid as previousPid', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-pid-');
+  const dir = await tempDir('helmx-handoff-pid-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -897,7 +897,7 @@ test('upgrade output keeps replacement pid from result and renders old pid as pr
 });
 
 test('upgrade allows valid no-op result without candidate pid when version already matches', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-noop-');
+  const dir = await tempDir('helmx-handoff-noop-');
   const instanceId = 'ef'.repeat(16);
   const control = await startFixtureControl({
     dataDir: dir,
@@ -918,7 +918,7 @@ test('upgrade allows valid no-op result without candidate pid when version alrea
 });
 
 test('upgrade rejects invalid result envelopes missing ok/upgraded/pid with non-zero exit', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-badres-');
+  const dir = await tempDir('helmx-handoff-badres-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });
@@ -941,7 +941,7 @@ test('upgrade rejects invalid result envelopes missing ok/upgraded/pid with non-
 });
 
 test('status prefers live control-channel version and falls back to current.json when offline', { timeout: 60_000 }, async (t) => {
-  const dir = await tempDir('helm-handoff-ver-');
+  const dir = await tempDir('helmx-handoff-ver-');
   t.after(async () => {
     await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   });

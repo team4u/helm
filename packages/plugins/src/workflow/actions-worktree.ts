@@ -2,11 +2,11 @@
  * builtin:workflow 受管 Worktree 动作（cleanup_worktree / list_worktrees / inspect_worktree，
  * 以及内部隐藏动作 acquire_worktree / release_worktree_hold）。
  */
-import { HelmError, type HelmPluginContext } from '@helm/protocol'
+import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import type { WorkflowActionDeps } from './actions.js'
 
 export function registerWorktreeActions(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   deps: Pick<WorkflowActionDeps, 'isolation'>,
 ): void {
   const { isolation } = deps
@@ -21,7 +21,7 @@ export function registerWorktreeActions(
         conversationId: { type: 'number', minimum: 1, description: 'Sub-conversation ID (mutually exclusive with worktreeId/path)' },
         path: { type: 'string', description: 'Worktree absolute path (may attach nodeId to disambiguate)' },
         nodeId: { type: 'string', description: 'Target node ID (only combinable with path)' },
-        deleteBranch: { type: 'boolean', description: 'Also delete the helm/spawn-* branch (kept by default)' },
+        deleteBranch: { type: 'boolean', description: 'Also delete the helmx/spawn-* branch (kept by default)' },
         mergedInto: { type: 'string', description: 'Target branch or commit already merged into; defaults to the recorded baseBranch, falling back to the main worktree HEAD' },
         force: { type: 'boolean', description: 'Force cleanup (dirty worktrees are refused by default)' },
       },
@@ -48,7 +48,7 @@ export function registerWorktreeActions(
         context.conversationId !== undefined &&
         a['conversationId'] !== context.conversationId
       ) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `conversationId 冲突：输入指定 ${String(a['conversationId'])} 与调用上下文 ${context.conversationId} 不一致，请显式统一`,
           400,

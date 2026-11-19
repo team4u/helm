@@ -1,7 +1,7 @@
 /*
- * builtin:json-render plugin styles (compiled into the preserved __helmClientCss export; the host manages injection and reclamation).
- * Generic structure reuses host design-system primitives (.callout / .kv-list / .helm-table-wrap /
- * .helm-table / .stack-row, etc.) and design tokens; jr-* keeps only this plugin's private DSL layout
+ * builtin:json-render plugin styles (compiled into the preserved __helmxClientCss export; the host manages injection and reclamation).
+ * Generic structure reuses host design-system primitives (.callout / .kv-list / .helmx-table-wrap /
+ * .helmx-table / .stack-row, etc.) and design tokens; jr-* keeps only this plugin's private DSL layout
  * and specific styles (user-select exemption, card rhythm, metric-card grid), reclaimed wholesale when the plugin is disabled.
  */
 
@@ -10,7 +10,7 @@
   user-select: text;
 }
 
-.helm-table.jr-table-selectable td {
+.helmx-table.jr-table-selectable td {
   user-select: text;
 }
 

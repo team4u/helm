@@ -2,7 +2,7 @@
  * client.tsx 轨道内核测试：真实 esbuild 编译 + PluginHost getClientModule +
  * HTTP GET /api/plugins/:id/client.mjs 端点。
  *
- * 覆盖：真实编译产物（external 重写为 __helm_shared_*）、缓存命中（同 hash 不重编）、
+ * 覆盖：真实编译产物（external 重写为 __helmx_shared_*）、缓存命中（同 hash 不重编）、
  * 依赖源变化缓存失效、路径逃逸（../ 与符号链接）拒绝、停用插件拒绝提供、
  * HTTP 鉴权边界（无 token 401）、模块缺失/编译错误显式报错（无静默降级）、
  * 注册边界（client 引用无 clientRoot 拒绝；module 形状非法拒绝）。
@@ -31,14 +31,14 @@ import {
   compilePluginClientModule,
   createPluginBuildProvider,
   installNodeChunkBridge,
-} from '@helm/plugin-build'
+} from '@helmx/plugin-build'
 import {
-  HelmError,
+  HelmxError,
   PREBUILT_CLIENT_DIR_NAME,
   PREBUILT_CLIENT_MANIFEST_FILE,
   prebuiltChunkFileName,
   type ConversationSummary,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { createMermaidLoader } from '../src/mermaid/client/mermaid-loader.js'
 import { MemoryDocStore, deferred, makeConversationSummary, waitFor } from './helpers/plugin-test-env.js'
 
@@ -74,12 +74,12 @@ function makeBackend(): PluginHostBackend {
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
       return 'human'
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', '本 fixture 不执行节点命令', 501) },
+    execEnv: async () => { throw new HelmxError('unsupported', '本 fixture 不执行节点命令', 501) },
     withFileMutationQueue(): Promise<never> { throw new Error('本 fixture 不承载文件互斥队列') },
     emitEvent: () => {},
   }
@@ -99,7 +99,7 @@ function makeKernel(): KernelRuntimeLike {
     plugins: pluginHost,
     listConversations: async () => [],
     getConversationDetail: async (id: number) => {
-      throw new HelmError('not_found', `会话不存在: ${id}`, 404)
+      throw new HelmxError('not_found', `会话不存在: ${id}`, 404)
     },
     createConversation: async () => makeConversation(1),
     updateConversation: async (id: number) => makeConversation(id),
@@ -145,7 +145,7 @@ let clientRoot: string
 let handler: (req: Request) => Promise<Response>
 
 before(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'helm-plugin-client-'))
+  dataDir = await mkdtemp(join(tmpdir(), 'helmx-plugin-client-'))
   clientRoot = join(dataDir, 'fixture-plugin-src')
   await mkdir(clientRoot, { recursive: true })
   await writeFile(
@@ -187,10 +187,10 @@ after(async () => {
 // 编译与缓存
 // ---------------------------------------------------------------------------
 
-test('真实编译：产物为 ESM，react external 重写为 __helm_shared_* 命名空间', { timeout: 60_000 }, async () => {
+test('真实编译：产物为 ESM，react external 重写为 __helmx_shared_* 命名空间', { timeout: 60_000 }, async () => {
   const result = await pluginHost.getClientModule('test:client-fixture', 'client.tsx')
   assert.ok(result.code.length > 0)
-  assert.match(result.code, /__helm_shared_react/)
+  assert.match(result.code, /__helmx_shared_react/)
   // bundle 内联本地依赖（helper 不再是独立 import）
   assert.doesNotMatch(result.code, /['"]\.\/helper['"]/)
   // 绝不打包第二份 React（external 生效）
@@ -198,15 +198,15 @@ test('真实编译：产物为 ESM，react external 重写为 __helm_shared_* �
   assert.match(result.contentHash, /^[0-9a-f]{24}$/)
 })
 
-test('插件本地 CSS：原生合并为保留具名导出 __helmClientCss，产物不注入 DOM', { timeout: 60_000 }, async () => {
+test('插件本地 CSS：原生合并为保留具名导出 __helmxClientCss，产物不注入 DOM', { timeout: 60_000 }, async () => {
   const root = join(dataDir, 'css-plugin-src')
   await mkdir(root, { recursive: true })
   await writeFile(join(root, 'styles.css'), '.widget-card {\n  color: var(--fg);\n}\n')
   await writeFile(join(root, 'index.tsx'), "import './styles.css'\nexport function Widget() { return 'w' }\n")
   const result = await compilePluginClientModule('test:css', root, 'index.tsx', dataDir)
   assert.match(result.code, /widget-card/, 'CSS 内容必须进入产物')
-  assert.match(result.code, /__helmClientCss/, '合并 CSS 必须经保留具名导出返回')
-  assert.doesNotMatch(result.code, /data-helm-plugin-css/, '产物不得自行注入 DOM（加载器负责注入）')
+  assert.match(result.code, /__helmxClientCss/, '合并 CSS 必须经保留具名导出返回')
+  assert.doesNotMatch(result.code, /data-helmx-plugin-css/, '产物不得自行注入 DOM（加载器负责注入）')
 })
 
 test('插件 CSS 本地 @import 正常合并（跨文件依赖），远程 @import 显式拒绝', { timeout: 60_000 }, async () => {
@@ -224,7 +224,7 @@ test('插件 CSS 本地 @import 正常合并（跨文件依赖），远程 @impo
   await writeFile(join(remoteRoot, 'index.tsx'), "import './styles.css'\nexport function Widget() { return 'w' }\n")
   await assert.rejects(
     () => compilePluginClientModule('test:css-remote', remoteRoot, 'index.tsx', dataDir),
-    (err: unknown) => err instanceof HelmError && err.code === 'client_compile_failed' && /remote @import/.test(err.message),
+    (err: unknown) => err instanceof HelmxError && err.code === 'client_compile_failed' && /remote @import/.test(err.message),
   )
 })
 
@@ -253,20 +253,20 @@ test('依赖源变化：本地依赖 helper.tsx 变更后 hash 变化（重新�
 test('路径逃逸拒绝：.. 越根 / 绝对路径 / 非 ts 扩展', { timeout: 60_000 }, async () => {
   await assert.rejects(
     pluginHost.getClientModule('test:client-fixture', '../secrets.ts'),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_client_module',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_client_module',
   )
   await assert.rejects(
     pluginHost.getClientModule('test:client-fixture', '/etc/passwd.ts'),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_client_module',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_client_module',
   )
   await assert.rejects(
     pluginHost.getClientModule('test:client-fixture', 'client.js'),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_client_module',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_client_module',
   )
 })
 
 test('符号链接逃逸拒绝：clientRoot 内符号链接指向根外文件', { timeout: 60_000 }, async () => {
-  const outsideDir = await mkdtemp(join(tmpdir(), 'helm-plugin-client-outside-'))
+  const outsideDir = await mkdtemp(join(tmpdir(), 'helmx-plugin-client-outside-'))
   try {
     const outsideFile = join(outsideDir, 'evil.ts')
     await writeFile(outsideFile, 'export const x = 1\n')
@@ -274,7 +274,7 @@ test('符号链接逃逸拒绝：clientRoot 内符号链接指向根外文件', 
     await symlink(outsideFile, linkPath)
     await assert.rejects(
       pluginHost.getClientModule('test:client-fixture', 'linked.ts'),
-      (err: unknown) => err instanceof HelmError && (err.code === 'client_module_out_of_root' || err.code === 'invalid_client_module'),
+      (err: unknown) => err instanceof HelmxError && (err.code === 'client_module_out_of_root' || err.code === 'invalid_client_module'),
     )
   } finally {
     await rm(outsideDir, { recursive: true, force: true })
@@ -284,7 +284,7 @@ test('符号链接逃逸拒绝：clientRoot 内符号链接指向根外文件', 
 test('模块不存在：显式 400 client_root_invalid，无静默空产物', { timeout: 60_000 }, async () => {
   await assert.rejects(
     pluginHost.getClientModule('test:client-fixture', 'missing.ts'),
-    (err: unknown) => err instanceof HelmError && err.code === 'client_root_invalid',
+    (err: unknown) => err instanceof HelmxError && err.code === 'client_root_invalid',
   )
 })
 
@@ -296,7 +296,7 @@ test('停用插件拒绝提供 client 模块（409）', { timeout: 60_000 }, asy
   await pluginHost.disable('test:client-fixture')
   await assert.rejects(
     pluginHost.getClientModule('test:client-fixture', 'client.tsx'),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_client_unavailable' && err.status === 409,
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_client_unavailable' && err.status === 409,
   )
   await pluginHost.enable('test:client-fixture')
   const back = await pluginHost.getClientModule('test:client-fixture', 'client.tsx')
@@ -311,7 +311,7 @@ test('注册边界：client 引用但插件无 clientRoot 显式拒绝', { timeo
         ctx.ui.screen({ id: 's', label: 's', client: { module: 'client.tsx', export: 'X' } })
       },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec',
   )
 })
 
@@ -325,7 +325,7 @@ test('注册边界：client.module 形状非法（.. / 绝对路径 / 扩展名�
           ctx.ui.screen({ id: 's', label: 's', client: { module: bad, export: 'X' } })
         },
       }),
-      (err: unknown) => err instanceof HelmError && err.code === 'invalid_client_module',
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_client_module',
     )
   }
 })
@@ -337,7 +337,7 @@ test('注册边界：clientRoot 含 .. 或相对路径的插件定义拒绝', { 
       clientRoot: 'relative/dir',
       definePlugin() {},
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_definition',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_definition',
   )
 })
 
@@ -352,15 +352,15 @@ test('HTTP：无 token 401；有效 token 200 返回 JS 与 hash 头', { timeout
   const ok = await call(handler, 'GET', '/api/plugins/test%3Aclient-fixture/client.mjs?module=client.tsx')
   assert.equal(ok.status, 200)
   assert.match(ok.headers.get('content-type') ?? '', /text\/javascript/)
-  assert.match(ok.headers.get('x-helm-client-hash') ?? '', /^[0-9a-f]{24}$/)
-  assert.match(ok.text, /__helm_shared_react/)
+  assert.match(ok.headers.get('x-helmx-client-hash') ?? '', /^[0-9a-f]{24}$/)
+  assert.match(ok.text, /__helmx_shared_react/)
 })
 
 test('HTTP：If-None-Match 命中 contentHash 时返回 304 Not Modified 且无 body', { timeout: 60_000 }, async () => {
   const first = await call(handler, 'GET', '/api/plugins/test%3Aclient-fixture/client.mjs?module=client.tsx')
   assert.equal(first.status, 200)
   assert.equal(first.headers.get('vary'), 'Accept-Encoding')
-  const hash = first.headers.get('x-helm-client-hash')!
+  const hash = first.headers.get('x-helmx-client-hash')!
   const etag = first.headers.get('etag')!
   assert.ok(hash)
   assert.equal(etag, `"${hash}"`)
@@ -372,7 +372,7 @@ test('HTTP：If-None-Match 命中 contentHash 时返回 304 Not Modified 且无 
   assert.equal(res304.status, 304)
   assert.equal(res304.text, '')
   assert.equal(res304.headers.get('etag'), etag)
-  assert.equal(res304.headers.get('x-helm-client-hash'), hash)
+  assert.equal(res304.headers.get('x-helmx-client-hash'), hash)
   assert.equal(res304.headers.get('vary'), 'Accept-Encoding')
 
   const res304RawHash = await call(handler, 'GET', '/api/plugins/test%3Aclient-fixture/client.mjs?module=client.tsx', {
@@ -400,7 +400,7 @@ test('HTTP：HEAD 请求返回 200 与 headers 但无 body', { timeout: 60_000 }
   assert.equal(head.status, 200)
   assert.equal(head.text, '')
   assert.match(head.headers.get('content-type') ?? '', /text\/javascript/)
-  assert.match(head.headers.get('x-helm-client-hash') ?? '', /^[0-9a-f]{24}$/)
+  assert.match(head.headers.get('x-helmx-client-hash') ?? '', /^[0-9a-f]{24}$/)
 })
 
 test('HTTP：缺 module 参数 400；越根 module 400/404 错误信封', { timeout: 60_000 }, async () => {
@@ -454,7 +454,7 @@ test('default+named / as 别名 import：共享 shim 生成合法 ESM 绑定（�
     [
       "import ReactDef, { useState as state, useMemo } from 'react'",
       "import * as Lucide from 'lucide-react'",
-      "import { usePluginContext } from '@helm/plugin-client'",
+      "import { usePluginContext } from '@helmx/plugin-client'",
       'export function AliasPanel() {',
       '  const [n] = state(1)',
       '  const doubled = useMemo(() => n * 2, [n])',
@@ -476,9 +476,9 @@ test('default+named / as 别名 import：共享 shim 生成合法 ESM 绑定（�
       useMemo: <T,>(fn: () => T) => fn(),
     }
     const g2 = globalThis as unknown as Record<string, unknown>
-    g2.__helm_shared_react = fakeReact
-    g2.__helm_shared_lucide_react = { Save: () => null, Activity: () => null }
-    g2.__helm_shared_plugin_client = { usePluginContext: () => null, usePluginDoc: () => undefined }
+    g2.__helmx_shared_react = fakeReact
+    g2.__helmx_shared_lucide_react = { Save: () => null, Activity: () => null }
+    g2.__helmx_shared_plugin_client = { usePluginContext: () => null, usePluginDoc: () => undefined }
     const url = `data:text/javascript;base64,${Buffer.from(result.code, 'utf8').toString('base64')}`
     const mod = (await import(url)) as Record<string, unknown>
     assert.equal(typeof mod.AliasPanel, 'function')
@@ -503,7 +503,7 @@ test('非共享裸依赖（npm 包）显式拒绝：绝不把 node_modules 打�
     await assert.rejects(
       pluginHost.getClientModule('test:client-fixture', 'bare-dep.tsx'),
       (err: unknown) =>
-        err instanceof HelmError &&
+        err instanceof HelmxError &&
         err.code === 'client_compile_failed' &&
         err.message.includes('bare dependency') &&
         err.message.includes('assert'),
@@ -532,7 +532,7 @@ test('export * from 本地依赖：依赖源变化后 hash 变化（旧实现正
 })
 
 test('依赖符号链接越根拒绝：本地 import 指向根外符号链接（旧实现只检入口）', { timeout: 60_000 }, async () => {
-  const outsideDir = await mkdtemp(join(tmpdir(), 'helm-plugin-client-outside2-'))
+  const outsideDir = await mkdtemp(join(tmpdir(), 'helmx-plugin-client-outside2-'))
   try {
     const outsideFile = join(outsideDir, 'outside-dep.ts')
     await writeFile(outsideFile, 'export const evil = 1\n')
@@ -541,7 +541,7 @@ test('依赖符号链接越根拒绝：本地 import 指向根外符号链接（
     await assert.rejects(
       pluginHost.getClientModule('test:client-fixture', 'entry-linked.ts'),
       (err: unknown) =>
-        err instanceof HelmError && err.code === 'client_compile_failed' && err.message.includes('out of bounds'),
+        err instanceof HelmxError && err.code === 'client_compile_failed' && err.message.includes('out of bounds'),
     )
   } finally {
     await rm(join(clientRoot, 'linked-dep.ts'), { force: true })
@@ -604,11 +604,11 @@ test('迟到编译拒绝：编译期间插件停用，产物不得返回成功�
       // 竞态窗口未命中（编译先完成）：此时插件已停用，再次获取必须拒绝
       // 且 fulfill 本身发生在 disable 前不算缺陷——验证停用后拒绝即可
     } else {
-      assert.equal((lateResult.reason as HelmError).code, 'plugin_client_unavailable')
+      assert.equal((lateResult.reason as HelmxError).code, 'plugin_client_unavailable')
     }
     await assert.rejects(
       pluginHost.getClientModule('test:client-fixture', 'late.ts'),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_client_unavailable',
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_client_unavailable',
     )
   } finally {
     await pluginHost.enable('test:client-fixture')
@@ -628,18 +628,18 @@ test('clientRoot 跨平台绝对路径：Windows 盘符合法、foo..bar 目录�
   // Windows 盘符形态在注册层合法（非 POSIX startsWith('/') 误拒）；目录存在性由编译期校验
   await pluginHost.register({
     id: 'test:win-root',
-    clientRoot: 'C:\\helm\\plugins\\demo\\client',
+    clientRoot: 'C:\\helmx\\plugins\\demo\\client',
     definePlugin() {},
   })
   // 相对路径仍拒绝
   await assert.rejects(
     pluginHost.register({ id: 'test:rel-root', clientRoot: 'relative/dir', definePlugin() {} }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_definition',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_definition',
   )
   // 整段 .. 仍拒绝（真正的越根；join 会归一化掉 ..，故用字面量路径保留 .. 段）
   await assert.rejects(
     pluginHost.register({ id: 'test:seg-root', clientRoot: `${dataDir}/a/../b`, definePlugin() {} }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_definition',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_definition',
   )
 })
 
@@ -687,9 +687,9 @@ function createComponentHarness<P>(initialProps: P) {
   let stateUpdates = 0
 
   const g = globalThis as Record<string, unknown>
-  const prevReact = g.__helm_shared_react
-  const prevJsx = g.__helm_shared_react_jsx_runtime
-  const prevClient = g.__helm_shared_plugin_client
+  const prevReact = g.__helmx_shared_react
+  const prevJsx = g.__helmx_shared_react_jsx_runtime
+  const prevClient = g.__helmx_shared_plugin_client
 
   const depsChanged = (a?: unknown[], b?: unknown[]): boolean => {
     if (!a || !b || a.length !== b.length) return true
@@ -701,7 +701,7 @@ function createComponentHarness<P>(initialProps: P) {
   let memoIdx = 0
   let effectIdx = 0
 
-  g.__helm_shared_react = {
+  g.__helmx_shared_react = {
     useState: (init: unknown) => {
       const idx = stateIdx++
       if (idx >= states.length) {
@@ -748,7 +748,7 @@ function createComponentHarness<P>(initialProps: P) {
   }
   const makeEl = (type: unknown, props: Record<string, unknown>) => ({ type, props })
   const ui = {
-    HelmIcon: (props: Record<string, unknown>) => ({ type: 'HelmIcon', props }),
+    HelmxIcon: (props: Record<string, unknown>) => ({ type: 'HelmxIcon', props }),
     CopyButton: (props: Record<string, unknown>) => ({ type: 'CopyButton', props }),
     Callout: (props: Record<string, unknown>) => ({ type: 'Callout', props }),
     Dialog: (props: Record<string, unknown>) => ({ type: 'Dialog', props }),
@@ -758,8 +758,8 @@ function createComponentHarness<P>(initialProps: P) {
     DialogTitle: (props: Record<string, unknown>) => ({ type: 'DialogTitle', props }),
     DialogClose: (props: Record<string, unknown>) => ({ type: 'DialogClose', props }),
   }
-  g.__helm_shared_react_jsx_runtime = { jsx: makeEl, jsxs: makeEl }
-  g.__helm_shared_plugin_client = {
+  g.__helmx_shared_react_jsx_runtime = { jsx: makeEl, jsxs: makeEl }
+  g.__helmx_shared_plugin_client = {
     usePluginContext: () => ({ theme: 'dark' }),
     usePluginLocale: () => 'en',
     usePluginTranslator: () => (lt: Record<string, string>) => lt.en ?? '',
@@ -795,9 +795,9 @@ function createComponentHarness<P>(initialProps: P) {
 
   const restore = (): void => {
     unmount()
-    g.__helm_shared_react = prevReact
-    g.__helm_shared_react_jsx_runtime = prevJsx
-    g.__helm_shared_plugin_client = prevClient
+    g.__helmx_shared_react = prevReact
+    g.__helmx_shared_react_jsx_runtime = prevJsx
+    g.__helmx_shared_plugin_client = prevClient
   }
 
   return {
@@ -820,9 +820,9 @@ test('代码分割与共享 Chunk：builtin:mermaid 主包不内联核心库且�
     `主包 gzip 体积 (${result.gzipped.length} 字节) 必须 < 20 KB`,
   )
   assert.doesNotMatch(result.code, /mermaidAPI|getRegisteredDiagramsMetadata/, '主包不得直接内联 mermaid 核心库')
-  assert.match(result.code, /__helm_import_chunk/, '主包必须通过 __helm_import_chunk 按需加载 mermaid')
+  assert.match(result.code, /__helmx_import_chunk/, '主包必须通过 __helmx_import_chunk 按需加载 mermaid')
   assert.deepEqual(
-    result.exports.filter((name) => name !== '__helmClientCss'),
+    result.exports.filter((name) => name !== '__helmxClientCss'),
     ['MermaidCodeBlock'],
     'index.tsx 只导出 MermaidCodeBlock 组件（Fast Refresh 契约）',
   )
@@ -859,11 +859,11 @@ test('代码分割与共享 Chunk：builtin:mermaid 主包不内联核心库且�
   )
 })
 
-test('端到端执行：编译产物在 Node 环境通过 __helm_import_chunk 按需加载 mermaid 核心与图表并渲染有效 SVG', { timeout: 60_000 }, async () => {
+test('端到端执行：编译产物在 Node 环境通过 __helmx_import_chunk 按需加载 mermaid 核心与图表并渲染有效 SVG', { timeout: 60_000 }, async () => {
   const { GlobalRegistrator } = await import('@happy-dom/global-registrator')
   GlobalRegistrator.register()
   const g = globalThis as Record<string, unknown>
-  const prevImportChunk = g.__helm_import_chunk
+  const prevImportChunk = g.__helmx_import_chunk
   try {
     const indexResult = await pluginHost.getClientModule('builtin:mermaid', 'index.tsx')
     const loaderResult = await pluginHost.getClientModule('builtin:mermaid', 'mermaid-loader.ts')
@@ -872,9 +872,9 @@ test('端到端执行：编译产物在 Node 环境通过 __helm_import_chunk �
 
     // Node 环境执行产物：显式安装 chunk 桥（生产编译路径不再自动改写 globalThis）
     installNodeChunkBridge([dataDir])
-    const realImportChunk = g.__helm_import_chunk as (...args: unknown[]) => Promise<unknown>
+    const realImportChunk = g.__helmx_import_chunk as (...args: unknown[]) => Promise<unknown>
     const loadedChunks: string[] = []
-    g.__helm_import_chunk = (...args: unknown[]) => {
+    g.__helmx_import_chunk = (...args: unknown[]) => {
       loadedChunks.push(String(args[3] ?? ''))
       return realImportChunk(...args)
     }
@@ -895,7 +895,7 @@ test('端到端执行：编译产物在 Node 环境通过 __helm_import_chunk �
     assert.equal(typeof loaderMod.loadMermaid, 'function', 'mermaid-loader.ts 必须导出 loadMermaid')
     assert.equal(loadedChunks.length, 0, '导入 mermaid-loader 不得提前触发 chunk 加载')
 
-    // 首次调用 loadMermaid() 才通过 __helm_import_chunk 加载 mermaid.core 与共享 chunk
+    // 首次调用 loadMermaid() 才通过 __helmx_import_chunk 加载 mermaid.core 与共享 chunk
     const mermaid = await loaderMod.loadMermaid()
     assert.ok(loadedChunks.some((name) => name.includes('mermaid.core')), 'loadMermaid 必须按需触发 mermaid.core chunk 加载')
 
@@ -908,7 +908,7 @@ test('端到端执行：编译产物在 Node 环境通过 __helm_import_chunk �
     const pieResult = await mermaid.render('test-pie-render', 'pie title Pets\n"Dogs" : 386\n"Cats" : 85')
     assert.ok(pieResult.svg.includes('<svg'), 'Pie 图表渲染结果必须包含 <svg')
   } finally {
-    g.__helm_import_chunk = prevImportChunk
+    g.__helmx_import_chunk = prevImportChunk
     GlobalRegistrator.unregister()
   }
 })
@@ -972,14 +972,14 @@ test('loadMermaid 单例与并发去重、失败清除缓存后可重试', { tim
 test('MermaidCodeBlock 编译产物交互状态：加载态、chunk 失败后展示可恢复重试并成功恢复及 unmount stale 守卫', { timeout: 60_000 }, async () => {
   const result = await pluginHost.getClientModule('builtin:mermaid', 'index.tsx')
   const g = globalThis as Record<string, unknown>
-  const prevImportChunk = g.__helm_import_chunk
+  const prevImportChunk = g.__helmx_import_chunk
 
   let chunkCalls = 0
   let mode: 'fail' | 'succeed' | 'hang' = 'fail'
   let hangDeferred = deferred<{ default: unknown }>()
   let callDeferred = deferred<void>()
 
-  g.__helm_import_chunk = async () => {
+  g.__helmx_import_chunk = async () => {
     chunkCalls += 1
     const cur = callDeferred
     if (mode === 'fail') {
@@ -1001,7 +1001,7 @@ test('MermaidCodeBlock 编译产物交互状态：加载态、chunk 失败后展
     }
   }
 
-  // 必须在 import 编译产物之前挂载 __helm_shared_*（esbuild 顶层 __toESM 在模块求值时绑定）
+  // 必须在 import 编译产物之前挂载 __helmx_shared_*（esbuild 顶层 __toESM 在模块求值时绑定）
   const harness = createComponentHarness({
     language: 'mermaid',
     code: 'graph TD;\nRETRY-->TEST;',
@@ -1014,7 +1014,7 @@ test('MermaidCodeBlock 编译产物交互状态：加载态、chunk 失败后展
 
     // 1. 首次渲染呈现清晰加载态
     let tree = harness.render(mod.MermaidCodeBlock)
-    const loadingIcons = collectNodes(tree, (n) => n.type === harness.ui.HelmIcon && n.props.name === 'loader')
+    const loadingIcons = collectNodes(tree, (n) => n.type === harness.ui.HelmxIcon && n.props.name === 'loader')
     assert.ok(loadingIcons.length > 0, '加载期间应显示 loader 图标')
     assert.match(collectText(tree), /Rendering Mermaid diagram/)
 
@@ -1045,7 +1045,7 @@ test('MermaidCodeBlock 编译产物交互状态：加载态、chunk 失败后展
 
     await callDeferred.promise
     await waitFor(() => harness.getStateUpdates() > updatesAfterRetryStart)
-    assert.equal(chunkCalls, 2, '失败清除缓存后点击重试必须再次调用 __helm_import_chunk')
+    assert.equal(chunkCalls, 2, '失败清除缓存后点击重试必须再次调用 __helmx_import_chunk')
 
     tree = harness.render(mod.MermaidCodeBlock)
     const svgHost = collectNodes(
@@ -1092,7 +1092,7 @@ test('MermaidCodeBlock 编译产物交互状态：加载态、chunk 失败后展
     }
   } finally {
     harness.restore()
-    g.__helm_import_chunk = prevImportChunk
+    g.__helmx_import_chunk = prevImportChunk
   }
 })
 
@@ -1100,19 +1100,19 @@ test('MermaidPreviewModal 编译产物状态：独立按需加载 mermaid，失�
   const { GlobalRegistrator } = await import('@happy-dom/global-registrator')
   GlobalRegistrator.register()
   const g = globalThis as Record<string, unknown>
-  const prevImportChunk = g.__helm_import_chunk
+  const prevImportChunk = g.__helmx_import_chunk
 
   try {
     const modalResult = await pluginHost.getClientModule('builtin:mermaid', 'MermaidPreviewModal.tsx')
     assert.doesNotMatch(modalResult.code, /mermaidAPI|getRegisteredDiagramsMetadata/, '预览弹窗不得内联 mermaid 核心库')
-    assert.match(modalResult.code, /__helm_import_chunk/)
+    assert.match(modalResult.code, /__helmx_import_chunk/)
 
     let chunkCalls = 0
     let mode: 'fail' | 'succeed' | 'hang' = 'fail'
     let hangDeferred = deferred<{ default: unknown }>()
     let callDeferred = deferred<void>()
 
-    g.__helm_import_chunk = async () => {
+    g.__helmx_import_chunk = async () => {
       chunkCalls += 1
       const cur = callDeferred
       if (mode === 'fail') {
@@ -1217,7 +1217,7 @@ test('MermaidPreviewModal 编译产物状态：独立按需加载 mermaid，失�
       harness.restore()
     }
   } finally {
-    g.__helm_import_chunk = prevImportChunk
+    g.__helmx_import_chunk = prevImportChunk
     GlobalRegistrator.unregister()
   }
 })
@@ -1240,7 +1240,7 @@ test('HTTP Chunk 端点：200/gzip/immutable 缓存、304 协商、400 形状非
   assert.equal(res200.headers.get('content-encoding'), 'gzip')
   assert.equal(res200.headers.get('cache-control'), 'private, max-age=31536000, immutable')
   assert.equal(res200.headers.get('etag'), `"${contentHash}:${flowChunkName}"`)
-  assert.equal(res200.headers.get('x-helm-client-hash'), contentHash)
+  assert.equal(res200.headers.get('x-helmx-client-hash'), contentHash)
 
   const flowChunk = chunks[flowChunkName]
   assert.ok(flowChunk)
@@ -1313,15 +1313,15 @@ test('HTTP Chunk 端点：200/gzip/immutable 缓存、304 协商、400 形状非
 
   await assert.rejects(
     pluginHost.getClientModule('builtin:mermaid', 'index.tsx', { chunk: '../bad.js' }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_client_module',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_client_module',
   )
   await assert.rejects(
     pluginHost.getClientModule('builtin:mermaid', 'index.tsx', { chunk: flowChunkName, hash: 'badhash' }),
-    (err: unknown) => err instanceof HelmError && err.code === 'client_chunk_stale',
+    (err: unknown) => err instanceof HelmxError && err.code === 'client_chunk_stale',
   )
   await assert.rejects(
     pluginHost.getClientModule('builtin:mermaid', 'index.tsx', { chunk: 'missing.js' }),
-    (err: unknown) => err instanceof HelmError && err.code === 'client_chunk_not_found',
+    (err: unknown) => err instanceof HelmxError && err.code === 'client_chunk_not_found',
   )
 })
 
@@ -1369,7 +1369,7 @@ test('HTTP Chunk 304：只接受完整 chunk ETag，裸 contentHash 不匹配（
 })
 
 test('内存缓存 npm 依赖失效：受控 npm 依赖内容变化后不得永久返回旧 bundle', { timeout: 60_000 }, async () => {
-  const scratch = await mkdtemp(join(tmpdir(), 'helm-client-npm-mem-'))
+  const scratch = await mkdtemp(join(tmpdir(), 'helmx-client-npm-mem-'))
   try {
     // 构造受控 npm 根：packageRoot/node_modules/tiny-dep/index.js
     const npmRoot = join(scratch, 'host-pkg')
@@ -1404,7 +1404,7 @@ test('内存缓存 npm 依赖失效：受控 npm 依赖内容变化后不得永�
 })
 
 test('磁盘缓存 npm 依赖失效：跨进程重启后（清内存缓存）npm 依赖变化同样失效重编译', { timeout: 60_000 }, async () => {
-  const scratch = await mkdtemp(join(tmpdir(), 'helm-client-npm-disk-'))
+  const scratch = await mkdtemp(join(tmpdir(), 'helmx-client-npm-disk-'))
   try {
     const npmRoot = join(scratch, 'host-pkg')
     const depDir = join(npmRoot, 'node_modules', 'tiny-dep2')
@@ -1421,7 +1421,7 @@ test('磁盘缓存 npm 依赖失效：跨进程重启后（清内存缓存）npm
     const npmRoots = [{ specifiers: ['tiny-dep2'], packageRoot: npmRoot }]
     const first = await compilePluginClientModule('test:npm-disk', clientRoot, 'index.tsx', scratch, { npmRoots })
     // 模拟进程重启：清空内存缓存，磁盘清单复查路径生效
-    const { clearClientCompilerMemoryCache } = await import('@helm/plugin-build')
+    const { clearClientCompilerMemoryCache } = await import('@helmx/plugin-build')
     clearClientCompilerMemoryCache()
     const cached = await compilePluginClientModule('test:npm-disk', clientRoot, 'index.tsx', scratch, { npmRoots })
     assert.equal(cached.contentHash, first.contentHash, '未变化时磁盘缓存命中')
@@ -1435,7 +1435,7 @@ test('磁盘缓存 npm 依赖失效：跨进程重启后（清内存缓存）npm
 })
 
 test('共享 Chunk 桥导出完整性：default 表达式 / 再导出 / 字符串命名导出全部可达（非正则注册）', { timeout: 60_000 }, async () => {
-  const scratch = await mkdtemp(join(tmpdir(), 'helm-client-ns-bridge-'))
+  const scratch = await mkdtemp(join(tmpdir(), 'helmx-client-ns-bridge-'))
   try {
     const clientRoot = join(scratch, 'client-root')
     await mkdir(clientRoot, { recursive: true })
@@ -1473,7 +1473,7 @@ test('共享 Chunk 桥导出完整性：default 表达式 / 再导出 / 字符�
     // Node 环境执行产物：显式安装 chunk 桥（chunk 落盘于 scratch）
     installNodeChunkBridge([scratch])
     const g = globalThis as unknown as Record<string, unknown>
-    const shareBefore = g.__helm_chunk_share
+    const shareBefore = g.__helmx_chunk_share
     const mod = (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}`)) as {
       main: string
       loadLazy: () => Promise<string>
@@ -1481,7 +1481,7 @@ test('共享 Chunk 桥导出完整性：default 表达式 / 再导出 / 字符�
     try {
       assert.equal(mod.main, 'main:plain-v1')
       // 主模块求值后：baseClosure 共享表已登记且按 pluginId\0module\0hash\0chunk 隔离
-      const share = g.__helm_chunk_share as Record<string, unknown> | undefined
+      const share = g.__helmx_chunk_share as Record<string, unknown> | undefined
       assert.ok(share, '主模块求值后共享表已写入')
       const sharedKey = Object.keys(share ?? {}).find((k) => k.startsWith(`test:ns-bridge\0index.tsx\0${contentHash}\0`))
       assert.ok(sharedKey, '共享表 key 必须按 pluginId\0module\0hash\0chunk 隔离')
@@ -1494,7 +1494,7 @@ test('共享 Chunk 桥导出完整性：default 表达式 / 再导出 / 字符�
       const combined = await mod.loadLazy()
       assert.equal(combined, 'default-expr/plain-v1/bridge/plain-v1')
     } finally {
-      g.__helm_chunk_share = shareBefore
+      g.__helmx_chunk_share = shareBefore
     }
   } finally {
     await rm(scratch, { recursive: true, force: true })
@@ -1502,7 +1502,7 @@ test('共享 Chunk 桥导出完整性：default 表达式 / 再导出 / 字符�
 })
 
 test('两插件同源同 hash：停用 A 后 B 的 chunk 共享表条目不受影响，B 仍可加载渲染', { timeout: 60_000 }, async () => {
-  const scratch = await mkdtemp(join(tmpdir(), 'helm-client-iso-'))
+  const scratch = await mkdtemp(join(tmpdir(), 'helmx-client-iso-'))
   try {
     const clientRoot = join(scratch, 'client-root')
     await mkdir(clientRoot, { recursive: true })
@@ -1523,7 +1523,7 @@ test('两插件同源同 hash：停用 A 后 B 的 chunk 共享表条目不受�
     // Node 环境执行产物：显式安装 chunk 桥（两插件各自 cacheDir）
     installNodeChunkBridge([join(scratch, 'ca'), join(scratch, 'cb')])
     const g = globalThis as unknown as Record<string, unknown>
-    const shareBefore = g.__helm_chunk_share
+    const shareBefore = g.__helmx_chunk_share
     try {
       const evalMod = async (code: string): Promise<{ main: string; loadLazy: () => Promise<string> }> =>
         (await import(`data:text/javascript;base64,${Buffer.from(code).toString('base64')}#${Math.random()}`)) as never
@@ -1531,7 +1531,7 @@ test('两插件同源同 hash：停用 A 后 B 的 chunk 共享表条目不受�
       const modB = await evalMod(compileB.code)
       assert.equal(modA.main, 'iso-helper')
       assert.equal(modB.main, 'iso-helper')
-      const share = g.__helm_chunk_share as Record<string, unknown>
+      const share = g.__helmx_chunk_share as Record<string, unknown>
       const aKeys = Object.keys(share).filter((k) => k.startsWith('iso:pluginA\0'))
       const bKeys = Object.keys(share).filter((k) => k.startsWith('iso:pluginB\0'))
       assert.ok(aKeys.length > 0 && bKeys.length > 0, '同源同 hash 两插件各自登记共享表')
@@ -1543,7 +1543,7 @@ test('两插件同源同 hash：停用 A 后 B 的 chunk 共享表条目不受�
       const lazyB = await modB.loadLazy()
       assert.equal(lazyB, 'iso-default:iso-helper', '停用 A 后 B 的 chunk 仍可正常加载求值')
     } finally {
-      g.__helm_chunk_share = shareBefore
+      g.__helmx_chunk_share = shareBefore
     }
   } finally {
     await rm(scratch, { recursive: true, force: true })
@@ -1551,7 +1551,7 @@ test('两插件同源同 hash：停用 A 后 B 的 chunk 共享表条目不受�
 })
 
 test('主模块缓存命中不预读全部 chunk：磁盘路径惰性读盘，chunk 端点仍可按需返回', { timeout: 60_000 }, async () => {
-  const scratch = await mkdtemp(join(tmpdir(), 'helm-client-lazy-'))
+  const scratch = await mkdtemp(join(tmpdir(), 'helmx-client-lazy-'))
   try {
     const clientRoot = join(scratch, 'client-root')
     await mkdir(clientRoot, { recursive: true })
@@ -1567,7 +1567,7 @@ test('主模块缓存命中不预读全部 chunk：磁盘路径惰性读盘，ch
     const first = await compilePluginClientModule('test:lazy-chunks', clientRoot, 'index.tsx', scratch)
     assert.ok(Object.keys(first.chunks ?? {}).length > 0, '分包产物必须含异步 chunk')
     // 模拟进程重启（磁盘缓存路径）：主模块命中不预读 chunk 内容
-    const { clearClientCompilerMemoryCache } = await import('@helm/plugin-build')
+    const { clearClientCompilerMemoryCache } = await import('@helmx/plugin-build')
     clearClientCompilerMemoryCache()
     const mainHit = await compilePluginClientModule('test:lazy-chunks', clientRoot, 'index.tsx', scratch)
     assert.equal(mainHit.contentHash, first.contentHash)
@@ -1584,7 +1584,7 @@ test('主模块缓存命中不预读全部 chunk：磁盘路径惰性读盘，ch
     assert.equal(c2?.code, c1.code)
     // 产物语义完整：主模块 + 懒 chunk 真实求值可达
     const g = globalThis as unknown as Record<string, unknown>
-    const shareBefore = g.__helm_chunk_share
+    const shareBefore = g.__helmx_chunk_share
     try {
       const mod = (await import(`data:text/javascript;base64,${Buffer.from(mainHit.code).toString('base64')}#${Math.random()}`)) as {
         main: string
@@ -1593,7 +1593,7 @@ test('主模块缓存命中不预读全部 chunk：磁盘路径惰性读盘，ch
       assert.equal(mod.main, 'lazy-ok')
       assert.equal(await mod.loadLazy(), 'lazy-ok', '磁盘缓存路径产物端到端可执行')
     } finally {
-      g.__helm_chunk_share = shareBefore
+      g.__helmx_chunk_share = shareBefore
     }
   } finally {
     await rm(scratch, { recursive: true, force: true })
@@ -1601,7 +1601,7 @@ test('主模块缓存命中不预读全部 chunk：磁盘路径惰性读盘，ch
 })
 
 test('双轨 prebuiltClientDir：PluginHost 无 buildProvider 直接服务预编译主模块、chunk、CSS、gzip 与 stale hash', { timeout: 60_000 }, async () => {
-  const scratch = await mkdtemp(join(tmpdir(), 'helm-prebuilt-host-'))
+  const scratch = await mkdtemp(join(tmpdir(), 'helmx-prebuilt-host-'))
   try {
     const srcRoot = join(scratch, 'client-src')
     const outDir = join(scratch, PREBUILT_CLIENT_DIR_NAME)
@@ -1667,15 +1667,15 @@ test('双轨 prebuiltClientDir：PluginHost 无 buildProvider 直接服务预编
 
       await assert.rejects(
         () => host.getClientModule('test:prebuilt-only', 'index.tsx', { hash: 'stale-hash' }),
-        (err: unknown) => err instanceof HelmError && err.code === 'client_module_stale' && err.status === 409,
+        (err: unknown) => err instanceof HelmxError && err.code === 'client_module_stale' && err.status === 409,
       )
       await assert.rejects(
         () => host.getClientModule('test:prebuilt-only', 'index.tsx', { chunk: 'missing.js', hash: 'stale-hash' }),
-        (err: unknown) => err instanceof HelmError && err.code === 'client_chunk_stale' && err.status === 409,
+        (err: unknown) => err instanceof HelmxError && err.code === 'client_chunk_stale' && err.status === 409,
       )
       await assert.rejects(
         () => host.getClientModule('test:prebuilt-only', 'index.tsx', { chunk: 'missing.js', hash: expectedHash }),
-        (err: unknown) => err instanceof HelmError && err.code === 'client_chunk_not_found' && err.status === 404,
+        (err: unknown) => err instanceof HelmxError && err.code === 'client_chunk_not_found' && err.status === 404,
       )
     } finally {
       await host.dispose()
@@ -1686,7 +1686,7 @@ test('双轨 prebuiltClientDir：PluginHost 无 buildProvider 直接服务预编
 })
 
 test('损坏/缺失/符号链接逃逸的 dist-client 必须显式报错，绝不静默降级回 clientRoot', { timeout: 60_000 }, async () => {
-  const scratch = await mkdtemp(join(tmpdir(), 'helm-prebuilt-strict-'))
+  const scratch = await mkdtemp(join(tmpdir(), 'helmx-prebuilt-strict-'))
   try {
     const srcRoot = join(scratch, 'client-src')
     const outDir = join(scratch, PREBUILT_CLIENT_DIR_NAME)
@@ -1728,7 +1728,7 @@ test('损坏/缺失/符号链接逃逸的 dist-client 必须显式报错，绝�
             ctx.ui.screen({ id: 's', label: 'S', client: { module: 'index.tsx', export: 'MissingExport' } })
           },
         }),
-        (err: unknown) => err instanceof HelmError && err.code === 'invalid_client_export',
+        (err: unknown) => err instanceof HelmxError && err.code === 'invalid_client_export',
       )
     } finally {
       await h1.dispose()
@@ -1751,7 +1751,7 @@ test('损坏/缺失/符号链接逃逸的 dist-client 必须显式报错，绝�
             ctx.ui.screen({ id: 's', label: 'S', client: { module: 'index.tsx', export: 'GoodExport' } })
           },
         }),
-        (err: unknown) => err instanceof HelmError && err.code === 'prebuilt_client_invalid',
+        (err: unknown) => err instanceof HelmxError && err.code === 'prebuilt_client_invalid',
       )
     } finally {
       await h2.dispose()
@@ -1784,7 +1784,7 @@ test('损坏/缺失/符号链接逃逸的 dist-client 必须显式报错，绝�
             ctx.ui.screen({ id: 's', label: 'S', client: { module: 'index.tsx', export: 'GoodExport' } })
           },
         }),
-        (err: unknown) => err instanceof HelmError && err.code === 'client_module_out_of_root',
+        (err: unknown) => err instanceof HelmxError && err.code === 'client_module_out_of_root',
       )
     } finally {
       await h3.dispose()
@@ -1795,7 +1795,7 @@ test('损坏/缺失/符号链接逃逸的 dist-client 必须显式报错，绝�
 })
 
 test('外部插件 dist-client-only 分发：无源码无 node_modules 无 buildProvider 下 doctor/load/enable/serve 全通', { timeout: 60_000 }, async () => {
-  const scratch = await mkdtemp(join(tmpdir(), 'helm-ext-prebuilt-'))
+  const scratch = await mkdtemp(join(tmpdir(), 'helmx-ext-prebuilt-'))
   try {
     const buildSrc = join(scratch, 'author-client')
     await mkdir(buildSrc, { recursive: true })
@@ -1870,7 +1870,7 @@ test('builtin:mermaid 构建产物在无 node_modules/mermaid、无 client/、�
   assert.equal(devDef.prebuiltClientDir, undefined)
   assert.ok(devDef.clientRoot && devDef.npmDependencies?.mermaid)
 
-  const scratch = await mkdtemp(join(tmpdir(), 'helm-mermaid-dist-iso-'))
+  const scratch = await mkdtemp(join(tmpdir(), 'helmx-mermaid-dist-iso-'))
   try {
     // Stage ONLY dist/mermaid.js + dist/asset-paths.js + dist/mermaid/dist-client (no node_modules/mermaid, no client/).
     const { cp } = await import('node:fs/promises')
@@ -1878,9 +1878,9 @@ test('builtin:mermaid 构建产物在无 node_modules/mermaid、无 client/、�
     const isoPkg = join(scratch, 'pkg')
     const isoDist = join(isoPkg, 'dist')
     await mkdir(join(isoDist, 'mermaid'), { recursive: true })
-    await mkdir(join(isoPkg, 'node_modules', '@helm'), { recursive: true })
-    await symlink(join(pkgRoot, '../protocol'), join(isoPkg, 'node_modules', '@helm', 'protocol'))
-    await writeFile(join(isoPkg, 'package.json'), JSON.stringify({ name: '@helm/plugins', type: 'module' }))
+    await mkdir(join(isoPkg, 'node_modules', '@helmx'), { recursive: true })
+    await symlink(join(pkgRoot, '../protocol'), join(isoPkg, 'node_modules', '@helmx', 'protocol'))
+    await writeFile(join(isoPkg, 'package.json'), JSON.stringify({ name: '@helmx/plugins', type: 'module' }))
     await cp(join(pkgRoot, 'dist', 'mermaid.js'), join(isoDist, 'mermaid.js'))
     await cp(join(pkgRoot, 'dist', 'asset-paths.js'), join(isoDist, 'asset-paths.js'))
     await cp(

@@ -14,7 +14,7 @@ export interface SwitchProps {
 }
 
 /**
- * Minimal slide switch component (a common primitive in the restrained Helm style):
+ * Minimal slide switch component (a common primitive in the restrained Helmx style):
  * - Compact size (28px x 16px), smooth micro-animation movement;
  * - Full WAI-ARIA switch semantics and keyboard accessibility (Space / Enter toggles);
  * - Unified minimal design, no Emoji.
@@ -49,8 +49,8 @@ export function Switch({
     }
   }
 
-  const wrapClass = ['helm-switch-wrap', disabled && 'is-disabled', className].filter(Boolean).join(' ')
-  const buttonClass = ['helm-switch', checked && 'is-checked'].filter(Boolean).join(' ')
+  const wrapClass = ['helmx-switch-wrap', disabled && 'is-disabled', className].filter(Boolean).join(' ')
+  const buttonClass = ['helmx-switch', checked && 'is-checked'].filter(Boolean).join(' ')
 
   const switchButton = (
     <button
@@ -66,7 +66,7 @@ export function Switch({
       onKeyDown={handleKeyDown}
       title={title}
     >
-      <span className="helm-switch-thumb" />
+      <span className="helmx-switch-thumb" />
     </button>
   )
 
@@ -86,7 +86,7 @@ export function Switch({
       title={title}
     >
       {switchButton}
-      <span className="helm-switch-label">{label}</span>
+      <span className="helmx-switch-label">{label}</span>
     </label>
   )
 }

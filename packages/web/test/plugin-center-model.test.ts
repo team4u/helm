@@ -9,7 +9,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { PluginSummary } from '@helm/protocol'
+import type { PluginSummary } from '@helmx/protocol'
 import {
   filterPlugins,
   isPluginFailed,

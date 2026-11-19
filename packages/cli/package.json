@@ -1,12 +1,12 @@
 {
-  "name": "@helm/cli",
+  "name": "@helmx/cli",
   "private": true,
   "version": "0.1.0",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "helm": "./dist/index.js"
+    "helmx": "./dist/index.js"
   },
   "exports": {
     ".": {
@@ -19,12 +19,12 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@helm/env-io": "workspace:*",
-    "@helm/protocol": "workspace:*",
+    "@helmx/env-io": "workspace:*",
+    "@helmx/protocol": "workspace:*",
     "tar": "7.5.23"
   },
   "devDependencies": {
-    "@helm/plugin-build": "workspace:*",
-    "@helm/test-kit": "workspace:*"
+    "@helmx/plugin-build": "workspace:*",
+    "@helmx/test-kit": "workspace:*"
   }
 }

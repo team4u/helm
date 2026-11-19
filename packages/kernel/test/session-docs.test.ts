@@ -7,19 +7,19 @@
  *   handle expiration on disable / controlled stop window / shared doc vs sessionDoc namespace / 501 without store);
  * - `SessionDocEventHub` dedicated stream (initial snapshot / incremental updates / global stream isolation / abort cleanup);
  * - HTTP: `GET docs?conversationId`, dedicated SSE, 404 stop semantics;
- * - `HelmStore` session document persistence and cascade cleanup on conversation deletion (real sqlite).
+ * - `HelmxStore` session document persistence and cascade cleanup on conversation deletion (real sqlite).
  * runner: tsx --test; every test has explicit timeout: 60_000 to guard against deadlocks.
  */
 import test, { beforeEach, afterEach } from 'node:test'
 import assert from 'node:assert/strict'
-import { withTimeout } from '@helm/test-kit'
+import { withTimeout } from '@helmx/test-kit'
 import {
-  HelmError,
+  HelmxError,
   type PluginDefinition,
-  type HelmEventFrame,
+  type HelmxEventFrame,
   type SessionDocMultiplexFrame,
   type SessionDocSubscription,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import {
   PluginHost,
   type PluginDocStore,
@@ -29,9 +29,9 @@ import {
 import { PluginDocRegistry } from '../src/plugins/doc-registry.js'
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js'
 import { SessionDocEventHub } from '../src/runtime/events.js'
-import { openHelmDatabase } from '../src/runtime/sqlite.js'
-import { HelmStore } from '../src/runtime/store.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { openHelmxDatabase } from '../src/runtime/sqlite.js'
+import { HelmxStore } from '../src/runtime/store.js'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   MemoryDocStore,
   cleanupDir,
@@ -59,7 +59,7 @@ function makeHostApi(options: { existing: Set<number> } = { existing: new Set([1
     listConversations: () => [...options.existing].map((id) => makeConversation(id)),
     getConversation: (id) => {
       if (!options.existing.has(id)) {
-        throw new HelmError('not_found', `conversation missing: ${id}`, 404)
+        throw new HelmxError('not_found', `conversation missing: ${id}`, 404)
       }
       return makeConversation(id)
     },
@@ -71,13 +71,13 @@ function makeHostApi(options: { existing: Set<number> } = { existing: new Set([1
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
       return 'human'
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     execEnv: async () => {
-      throw new HelmError('unsupported', 'this fixture does not execute node commands', 501)
+      throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501)
     },
     emitEvent: (type, payload) => {
       events.push({ type, payload })
@@ -131,7 +131,7 @@ function makeHost(opts: { sessionDocs?: MemorySessionDocStore | null } = {}): Pl
 
 function throwsCode(fn: () => unknown, code: string, status?: number): void {
   assert.throws(fn, (err: unknown) => {
-    assert.ok(err instanceof HelmError, `expected HelmError, got: ${String(err)}`)
+    assert.ok(err instanceof HelmxError, `expected HelmxError, got: ${String(err)}`)
     assert.equal(err.code, code)
     if (status !== undefined) assert.equal(err.status, status)
     return true
@@ -139,7 +139,7 @@ function throwsCode(fn: () => unknown, code: string, status?: number): void {
 }
 
 beforeEach(async () => {
-  dataDir = await makeTempDir('helm-session-doc-test-')
+  dataDir = await makeTempDir('helmx-session-doc-test-')
   docs = new MemoryDocStore()
   sessionDocs = new MemorySessionDocStore()
   hostApi = makeHostApi()
@@ -193,7 +193,7 @@ test('invalid shapes reject explicitly: non-integer priority, reserved slash, mu
         ctx.ui.toolView({ id: 't', toolNames: ['bash'], priority: 1.5 })
       },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec',
   )
   await assert.rejects(
     host.register({
@@ -202,7 +202,7 @@ test('invalid shapes reject explicitly: non-integer priority, reserved slash, mu
         ctx.ui.command({ id: 'c', title: 'new chat', slash: 'new' })
       },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec',
   )
   await assert.rejects(
     host.register({
@@ -211,7 +211,7 @@ test('invalid shapes reject explicitly: non-integer priority, reserved slash, mu
         ctx.ui.command({ id: 'c', title: 'skill', slash: 'skill:foo' })
       },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec',
   )
   await assert.rejects(
     host.register({
@@ -220,7 +220,7 @@ test('invalid shapes reject explicitly: non-integer priority, reserved slash, mu
         ctx.ui.slot({ id: 's', target: 'a/b/c' })
       },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec',
   )
   await assert.rejects(
     host.register({
@@ -229,7 +229,7 @@ test('invalid shapes reject explicitly: non-integer priority, reserved slash, mu
         ctx.ui.action({ id: 'a', target: 'conversation:header', label: 'empty' })
       },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec',
   )
   await assert.rejects(
     host.register({
@@ -238,7 +238,7 @@ test('invalid shapes reject explicitly: non-integer priority, reserved slash, mu
         ctx.ui.action({ id: 'a', target: 'timeline:entry', label: 'broken role', actionId: 'x', roles: ['system'] as never })
       },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'invalid_ui_spec',
+    (err: unknown) => err instanceof HelmxError && err.code === 'invalid_ui_spec',
   )
 })
 
@@ -273,7 +273,7 @@ test('cross-plugin duplicate kind rejects explicitly at commit point; disabled p
         ctx.ui.profileRuntime({ id: 'r', kind: 'herdr', label: 'B' })
       },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'duplicate_profile_runtime_kind',
+    (err: unknown) => err instanceof HelmxError && err.code === 'duplicate_profile_runtime_kind',
   )
   // Disabled probe does not occupy names: enabled:false register with the same kind succeeds without affecting active plugin.
   await host.register(
@@ -310,7 +310,7 @@ test('disabled probe does not occupy names: enabling later still rejects conflic
   )
   await assert.rejects(
     host.enable('p:probe'),
-    (err: unknown) => err instanceof HelmError && err.code === 'duplicate_profile_runtime_kind',
+    (err: unknown) => err instanceof HelmxError && err.code === 'duplicate_profile_runtime_kind',
   )
   // After disabling p:a, probe plugin can enable cleanly (name released).
   await host.disable('p:a')
@@ -340,7 +340,7 @@ test('cross-plugin slash conflict rejects in both define phase and commit point'
         ctx.ui.command({ id: 'c', title: 'archiveB', slash: 'archive', actionId: 'x' })
       },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'duplicate_command_slash',
+    (err: unknown) => err instanceof HelmxError && err.code === 'duplicate_command_slash',
   )
 })
 
@@ -409,7 +409,7 @@ test('doc and sessionDoc share namespace against duplicate names; sessionDoc ret
         ctx.sessionDoc('shared', { b: 2 })
       },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'duplicate_doc',
+    (err: unknown) => err instanceof HelmxError && err.code === 'duplicate_doc',
   )
   const noStoreHost = makeHost({ sessionDocs: null })
   await assert.rejects(
@@ -419,7 +419,7 @@ test('doc and sessionDoc share namespace against duplicate names; sessionDoc ret
         ctx.sessionDoc('m', { a: 1 })
       },
     }),
-    (err: unknown) => err instanceof HelmError && err.code === 'session_doc_store_unavailable' && err.status === 501,
+    (err: unknown) => err instanceof HelmxError && err.code === 'session_doc_store_unavailable' && err.status === 501,
   )
 })
 
@@ -492,8 +492,8 @@ test('disabling plugin expires sessionDoc handle while re-enabling preserves per
 
 test('SessionDocEventHub: dispatch only notifies matching triple listeners and rejects invalid payloads without TypeError', { timeout: 60_000 }, () => {
   const hub = new SessionDocEventHub()
-  const frames: HelmEventFrame[] = []
-  const other: HelmEventFrame[] = []
+  const frames: HelmxEventFrame[] = []
+  const other: HelmxEventFrame[] = []
   const off = hub.subscribe({ pluginId: 'p:a', name: 'm', conversationId: 1 }, (f) => frames.push(f))
   const offOther = hub.subscribe({ pluginId: 'p:a', name: 'm', conversationId: 2 }, (f) => other.push(f))
   hub.dispatch({
@@ -626,11 +626,11 @@ test('SessionDocEventHub.response: synchronous snapshot provider failure cleans 
     () =>
       hub.response(new Request('http://x'), {
         snapshot: () => {
-          throw new HelmError('plugin_doc_not_found', 'plugin disabled', 404)
+          throw new HelmxError('plugin_doc_not_found', 'plugin disabled', 404)
         },
         target,
       }),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
   )
   assert.equal(hub.subscriberCount, 0, 'no leaked subscription after provider failure')
 })
@@ -719,14 +719,14 @@ test('SessionDocEventHub.response: emits initial snapshot followed by updates an
 })
 
 // ---------------------------------------------------------------------------
-// HelmStore durable layer (real sqlite)
+// HelmxStore durable layer (real sqlite)
 // ---------------------------------------------------------------------------
 
-test('HelmStore session document CRUD + cascade cleanup on conversation deletion (real sqlite)', { timeout: 60_000 }, async () => {
-  const dir = await makeTempDir('helm-store-sd-')
+test('HelmxStore session document CRUD + cascade cleanup on conversation deletion (real sqlite)', { timeout: 60_000 }, async () => {
+  const dir = await makeTempDir('helmx-store-sd-')
   try {
-    const db = await openHelmDatabase(dir)
-    const store = new HelmStore(db)
+    const db = await openHelmxDatabase(dir)
+    const store = new HelmxStore(db)
     await store.load()
     const now = Date.now()
     const meta = (id: number) => ({
@@ -762,7 +762,7 @@ test('HelmStore session document CRUD + cascade cleanup on conversation deletion
     assert.equal(store.getPluginSessionDoc('p:b', 'x', 1), undefined)
     await store.flushPublic()
     const rows = await db.db.all<{ conversation_id: number }>(
-      'SELECT conversation_id FROM helm_plugin_session_docs',
+      'SELECT conversation_id FROM helmx_plugin_session_docs',
     )
     assert.equal(rows.length, 0, 'no session doc rows remain in store after conversation deletion')
     // Invalid JSON rejected
@@ -774,12 +774,12 @@ test('HelmStore session document CRUD + cascade cleanup on conversation deletion
   }
 })
 
-test('HelmStore restores session documents after restart (real sqlite)', { timeout: 60_000 }, async () => {
-  const dir = await makeTempDir('helm-store-sd2-')
+test('HelmxStore restores session documents after restart (real sqlite)', { timeout: 60_000 }, async () => {
+  const dir = await makeTempDir('helmx-store-sd2-')
   try {
     {
-      const db = await openHelmDatabase(dir)
-      const store = new HelmStore(db)
+      const db = await openHelmxDatabase(dir)
+      const store = new HelmxStore(db)
       await store.load()
       const now = Date.now()
       store.upsertConv({
@@ -804,8 +804,8 @@ test('HelmStore restores session documents after restart (real sqlite)', { timeo
       await db.close()
     }
     {
-      const db = await openHelmDatabase(dir)
-      const store = new HelmStore(db)
+      const db = await openHelmxDatabase(dir)
+      const store = new HelmxStore(db)
       await store.load()
       assert.equal(store.getPluginSessionDoc('p:a', 'm', 3), '{"persisted":true}')
       await store.close()
@@ -894,14 +894,14 @@ test('SessionDocEventHub.multiplexResponse validates subscriptions, emits snapsh
 
   assert.throws(
     () => hub.multiplexResponse([], new Request('http://localhost/m'), { snapshot: () => ({ seq: 0, doc: { pluginId: 'p:a', name: 'runs', conversationId: 1, value: null } }) }),
-    (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
   )
   assert.throws(
     () =>
       hub.multiplexResponse([subA, { ...subA }], new Request('http://localhost/m'), {
         snapshot: () => ({ seq: 0, doc: { ...subA, value: null } }),
       }),
-    (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
   )
   assert.equal(hub.subscriberCount, 0)
 
@@ -989,11 +989,11 @@ test('SessionDocEventHub.multiplexResponse handles snapshot failure cleanup, kee
     () =>
       errHub.multiplexResponse([subA, subB], new Request('http://localhost/m'), {
         snapshot: (sub) => {
-          if (sub.pluginId === 'p:b') throw new HelmError('plugin_doc_not_found', 'missing doc', 404)
+          if (sub.pluginId === 'p:b') throw new HelmxError('plugin_doc_not_found', 'missing doc', 404)
           return { seq: 0, doc: { ...sub, value: {} } }
         },
       }),
-    (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+    (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
   )
   assert.equal(errHub.subscriberCount, 0)
 
@@ -1213,7 +1213,7 @@ test('durable: false on ctx.sessionDoc works without sessionStore, performs zero
     {
       sessionStore: spySessionStore,
       assertConversationExists: (cid) => {
-        if (!existing.has(cid)) throw new HelmError('not_found', 'missing', 404)
+        if (!existing.has(cid)) throw new HelmxError('not_found', 'missing', 404)
       },
       emitSessionDocUpdated: () => {},
       maxDocJsonBytes: 64,

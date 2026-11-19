@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import { isSkillAvailable, type SkillSummary } from '@helm/protocol'
+import { isSkillAvailable, type SkillSummary } from '@helmx/protocol'
 
 const ordinary: SkillSummary = { id: 'review', name: 'Review', references: [] }
 const managed: SkillSummary = { ...ordinary, managedByPlugin: 'community:review' }

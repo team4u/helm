@@ -1,14 +1,14 @@
 /**
  * 会话明细顶栏「更多操作」菜单的归档/恢复交互测试（真实 DOM + 真实 Provider）：
  * - 人类自有根会话：菜单显示「归档会话」，点击发送 tags PATCH（保留原 tags、
- *   幂等追加 helm:archived）；被归档的正是当前主屏目标时，SSE conversation.upsert
+ *   幂等追加 helmx:archived）；被归档的正是当前主屏目标时，SSE conversation.upsert
  *   迁移以 replace 跳到该智能体待命页（新建会话页，继承节点/目录）；
  * - 分屏目标被归档：分屏原地替换为待命页（与「新话题」分屏语义一致），主屏不动；
  * - 抽屉会话被归档：归档不删除会话，抽屉与主屏均不动；
  * - 归档非当前打开会话、恢复会话、迟到迁移事件（用户已切走）：一律不导航；
  * - 归档当前会话后，侧栏「已归档」折叠组保持收起，不自动展开；
- * - 已归档会话：菜单切换为「恢复会话」，PATCH 移除 helm:archived 且保留其他 tags；
- * - bot/helm 托管会话与子代理派生会话：菜单不渲染归档项（无归档资格）；
+ * - 已归档会话：菜单切换为「恢复会话」，PATCH 移除 helmx:archived 且保留其他 tags；
+ * - bot/helmx 托管会话与子代理派生会话：菜单不渲染归档项（无归档资格）；
  * - SSE conversation.upsert 推送新 tags 后，菜单动作随最新归档态切换。
  */
 import assert from 'node:assert/strict'
@@ -17,7 +17,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
 import type { ResolvedTarget } from '../src/lib/types.js'
 import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
@@ -27,8 +27,8 @@ Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
 const { ArchivedConversationsGroup } = await import('../src/shell/SidebarArchivedConversations.js')
-const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
-const { useHelmStore } = await import('../src/lib/store-context.js')
+const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
+const { useHelmxStore } = await import('../src/lib/store-context.js')
 const e = React.createElement
 const originalFetch = globalThis.fetch
 let root: Root | undefined
@@ -138,7 +138,7 @@ function installFetch(): void {
 }
 
 function App(): React.ReactNode {
-  const store = useHelmStore()
+  const store = useHelmxStore()
   observed = {
     primary: store.primaryTarget,
     split: store.splitTarget,
@@ -173,7 +173,7 @@ async function mount(hash: string): Promise<void> {
   installFetch()
   await act(async () => {
     root = createRoot(host!)
-    root.render(e(HelmStoreProvider, null, e(App)))
+    root.render(e(HelmxStoreProvider, null, e(App)))
   })
   await settle()
 }
@@ -260,7 +260,7 @@ function restoreHistorySpies(): void {
   originalReplaceState = undefined
 }
 
-test('明细菜单归档当前主屏会话：PATCH 追加 helm:archived，replace 跳到待命页', { timeout: 60_000 }, async () => {
+test('明细菜单归档当前主屏会话：PATCH 追加 helmx:archived，replace 跳到待命页', { timeout: 60_000 }, async () => {
   spyHistory()
   conversations = [summary(1, { tags: ['important'] })]
   await mount('#/c/1')
@@ -434,7 +434,7 @@ test('明细菜单归档资格：bot 托管与子代理派生会话不渲染归�
 
   window.history.replaceState(null, '', '#/c/2')
   await act(async () => {
-    root?.render(e(HelmStoreProvider, null, e(App)))
+    root?.render(e(HelmxStoreProvider, null, e(App)))
   })
   await settle()
   await openMenu()

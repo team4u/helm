@@ -5,8 +5,8 @@ import remarkGfm from 'remark-gfm'
 import remarkBreaks from 'remark-breaks'
 import { SyntaxCode } from './SyntaxCode.js'
 import type { CodeLineRange } from './syntax-code-model.js'
-import { CopyButton, HelmIcon, markdownUrlTransform, parseArtifactUrl } from '@helm/plugin-client'
-import type { MarkdownViewProps } from '@helm/plugin-client'
+import { CopyButton, HelmxIcon, markdownUrlTransform, parseArtifactUrl } from '@helmx/plugin-client'
+import type { MarkdownViewProps } from '@helmx/plugin-client'
 import { useConversationSummary, useStoreActions } from '../lib/store-context.js'
 import { LazyMount } from '../ui/LazyMount.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
@@ -34,7 +34,7 @@ const wholeDocumentBreaksRemarkPlugins = [remarkGfm, remarkBreaks, remarkHeading
  */
 const DeferWorkspaceMediaContext = createContext(false)
 
-/** 宿主标准 Markdown 渲染的 props 契约唯一真源在 @helm/plugin-client（本组件经宿主端口注入 SDK）。 */
+/** 宿主标准 Markdown 渲染的 props 契约唯一真源在 @helmx/plugin-client（本组件经宿主端口注入 SDK）。 */
 export type { MarkdownViewProps }
 
 /**
@@ -100,7 +100,7 @@ function InlineMediaView({ media, loading, label, onOpenPreview }: InlineMediaVi
   if (loading) {
     return (
       <span className="attachment-chip">
-        <HelmIcon name="loader" size={11} />
+        <HelmxIcon name="loader" size={11} />
         <span>{label}</span>
       </span>
     )
@@ -140,7 +140,7 @@ function InlineMediaView({ media, loading, label, onOpenPreview }: InlineMediaVi
       title={t('conv.attachment.clickToPreview', { label })}
       onClick={onOpenPreview}
     >
-      <HelmIcon name="file-text" size={11} />
+      <HelmxIcon name="file-text" size={11} />
       <span>{label}</span>
     </button>
   )
@@ -280,7 +280,7 @@ function WorkspaceMediaGate({
   if (defer) {
     return (
       <span className="attachment-chip">
-        <HelmIcon name="file-text" size={11} />
+        <HelmxIcon name="file-text" size={11} />
         <span>{label}</span>
       </span>
     )
@@ -291,7 +291,7 @@ function WorkspaceMediaGate({
       inline
       fallback={
         <span className="attachment-chip">
-          <HelmIcon name="file-text" size={11} />
+          <HelmxIcon name="file-text" size={11} />
           <span>{label}</span>
         </span>
       }
@@ -400,7 +400,7 @@ export const MarkdownView = memo(function MarkdownView({
               })
             }
           >
-            <HelmIcon name="file-text" size={11} />
+            <HelmxIcon name="file-text" size={11} />
             <span>{children}</span>
           </button>
         )
@@ -423,7 +423,7 @@ export const MarkdownView = memo(function MarkdownView({
                 })
               }
             >
-              <HelmIcon name="file-text" size={11} />
+              <HelmxIcon name="file-text" size={11} />
               <span>{children}</span>
             </button>
           )
@@ -447,7 +447,7 @@ export const MarkdownView = memo(function MarkdownView({
             inline
             fallback={
               <span className="attachment-chip">
-                <HelmIcon name="file-text" size={11} />
+                <HelmxIcon name="file-text" size={11} />
                 <span>{label}</span>
               </span>
             }
@@ -478,7 +478,7 @@ export const MarkdownView = memo(function MarkdownView({
         const label = alt || title || t('conv.attachment.disallowedFileLabel')
         return (
           <span className="attachment-chip">
-            <HelmIcon name="file-text" size={11} />
+            <HelmxIcon name="file-text" size={11} />
             <span>{label}</span>
           </span>
         )

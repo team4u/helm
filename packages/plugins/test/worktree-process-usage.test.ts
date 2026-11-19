@@ -25,7 +25,7 @@ import { execFileSync } from 'node:child_process'
 import { closeSync, existsSync, mkdtempSync, openSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createEnvFabric } from '../../kernel/src/env/fabric.js'
@@ -36,8 +36,8 @@ let rootDir: string
 let gitTemplate: GitTemplate
 
 before(() => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-wt-procusage-'))
-  gitTemplate = createGitTemplate('helm-wt-procusage-template-')
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-wt-procusage-'))
+  gitTemplate = createGitTemplate('helmx-wt-procusage-template-')
 })
 
 after(() => {
@@ -124,11 +124,11 @@ async function expectCleanupOkOrFailClosed(fn: () => Promise<{ removed: boolean 
     const cleaned = await fn()
     assert.equal(cleaned.removed, true)
   } catch (error) {
-    assert.ok(error instanceof HelmError, `应 HelmError（实得 ${String(error)}）`)
+    assert.ok(error instanceof HelmxError, `应 HelmxError（实得 ${String(error)}）`)
     assert.equal(
       error.code,
       'worktree_process_check_failed',
-      `可见性不完整时只能 fail-closed（实得 ${error.code}：${error instanceof HelmError ? error.message : ''}）`,
+      `可见性不完整时只能 fail-closed（实得 ${error.code}：${error instanceof HelmxError ? error.message : ''}）`,
     )
     const details = error.details as { diagnostics?: string[] }
     assert.ok((details?.diagnostics?.length ?? 0) > 0, 'fail-closed 必须携带不完整诊断')
@@ -152,7 +152,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id, force: true }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_process_check_failed')
           return true
         },
@@ -165,7 +165,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
         await assert.rejects(
           () => allocator.cleanup({ worktreeId: record.id, ...(force ? { force: true } : {}) }),
           (err: unknown) => {
-            assert.ok(err instanceof HelmError, `force=${force} 应抛 HelmError`)
+            assert.ok(err instanceof HelmxError, `force=${force} 应抛 HelmxError`)
             assert.equal(err.code, 'worktree_process_in_use', `force=${force} 均不可绕过（实得 ${err.code}）`)
             const details = err.details as { pids?: number[]; processes?: Array<{ pid: number; name?: string; source: string; path: string }>; nodeId?: string; path?: string }
             assert.ok(details!.pids!.includes(holder.pid), `details.pids 应含占用进程 ${holder.pid}（实得 ${JSON.stringify(details!.pids)}）`)
@@ -195,7 +195,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id, force: true }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_process_check_failed')
           return true
         },
@@ -209,7 +209,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id, force: true }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_process_in_use')
           const details = err.details as { processes?: Array<{ pid: number; source: string }> }
           const hit = details!.processes!.find((p) => p.pid === process.pid && p.source === 'fd')
@@ -236,7 +236,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     await assert.rejects(
       () => allocator.cleanup({ worktreeId: record.id }),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'worktree_dirty', 'ignored 文件保护必须保持（先于进程检查的脏保护不被削弱）')
         return true
       },
@@ -257,7 +257,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     const broken = new WorktreeAllocator({
       ...localPorts(),
       inspectPathUsage: async () => {
-        throw new HelmError('node_offline', '节点 remote-x 离线，无法建立 IPC 通道', 409)
+        throw new HelmxError('node_offline', '节点 remote-x 离线，无法建立 IPC 通道', 409)
       },
       docStore: {
         get<T>(key: string, initial: T): T {
@@ -272,7 +272,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     await assert.rejects(
       () => broken.cleanup({ worktreeId: record.id, force: true }),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'worktree_process_check_failed', '无法证明 0 占用时必须显式失败（不假称干净）')
         const details = err.details as { cause?: string }
         assert.ok(details!.cause!.includes('node_offline'), `诊断应含真实原因（实得 ${details!.cause}）`)
@@ -315,7 +315,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     await assert.rejects(
       () => incomplete.cleanup({ worktreeId: record.id, force: true }),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'worktree_process_check_failed', '不完整快照绝不能当 0 占用')
         const details = err.details as { diagnostics?: string[] }
         assert.ok(details!.diagnostics!.some((d) => d.includes('pid 999')), 'diagnostics 应如实携带')
@@ -338,7 +338,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     await assert.rejects(
       () => fabric.inspectPathUsage('local', record.path),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'path_usage_not_supported')
         assert.ok(err.message.includes('win32'), '错误应明示平台事实')
         return true
@@ -347,7 +347,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     await assert.rejects(
       () => allocator.cleanup({ worktreeId: record.id, force: true }),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'worktree_process_check_failed', '非 Linux 平台：不伪造 0 占用，显式拒绝清理')
         return true
       },
@@ -356,7 +356,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     await assert.rejects(
       () => fabric.inspectPathUsage('local', 'C:\\workspace\\repo'),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'path_usage_not_supported', '合法 Windows 路径应明确报告平台不支持')
         return true
       },
@@ -401,7 +401,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     }
     await assert.rejects(
       () => allocator.cleanup({ worktreeId: record.id, force: true }),
-      (err: unknown) => err instanceof HelmError && err.code === 'worktree_process_check_failed',
+      (err: unknown) => err instanceof HelmxError && err.code === 'worktree_process_check_failed',
     )
     assert.equal(calls, 3)
     assert.equal(existsSync(record.path), true)
@@ -424,7 +424,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     }
     await assert.rejects(
       () => allocator.cleanup({ worktreeId: record.id, force: true }),
-      (err: unknown) => err instanceof HelmError && err.code === 'worktree_process_in_use',
+      (err: unknown) => err instanceof HelmxError && err.code === 'worktree_process_in_use',
     )
     assert.equal(calls, 1)
     assert.equal(existsSync(record.path), true)
@@ -435,7 +435,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     await assert.rejects(
       () => fabric.inspectPathUsage('local', 'relative/x'),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'validation_error')
         return true
       },
@@ -443,7 +443,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     await assert.rejects(
       () => fabric.inspectPathUsage('local', '/a\u0000b'),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'validation_error')
         return true
       },
@@ -451,7 +451,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     await assert.rejects(
       () => fabric.inspectPathUsage('node-nope', '/wt'),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'node_offline', '未知/离线节点显式失败，绝不回退本机')
         return true
       },
@@ -478,7 +478,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     await assert.rejects(
       () => allocator.cleanup({ worktreeId: record.id, force: true, deleteBranch: true }),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'worktree_in_use')
         assert.equal(err.status, 409)
         assert.ok(err.message.includes('superagent group #7 @verifier'))
@@ -493,7 +493,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     if (!PROCESS_SCAN_ON) {
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id, force: true }),
-        (err: unknown) => err instanceof HelmError && err.code === 'worktree_process_check_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_process_check_failed',
       )
       return
     }
@@ -501,7 +501,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     try {
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id, force: true }),
-        (err: unknown) => err instanceof HelmError && err.code === 'worktree_process_in_use',
+        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_process_in_use',
       )
       assert.ok(procScans >= 1, '释放持久锁后应进入真实进程占用扫描')
     } finally {

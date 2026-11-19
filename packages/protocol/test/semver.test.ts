@@ -1,5 +1,5 @@
 /**
- * Strict SemVer contract (@helm/protocol/semver, the repo's single implementation):
+ * Strict SemVer contract (@helmx/protocol/semver, the repo's single implementation):
  * grammar checks, precedence comparison (release > prerelease / numeric <
  * alphanumeric / ASCII lexicographic / build metadata excluded), v-prefix
  * stripping, and explicit rejection of invalid input.
@@ -12,7 +12,7 @@ import {
   isStrictSemver,
   parseStrictSemver,
   stripSemverVPrefix,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 
 describe('isStrictSemver / parseStrictSemver', () => {
   const valid: readonly string[] = [

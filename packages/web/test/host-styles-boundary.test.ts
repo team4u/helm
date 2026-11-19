@@ -2,7 +2,7 @@
  * 宿主样式分片归属契约（静态结构断言，非属性值正则）：
  * `.status-dot` 通用状态灯词汇（base / working / blocked / done / error /
  * background + keyframes + prefers-reduced-motion）是宿主公共设计系统资产，
- * 被 @helm/plugin-client 的 StatusLight 共享，必须完整归属 primitives.css；
+ * 被 @helmx/plugin-client 的 StatusLight 共享，必须完整归属 primitives.css；
  * navigation.css 只允许保留导航专有覆盖（如 .agent-standing-group 的 6px 小点），
  * 避免「共享原语依赖导航私有样式」的架构漂移与级联回归。
  */
@@ -58,7 +58,7 @@ test('样式边界：navigation.css 仅保留导航专有状态点覆盖（agent
 })
 
 test('样式边界：StatusLight 统一外壳与 sr-only 文本归属 primitives.css（共享原语可用的公共资产）', { timeout: 60_000 }, () => {
-  for (const selector of ['.helm-status-light', '.helm-status-light .status-dot', '.helm-sr-only']) {
+  for (const selector of ['.helmx-status-light', '.helmx-status-light .status-dot', '.helmx-sr-only']) {
     assert.ok(ownsRule(primitives, selector), `primitives.css 应定义共享状态灯外壳规则 ${selector}`)
     assert.ok(!ownsRule(navigation, selector), `navigation.css 不得定义 ${selector}`)
   }

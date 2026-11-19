@@ -1,5 +1,5 @@
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
-import type { AgentGateResult, AskFieldOption, Profile, RpcResult } from '@helm/protocol'
+import type { AgentGateResult, AskFieldOption, Profile, RpcResult } from '@helmx/protocol'
 import type { BlockedSnapshotAnalysis } from './prompt-options.js'
 
 /** One server, selected consistently for commands, files and event subscriptions. */
@@ -36,7 +36,7 @@ export function targetNodeId(target: HerdrTarget | undefined): string | undefine
 export interface HerdrNodeChannel {
   /** Whether the node is online ('local' is always true). */
   isOnline(nodeId: string): boolean
-  /** Get the node's registered reachable Hub URL (if any; auto-injected as HELM_HUB_URL for remote panes). */
+  /** Get the node's registered reachable Hub URL (if any; auto-injected as HELMX_HUB_URL for remote panes). */
   getNodeHubUrl?(nodeId: string): string | undefined
   /**
    * The node's trusted platform report (NodeRegistry registration fact, e.g. 'linux' / 'win32';
@@ -119,7 +119,7 @@ export interface HerdrTransport {
 export interface HerdrPluginDependencies {
   profiles: { get(id: string): Promise<Profile | undefined> }
   /**
-   * External spawn environment variables: the target node's managed call-home set (managed HELM_*; by default no
+   * External spawn environment variables: the target node's managed call-home set (managed HELMX_*; by default no
    * parent-conversation stash secrets are carried -- minimal authorization for external panes).
    * nodeId is the actually chosen target node ('local' explicitly means local; never pass undefined for
    * kernel parent-conversation inheritance -- a parent bound to a remote node would mis-configure local panes onto the remote).
@@ -134,7 +134,7 @@ export interface HerdrPluginDependencies {
   ): Record<string, string>
   redact(text: string): string
   runLocalGate(command: string, options: { cwd?: string; conversationId?: number; signal?: AbortSignal; env?: Record<string, string> }): Promise<AgentGateResult>
-  /** Attachment artifact metadata resolution (incl. authorization checks; nonexistent/unauthorized throws HelmError). Optional injection. */
+  /** Attachment artifact metadata resolution (incl. authorization checks; nonexistent/unauthorized throws HelmxError). Optional injection. */
   getArtifact?: (
     id: string,
     conversationId: number,

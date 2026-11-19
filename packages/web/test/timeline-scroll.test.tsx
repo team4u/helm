@@ -4,7 +4,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helmx/protocol'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { ConversationTimeline } from '../src/conversation/ConversationTimeline.js'
@@ -114,7 +114,7 @@ function makeConv(id: number, overrides: Partial<ConversationSummary> = {}): Con
 }
 
 function humanEntry(id: string, text: string): ConversationEntry {
-  return { id, kind: 'helm.input', data: { id: `in-${id}`, text, origin: 'human' }, createdAt: 1000 }
+  return { id, kind: 'helmx.input', data: { id: `in-${id}`, text, origin: 'human' }, createdAt: 1000 }
 }
 
 function assistantEntry(id: string, text: string): ConversationEntry {
@@ -500,7 +500,7 @@ test('回到底部按钮：距底 <=240px 隐藏、>240px 浮现，带生成/未
   const btn = host!.querySelector<HTMLButtonElement>('.timeline-scroll-bottom-btn[aria-label="Back to bottom"]')
   assert.ok(btn !== null, '距底 >240px 应显示回到底部浮动按钮')
   assert.ok(btn.closest('.timeline-container') !== null && btn.closest('.timeline-scroll') === null, '应挂载在 .timeline-container 上而非滚走')
-  assert.ok(btn.querySelector('svg.lucide-arrow-down') !== null, '应渲染 HelmIcon arrow-down 矢量图标')
+  assert.ok(btn.querySelector('svg.lucide-arrow-down') !== null, '应渲染 HelmxIcon arrow-down 矢量图标')
   assert.ok(btn.querySelector('.timeline-scroll-bottom-dot') === null, 'idle 且无新增内容时不显示活动点')
 
   // 脱离贴底期间收到新内容推送（并即使随后恢复 idle）：持续保留未读活动点
@@ -598,7 +598,7 @@ test('SWR 静默替换：贴底用户保持贴底，已上滑用户维持 scroll
     mockB.setHeight(2300)
     const triggerEntry: ConversationEntry = {
       id: '6',
-      kind: 'helm.input',
+      kind: 'helmx.input',
       data: { id: 'in-trig-6', text: '后台触发任务', origin: 'trigger' },
       createdAt: 2000,
     }

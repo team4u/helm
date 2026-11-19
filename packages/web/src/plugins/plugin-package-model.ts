@@ -5,7 +5,7 @@
  * doctor 结构化检查结果的展示条目化、HTTP 错误诊断文案。
  * 仅做前端输入引导；最终解析与校验由 Hub 安装器裁决。
  */
-import type { HelmLocale, PluginDoctorReport, PluginPackageSource } from '@helm/protocol/browser'
+import type { HelmxLocale, PluginDoctorReport, PluginPackageSource } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 /** 安装来源的本地识别结果（仅用于输入引导与安全提示，不预判服务端行为）。 */
@@ -69,13 +69,13 @@ export function pluginSourceBadgeLabel(
   return t('plugins.package.sourceBadge.local')
 }
 
-/** 推导受管来源的完整展示文本（如 `npm:helm-plugin-foo@^1.2.0`、`https://…#dev`）。 */
+/** 推导受管来源的完整展示文本（如 `npm:helmx-plugin-foo@^1.2.0`、`https://…#dev`）。 */
 export function pluginSourceDisplayText(source: PluginPackageSource): string {
   return source.raw
 }
 
 /** 格式化安装时间为可读本地时间串；非法值回退空串。 */
-export function formatInstalledAt(ms: number, locale?: HelmLocale): string {
+export function formatInstalledAt(ms: number, locale?: HelmxLocale): string {
   if (!Number.isFinite(ms) || ms <= 0) return ''
   try {
     return locale !== undefined ? new Date(ms).toLocaleString(locale) : new Date(ms).toLocaleString()
@@ -143,7 +143,7 @@ export function pluginPackageErrorText(
  * 从安装失败错误中提取 doctor 报告并做形状校验，无有效报告时返回 null（绝不编造）。
  *
  * 真实 Hub 安装预检失败（422 plugin_package_doctor_failed）把完整报告放在
- * HelmError.details.report，经 HTTP 错误信封到达 ApiClientError.details.report；
+ * HelmxError.details.report，经 HTTP 错误信封到达 ApiClientError.details.report；
  * 除此之外的挂载位置一概不认。
  */
 export function extractDoctorReport(err: unknown): PluginDoctorReport | null {

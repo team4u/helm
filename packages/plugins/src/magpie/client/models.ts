@@ -6,7 +6,7 @@
  * parsing is lenient: when the doc has not arrived we return safe defaults
  * instead of fabricating data.
  */
-import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/plugin-client'
+import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/plugin-client'
 import { magpieBoolLabel } from './copy.ts'
 
 /** Display field subset of MagpieStatusDoc. */
@@ -58,7 +58,7 @@ export function parseStatus(doc: MagpieStatusView | undefined): MagpieStatusView
 }
 
 /** Boolean display: yes / no (resolved against the given locale, defaults to en). */
-export function boolLabel(value: boolean, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function boolLabel(value: boolean, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return magpieBoolLabel(value, locale)
 }
 

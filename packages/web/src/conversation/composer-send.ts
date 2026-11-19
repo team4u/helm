@@ -19,7 +19,7 @@
  * .ts Fast Refresh rule.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { ConversationAttachmentRef, ConversationSummary, QueuedConversationInput, WhenBusy } from '@helm/protocol/browser'
+import type { ConversationAttachmentRef, ConversationSummary, QueuedConversationInput, WhenBusy } from '@helmx/protocol/browser'
 import { conversationsApi } from '../lib/api.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import {
@@ -30,7 +30,7 @@ import {
   type QualifiedCommand,
 } from '../lib/commands-model.js'
 import { useOptionalLocale, useStoreActions } from '../lib/store-context.js'
-import { DEFAULT_HELM_LOCALE } from '@helm/protocol/browser'
+import { DEFAULT_HELMX_LOCALE } from '@helmx/protocol/browser'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { clearComposerDirty, setComposerDirty, type ComposerDirtySnapshot } from './composer-dirty.js'
 import type { ConversationDirtySink } from './conversation-window-model.js'
@@ -138,7 +138,7 @@ export interface ComposerSendApi {
 export function useComposerSend(input: ComposerSendInput, t: WebMessageTranslator = englishWebTranslator): ComposerSendApi {
   const { conversation, prefill, onSendingChange, onNewThread, textareaRef, slashPluginCommands, envConfigurable, working, dirtyKey, dirtySink } = input
   const { invokePluginAction, pushNotice } = useStoreActions()
-  const locale = useOptionalLocale() ?? DEFAULT_HELM_LOCALE
+  const locale = useOptionalLocale() ?? DEFAULT_HELMX_LOCALE
   const [text, setText] = useState('')
   const [attachments, setAttachments] = useState<PendingAttachment[]>([])
   const [editingEntryId, setEditingEntryId] = useState<number | null>(null)

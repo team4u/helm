@@ -13,7 +13,7 @@
  * .ts Fast Refresh rule.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
-import type { ComposerCompleterSpec, ComposerCompletionItem, ConversationSummary } from '@helm/protocol/browser'
+import type { ComposerCompleterSpec, ComposerCompletionItem, ConversationSummary } from '@helmx/protocol/browser'
 import {
   useCatalogActions,
   useLoadErrorsMap,

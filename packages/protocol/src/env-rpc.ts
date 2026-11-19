@@ -95,7 +95,7 @@ export interface NodeIssuedToken {
   createdAt: number
 }
 
-/** `helm-node connect` input. */
+/** `helmx-node connect` input. */
 export interface NodeConnectInput {
   hubUrl: string
   token: string
@@ -257,7 +257,7 @@ export interface NodePathUsageProcess {
  * cannot read them; any non-root scanner hits this), which no longer sets
  * `complete=false` regardless of uid; instead it is counted into `unobservable`
  * and presented truthfully in `diagnostics` — ordinary dumpable processes
- * sharing the Hub's uid (subagents/git/shells spawned by helm itself) remain
+ * sharing the Hub's uid (subagents/git/shells spawned by helmx itself) remain
  * always observable, so the protection surface is unaffected; the consumer's
  * fail-closed discipline is unchanged. The snapshot is a one-shot pre-deletion
  * observation: processes started after the scan are outside the protection
@@ -403,7 +403,7 @@ export interface NodeIpcClosedEvent {
   error?: string
 }
 
-/** Remote function set implemented on the node side (`@helm/node`) and called by the Hub side (`@helm/kernel`). */
+/** Remote function set implemented on the node side (`@helmx/node`) and called by the Hub side (`@helmx/kernel`). */
 export interface NodeEnvRpcFunctions {
   envAbsolutePath(input: { path: string; cwd?: string }): Promise<RpcResult<string>>
   envJoinPath(input: { parts: string[]; cwd?: string }): Promise<RpcResult<string>>

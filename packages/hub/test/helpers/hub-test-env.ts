@@ -1,25 +1,25 @@
 /**
- * Hub 集成测试共享环境与 fixture 辅助，复用 `@helm/test-kit` 原语。
+ * Hub 集成测试共享环境与 fixture 辅助，复用 `@helmx/test-kit` 原语。
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import type { Harness } from '@earendil-works/pi-durable'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   makeConversationSummary,
   sleep,
   waitFor,
-} from '@helm/test-kit'
-import { createGitTemplate, type GitTemplate } from '@helm/test-kit/git'
-import { cleanupDir, makeTempDir, useTempDir } from '@helm/test-kit/node'
+} from '@helmx/test-kit'
+import { createGitTemplate, type GitTemplate } from '@helmx/test-kit/git'
+import { cleanupDir, makeTempDir, useTempDir } from '@helmx/test-kit/node'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createHubHandler, startHub } from '../../../kernel/src/http/index.js'
 import type { PluginConfigStore, PluginDocStore } from '../../../kernel/src/plugins/index.js'
-import { createHelm, type HelmOptions } from '../../src/app.js'
+import { createHelmx, type HelmxOptions } from '../../src/app.js'
 
 export {
   cleanupDir,
@@ -52,13 +52,13 @@ export function makeFauxModels(options?: FauxProviderOptions): {
   return { models, faux }
 }
 
-export type HubTestApp = Awaited<ReturnType<typeof createHelm>>
+export type HubTestApp = Awaited<ReturnType<typeof createHelmx>>
 
-export interface CreateHubTestAppOptions extends HelmOptions {
+export interface CreateHubTestAppOptions extends HelmxOptions {
   fauxOptions?: FauxProviderOptions
 }
 
-/** 启动挂载 faux provider 的真实 `createHelm` 实例（默认使用 `providers`，传 `models` 时回退外部 Models 实例）。 */
+/** 启动挂载 faux provider 的真实 `createHelmx` 实例（默认使用 `providers`，传 `models` 时回退外部 Models 实例）。 */
 export async function createHubTestApp(options: CreateHubTestAppOptions = {}): Promise<{
   app: HubTestApp
   kernel: HubTestApp['kernel']
@@ -67,7 +67,7 @@ export async function createHubTestApp(options: CreateHubTestAppOptions = {}): P
 }> {
   const { fauxOptions, models: providedModels, providers: providedProviders, buildProvider, model, ...rest } = options
   const faux = makeFauxProvider(fauxOptions)
-  const app = await createHelm({
+  const app = await createHelmx({
     buildProvider: buildProvider ?? createPluginBuildProvider(),
     model: model ?? 'faux/faux-1',
     ...(providedModels !== undefined
@@ -101,12 +101,12 @@ export interface OpenHubTestEnvOptions extends CreateHubTestAppOptions {
 }
 
 /**
- * 创建自带临时 `dataDir`（若未显式提供）的真实 `createHelm` 环境。
+ * 创建自带临时 `dataDir`（若未显式提供）的真实 `createHelmx` 环境。
  * 仅当目录由本函数自建时，`close` 才会递归清理该目录。
  */
 export async function openHubTestEnv(options: OpenHubTestEnvOptions = {}): Promise<HubTestEnv> {
   const {
-    prefix = 'helm-hub-test-',
+    prefix = 'helmx-hub-test-',
     dataDir: givenDataDir,
     cwd,
     swallowCloseError = false,
@@ -354,7 +354,7 @@ export async function sdkEntrySummaries(
           .map((b) => b.text as string)
           .join('\n')
       }
-      if (raw.kind === 'helm.input') {
+      if (raw.kind === 'helmx.input') {
         const data = raw.data as { text?: unknown } | undefined
         if (typeof data?.text === 'string') text = data.text
       }
@@ -384,7 +384,7 @@ export class MemoryDocStore implements PluginDocStore {
   async flush(): Promise<void> {}
 }
 
-/** 内存插件配置存储桩（支持 null 删除语义，与 `HelmPluginConfigStore` 一致）。 */
+/** 内存插件配置存储桩（支持 null 删除语义，与 `HelmxPluginConfigStore` 一致）。 */
 export class MemoryConfigStore implements PluginConfigStore {
   store = new Map<string, Record<string, unknown>>()
   get(pluginId: string): Record<string, unknown> {

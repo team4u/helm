@@ -52,7 +52,7 @@ function handleServiceWorkerMessage(event: Event): void {
   const data = (event as MessageEvent<unknown>).data
   if (typeof data !== 'object' || data === null) return
   const payload = data as { type?: unknown; url?: unknown; clickId?: unknown }
-  if (payload.type !== 'helm:notification-click') return
+  if (payload.type !== 'helmx:notification-click') return
 
   const clickId = typeof payload.clickId === 'string' && payload.clickId !== '' ? payload.clickId : undefined
   const handler = clickId !== undefined ? clickHandlers.get(clickId) : undefined
@@ -85,7 +85,7 @@ function ensureServiceWorkerMessageListener(container: ServiceWorkerContainer): 
 }
 
 function registerClickHandler(onClick: () => void): string {
-  const clickId = `helm-click-${++clickIdSeq}`
+  const clickId = `helmx-click-${++clickIdSeq}`
   clickHandlers.set(clickId, onClick)
   while (clickHandlers.size > MAX_CLICK_HANDLERS) {
     const oldestKey = clickHandlers.keys().next().value

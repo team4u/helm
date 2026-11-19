@@ -4,7 +4,7 @@
  * Responsibilities:
  * - Register the pi-ai dynamic-catalog Provider via ctx.provider (mounted by the host before
  *   service.start, unregistered after service.stop -- never hand-mounted around the host inside the plugin);
- * - The public status doc drives the settings.panel / commandPalette and the `helm magpie status`
+ * - The public status doc drives the settings.panel / commandPalette and the `helmx magpie status`
  *   CLI; the action bus provides refresh / quota / groups / group;
  * - After turn_settled, silently refresh quotas and routing in the background (?kept=1; asks no vendor, blocks no turn).
  *
@@ -24,7 +24,7 @@
  */
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import { HelmError, type PluginDefinition, type TurnSettledPayload } from '@helm/protocol'
+import { HelmxError, type PluginDefinition, type TurnSettledPayload } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import {
   DEFAULT_MAGPIE_ROOT,
@@ -81,7 +81,7 @@ const REFRESH_OUTPUT_SCHEMA = {
   additionalProperties: false,
 } as const
 
-// Note: on refresh-action failure, throw HelmError explicitly (no degraded result returned); on success,
+// Note: on refresh-action failure, throw HelmxError explicitly (no degraded result returned); on success,
 // reasons why quotas / traces are unavailable live in the status doc diagnostics, readable via the status action.
 
 const QUOTA_OUTPUT_SCHEMA = {
@@ -388,7 +388,7 @@ export function createMagpiePlugin(): PluginDefinition {
         })
       })
 
-      // ---- Action bus (HTTP / helm magpie <action> / run_action / Workflow) ----
+      // ---- Action bus (HTTP / helmx magpie <action> / run_action / Workflow) ----
       ctx.action({
         id: 'status',
         description: 'Magpie gateway status snapshot (reachability, model count, quotas, routing traces)',
@@ -432,7 +432,7 @@ export function createMagpiePlugin(): PluginDefinition {
           const error = result.errors['magpie']
           publishCatalogStatus(snapshot, error === undefined, error)
           if (error !== undefined) {
-            throw new HelmError(
+            throw new HelmxError(
               'magpie_gateway_unreachable',
               `Magpie gateway ${snapshot.root} refresh failed: ${sanitizeErrorText(error)}`,
               502,
@@ -472,7 +472,7 @@ export function createMagpiePlugin(): PluginDefinition {
               ...(snapshot.local ? {} : { note: 'non-local gateway: only quotas reported by that gateway itself are readable' }),
             }
           } catch (error) {
-            throw new HelmError(
+            throw new HelmxError(
               'magpie_gateway_unreachable',
               `Magpie gateway ${snapshot.root} quota read failed: ${sanitizeErrorText(error)}`,
               502,
@@ -585,7 +585,7 @@ export function createMagpiePlugin(): PluginDefinition {
             // Honesty: never fabricate when a remote gateway has no definition source -- the source label says so.
             const source = definition !== undefined ? 'cli+trace' : 'gateway-trace'
             if (definition === undefined && lastRoute === undefined) {
-              throw new HelmError(
+              throw new HelmxError(
                 'magpie_group_not_found',
                 `routing group ${input.id} has no available information: ${
                   cliTrusted

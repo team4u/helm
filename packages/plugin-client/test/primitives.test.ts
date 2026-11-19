@@ -1,12 +1,12 @@
 /**
- * @helm/plugin-client lightweight layout primitive tests (real React SSR
+ * @helmx/plugin-client lightweight layout primitive tests (real React SSR
  * renderToString):
  * - Screen / ScreenSection / DataTable / KvGrid are really exported from the
  *   shared SDK and bidirectionally locked against the protocol
  *   PLUGIN_CLIENT_SHARED_EXPORTS single manifest (every listed symbol actually
  *   exists at runtime);
  * - SSR safe: renderToString renders directly, no Portal, no browser side effects;
- * - Host generic classes are reused (.screen-container / .helm-table-wrap /
+ * - Host generic classes are reused (.screen-container / .helmx-table-wrap /
  *   .kv-grid etc.), no new CSS theme;
  * - DataTable unifies the loading / empty placeholders (role=status /
  *   .table-empty); the data state passes children through.
@@ -17,8 +17,8 @@ import { Window } from 'happy-dom'
 import * as React from 'react'
 import { Fragment } from 'react'
 import { renderToString } from 'react-dom/server'
-import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helm/protocol'
-import * as HelmPluginClient from '../src/index.js'
+import { PLUGIN_CLIENT_SHARED_EXPORTS } from '@helmx/protocol'
+import * as HelmxPluginClient from '../src/index.js'
 import { Screen, ScreenSection, DataTable, KvGrid } from '../src/primitives.js'
 import { StatusLight } from '../src/ui/StatusLight.js'
 import { normalizeStatusLightTone, statusLightDotClass } from '../src/ui/status-light-model.js'
@@ -32,11 +32,11 @@ test('layout primitives are in the shared SDK and the protocol manifest, and eve
       (PLUGIN_CLIENT_SHARED_EXPORTS as readonly string[]).includes(name),
       `PLUGIN_CLIENT_SHARED_EXPORTS must include ${name}`,
     )
-    assert.equal(typeof HelmPluginClient[name as keyof typeof HelmPluginClient], 'function', `the shared SDK must really export ${name}`)
+    assert.equal(typeof HelmxPluginClient[name as keyof typeof HelmxPluginClient], 'function', `the shared SDK must really export ${name}`)
   }
   // Every manifest symbol really exists in the SDK runtime namespace (guards
   // against manifest/implementation drift).
-  const exportedNames = new Set(Object.keys(HelmPluginClient))
+  const exportedNames = new Set(Object.keys(HelmxPluginClient))
   for (const name of PLUGIN_CLIENT_SHARED_EXPORTS) {
     assert.ok(exportedNames.has(name), `the shared SDK is missing manifest symbol ${name} (PLUGIN_CLIENT_SHARED_EXPORTS drifted from the implementation)`)
   }
@@ -130,8 +130,8 @@ test('DataTable: the loading state renders the unified loading row (role=status)
       children: e('thead', null, e('tr', null, e('th', null, 'a'))),
     }),
   )
-  assert.match(html, /helm-table-wrap/)
-  assert.match(html, /helm-table/)
+  assert.match(html, /helmx-table-wrap/)
+  assert.match(html, /helmx-table/)
   assert.match(html, /loading-state/)
   assert.match(html, /role="status"/)
   assert.match(html, /Loading rows…/)
@@ -204,37 +204,37 @@ test('KvGrid: items render as paired kv-grid direct children by key/value', { ti
 
 test('StatusLight: renders dot-only; the label is a screen-reader accessible name, never visible text', { timeout: 60_000 }, () => {
   const html = renderToString(e(StatusLight, { status: 'running', label: 'Running' }))
-  assert.match(html, /helm-status-light helm-status-light-working/)
+  assert.match(html, /helmx-status-light helmx-status-light-working/)
   assert.match(html, /status-dot status-dot-working/)
   assert.equal((html.match(/status-dot /g) ?? []).length, 1, 'exactly one dot')
   // Accessible name: role=img + aria-label + sr-only text (no visible label node, no width cost).
   assert.match(html, /role="img"/)
   assert.match(html, /aria-label="Running"/)
-  assert.match(html, /helm-sr-only">Running</)
-  assert.doesNotMatch(html, /helm-status-light-label/, 'no visible label element')
+  assert.match(html, /helmx-sr-only">Running</)
+  assert.doesNotMatch(html, /helmx-status-light-label/, 'no visible label element')
 })
 
 test('StatusLight: settled and neutral tones map honestly (completed/aborted/skipped/offline/unknown)', { timeout: 60_000 }, () => {
-  assert.match(renderToString(e(StatusLight, { status: 'completed' })), /helm-status-light-done/)
+  assert.match(renderToString(e(StatusLight, { status: 'completed' })), /helmx-status-light-done/)
   assert.match(renderToString(e(StatusLight, { status: 'error' })), /status-dot-error/)
   // Aborted is NOT the plain gray idle dot: it keeps the dedicated diamond class.
   const aborted = renderToString(e(StatusLight, { status: 'aborted', label: 'Aborted' }))
   assert.match(aborted, /status-dot-aborted/)
-  assert.doesNotMatch(aborted, /helm-status-light-idle/)
+  assert.doesNotMatch(aborted, /helmx-status-light-idle/)
   assert.match(renderToString(e(StatusLight, { status: 'skipped' })), /status-dot-pending/)
-  assert.match(renderToString(e(StatusLight, { status: 'offline' })), /helm-status-light-idle/)
+  assert.match(renderToString(e(StatusLight, { status: 'offline' })), /helmx-status-light-idle/)
   // Unknown statuses never fabricate a done/failed verdict.
-  assert.match(renderToString(e(StatusLight, { status: 'weird-state' })), /helm-status-light-pending/)
+  assert.match(renderToString(e(StatusLight, { status: 'weird-state' })), /helmx-status-light-pending/)
 })
 
 test('StatusLight: without a label the raw status word becomes the accessible-name fallback; extra className is appended; non-string labels keep the sr-only text', { timeout: 60_000 }, () => {
   const html = renderToString(e(StatusLight, { status: 'blocked', className: 'tray-status' }))
-  assert.match(html, /helm-status-light helm-status-light-blocked tray-status/)
+  assert.match(html, /helmx-status-light helmx-status-light-blocked tray-status/)
   assert.match(html, /status-dot status-dot-blocked/)
   assert.match(html, /aria-label="blocked"/, 'role=img never ends up nameless: raw status fallback')
-  assert.doesNotMatch(html, /helm-sr-only/, 'no sr-only node without an explicit label')
+  assert.doesNotMatch(html, /helmx-sr-only/, 'no sr-only node without an explicit label')
   const richLabel = renderToString(e(StatusLight, { status: 'done', label: e('em', undefined, 'Done') }))
-  assert.match(richLabel, /helm-sr-only"><em[^>]*>Done<\/em>/, 'ReactNode labels render as sr-only content')
+  assert.match(richLabel, /helmx-sr-only"><em[^>]*>Done<\/em>/, 'ReactNode labels render as sr-only content')
   assert.equal(typeof normalizeStatusLightTone, 'function')
   assert.equal(statusLightDotClass('failed'), 'status-dot status-dot-error')
 })

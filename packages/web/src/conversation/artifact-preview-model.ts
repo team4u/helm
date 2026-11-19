@@ -1,13 +1,13 @@
 /**
  * artifact.previewer 纯逻辑：宿主侧产物预览贡献匹配与稳定排序（无组件导出）。
  *
- * 契约（@helm/protocol ui.ts）：
+ * 契约（@helmx/protocol ui.ts）：
  * - mimeTypes：MIME 精确值或 type/* 通配；extensions：含点号小写后缀（含多段后缀）；
  *   两类匹配取 OR；都省略 = 声明接管全部产物；
  * - scope：需宿主已加载真实会话元数据才命中（无会话上下文不可泛命中）；
  * - 排序：priority 降序 -> 贡献顺序稳定。
  */
-import type { ArtifactPreviewerSpec, ConversationSummary } from '@helm/protocol/browser'
+import type { ArtifactPreviewerSpec, ConversationSummary } from '@helmx/protocol/browser'
 import { matchesUiScope, type QualifiedUiSpec } from '../lib/types.js'
 
 export type ArtifactPreviewerContribution = QualifiedUiSpec<ArtifactPreviewerSpec>

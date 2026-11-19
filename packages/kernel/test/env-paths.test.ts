@@ -31,11 +31,11 @@ import {
   resolveTargetPath,
   targetPathShape,
 } from '../src/runtime/tools.js'
-import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
+import type { HelmxToolDeps } from '../src/runtime/tool-deps.js'
 import type { EnvFabric } from '../src/env/index.js'
 import { composeExecutionEnv } from '../src/env/scoped-env.js'
 import { createLocalExecutionEnv } from '../src/env/local-host-env.js'
-import type { ShellProbeIo } from '@helm/env-io'
+import type { ShellProbeIo } from '@helmx/env-io'
 
 /** Recording ExecutionEnv: captures exact paths and Context passed in, never faking results. */
 interface RecordedCall {
@@ -129,7 +129,7 @@ function makeStubFabric(env: ReturnType<typeof makeRecordingEnv>['env']): EnvFab
   } as never
 }
 
-async function makeDeps(dir: string, options: { envFabric?: EnvFabric; nodeIdOf?: (id: number) => string } = {}): Promise<HelmToolDeps> {
+async function makeDeps(dir: string, options: { envFabric?: EnvFabric; nodeIdOf?: (id: number) => string } = {}): Promise<HelmxToolDeps> {
   await ensureDataDir(dir)
   const stash = new SecretStash()
   const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
@@ -179,7 +179,7 @@ function makeApi(cwd: string, conversationId = 1) {
 let rootDir: string
 
 before(async () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-env-paths-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-env-paths-'))
 })
 
 after(async () => {
@@ -464,8 +464,8 @@ describe('POSIX target real file behavior (root dir and regular dirs)', { timeou
 // 4. Env composition: remote never merges Hub PATH; hubUrl stays distinct; separators
 // ---------------------------------------------------------------------------
 describe('buildToolEnv / buildManagedEnv remote semantics', { timeout: 60_000 }, () => {
-  it('remote: never merges Hub PATH (unless extraEnv provides PATH); uses node-reported HELM_HUB_URL', { timeout: 60_000 }, () => {
-    const deps: HelmToolDeps = {
+  it('remote: never merges Hub PATH (unless extraEnv provides PATH); uses node-reported HELMX_HUB_URL', { timeout: 60_000 }, () => {
+    const deps: HelmxToolDeps = {
       dataDir: '/hub-data',
       defaultCwd: '/hub',
       hubUrl: 'http://127.0.0.1:3202',
@@ -476,14 +476,14 @@ describe('buildToolEnv / buildManagedEnv remote semantics', { timeout: 60_000 },
     }
     const remoteEnv = buildToolEnv(deps, 'C:\\workspace', 9, undefined, 'win-node')
     assert.equal(remoteEnv['PATH'], undefined, 'remote must never inherit Hub PATH (daemon already has node toolchain)')
-    assert.equal(remoteEnv['HELM_HUB_URL'], 'http://10.0.0.5:3202', 'must use real hubUrl reported by node registration')
-    assert.equal(remoteEnv['HELM_CWD'], 'C:\\workspace')
-    assert.equal(remoteEnv['HELM_NODE_ID'], 'win-node')
-    assert.equal('HELM_DATA_DIR' in remoteEnv, false, 'HELM_DATA_DIR is local Hub path; do not inject remotely')
+    assert.equal(remoteEnv['HELMX_HUB_URL'], 'http://10.0.0.5:3202', 'must use real hubUrl reported by node registration')
+    assert.equal(remoteEnv['HELMX_CWD'], 'C:\\workspace')
+    assert.equal(remoteEnv['HELMX_NODE_ID'], 'win-node')
+    assert.equal('HELMX_DATA_DIR' in remoteEnv, false, 'HELMX_DATA_DIR is local Hub path; do not inject remotely')
   })
 
-  it('when remote hubUrl not reported: omit HELM_HUB_URL (never fall back to deps.hubUrl 127.0.0.1)', { timeout: 60_000 }, () => {
-    const deps: HelmToolDeps = {
+  it('when remote hubUrl not reported: omit HELMX_HUB_URL (never fall back to deps.hubUrl 127.0.0.1)', { timeout: 60_000 }, () => {
+    const deps: HelmxToolDeps = {
       dataDir: '/hub-data',
       defaultCwd: '/hub',
       hubUrl: 'http://127.0.0.1:3202',
@@ -496,7 +496,7 @@ describe('buildToolEnv / buildManagedEnv remote semantics', { timeout: 60_000 },
       })(),
     }
     const managed = buildManagedEnv(deps, 'C:\\workspace', 3, 'node-no-url')
-    assert.equal('HELM_HUB_URL' in managed, false, 'omit HELM_HUB_URL when unreported so daemon preserves its own URL')
+    assert.equal('HELMX_HUB_URL' in managed, false, 'omit HELMX_HUB_URL when unreported so daemon preserves its own URL')
   })
 })
 
@@ -504,18 +504,18 @@ describe('buildToolEnv / buildManagedEnv remote semantics', { timeout: 60_000 },
 // 5. Windows host Path case preservation + LocalHostExecutionEnv rejecting WSL wrappers
 // ---------------------------------------------------------------------------
 describe('Windows host env case preservation and Shell probe anti-WSL-hijack', { timeout: 60_000 }, () => {
-  it('composeExecutionEnv(win32): strips helm_token, preserves host Path casing and prepends cliBinDir under original key', { timeout: 60_000 }, () => {
+  it('composeExecutionEnv(win32): strips helmx_token, preserves host Path casing and prepends cliBinDir under original key', { timeout: 60_000 }, () => {
     const env = composeExecutionEnv(
       'local',
-      { HELM_CONVERSATION_ID: '12', HELM_TOKEN: 'managed-tok' },
+      { HELMX_CONVERSATION_ID: '12', HELMX_TOKEN: 'managed-tok' },
       {},
       {
         platform: 'win32',
-        cliBinDir: 'C:\\Users\\me\\.helm\\bin',
+        cliBinDir: 'C:\\Users\\me\\.helmx\\bin',
         hostEnv: {
           Path: 'C:\\Windows\\System32;C:\\Program Files\\nodejs',
-          helm_token: 'stale-host-token',
-          HELM_HUB_URL: 'http://stale',
+          helmx_token: 'stale-host-token',
+          HELMX_HUB_URL: 'http://stale',
         },
       },
     )
@@ -523,11 +523,11 @@ describe('Windows host env case preservation and Shell probe anti-WSL-hijack', {
     assert.deepEqual(pathKeys, ['Path'], 'win32 must not introduce conflicting PATH/Path duplicate keys')
     assert.equal(
       env['Path'],
-      'C:\\Users\\me\\.helm\\bin;C:\\Windows\\System32;C:\\Program Files\\nodejs',
+      'C:\\Users\\me\\.helmx\\bin;C:\\Windows\\System32;C:\\Program Files\\nodejs',
     )
-    assert.equal('helm_token' in env, false, 'case-variant helm_token must be stripped')
-    assert.equal(env['HELM_TOKEN'], 'managed-tok')
-    assert.equal('HELM_HUB_URL' in env, false, 'host-managed variables must be stripped')
+    assert.equal('helmx_token' in env, false, 'case-variant helmx_token must be stripped')
+    assert.equal(env['HELMX_TOKEN'], 'managed-tok')
+    assert.equal('HELMX_HUB_URL' in env, false, 'host-managed variables must be stripped')
   })
 
   it('createLocalExecutionEnv: yields shell_unavailable when only System32\\bash.exe exists; executes real bash after skipping WSL', { timeout: 60_000 }, async () => {

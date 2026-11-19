@@ -1,5 +1,5 @@
 import React from 'react'
-import { HelmIcon, StatusLight } from '@helm/plugin-client'
+import { HelmxIcon, StatusLight } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { formatUptime } from '../modals/nodes-modal-model.js'
 import {
@@ -20,7 +20,7 @@ export interface NodeCardProps {
  * Compute node card view (NodeCard):
  * - uses the shared .primary-card structure with 1px hairline borders;
  * - header: status pulse indicator (breathing animation when online, neutral
- *   when offline), HelmIcon (laptop for local, server for remote), node name
+ *   when offline), HelmxIcon (laptop for local, server for remote), node name
  *   and the mono node ID;
  * - middle: platform/OS and CPU architecture badges (e.g. linux / x64),
  *   version and host uptime;
@@ -79,7 +79,7 @@ export function NodeCard({
       {/* Header: status light, node icon, node name, ID */}
       <div className="primary-card-header">
         <div className="primary-card-icon-wrap">
-          <HelmIcon name={iconName} size={18} />
+          <HelmxIcon name={iconName} size={18} />
         </div>
         <div className="primary-card-meta">
           <div className="primary-card-title-row">
@@ -131,7 +131,7 @@ export function NodeCard({
         <div className="primary-card-pills">
           {tools.slice(0, 4).map((tool) => (
             <span key={tool} className="primary-card-pill mono" title={t('nodes.cardToolTitle', { tool })}>
-              <HelmIcon name="terminal" size={10} />
+              <HelmxIcon name="terminal" size={10} />
               <span>{tool}</span>
             </span>
           ))}

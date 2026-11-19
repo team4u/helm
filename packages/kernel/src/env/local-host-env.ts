@@ -3,7 +3,7 @@
  *
  * Reuses pi-durable `NodeExecutionEnv` for file I/O, process-tree termination, incremental streaming
  * decoding, and spill-to-disk logic (preserving `id === 'node:local'` so it shares the file mutation queue
- * with `file-env.ts`), while delegating pre-command shell resolution to `resolveHostShellConfig` in `@helm/env-io`:
+ * with `file-env.ts`), while delegating pre-command shell resolution to `resolveHostShellConfig` in `@helmx/env-io`:
  * - discovers Winget / Scoop / non-standard Git Bash installs;
  * - skips System32 / Sysnative / WindowsApps WSL launchers so Windows hosts never silently enter WSL;
  *   returns explicit `shell_unavailable` if no native bash is available.
@@ -18,7 +18,7 @@ import {
   type ShellExecResult,
 } from '@earendil-works/pi-durable/env'
 import { NodeExecutionEnv, type NodeWatchOptions } from '@earendil-works/pi-durable/env/node'
-import { resolveHostShellConfig, type ShellProbeIo } from '@helm/env-io'
+import { resolveHostShellConfig, type ShellProbeIo } from '@helmx/env-io'
 
 interface LocalHostExecutionEnvOptions {
   cwd: string

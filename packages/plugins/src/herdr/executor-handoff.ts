@@ -18,7 +18,7 @@
  */
 
 import { setTimeout as delay } from 'node:timers/promises'
-import { HelmError, validateOrThrow, type AgentSpawnRequest } from '@helm/protocol'
+import { HelmxError, validateOrThrow, type AgentSpawnRequest } from '@helmx/protocol'
 import type { HerdrPluginDependencies, HerdrTarget } from './contracts.js'
 import { nodeIdOf, paneStateKey, targetOf, type ManagedPane } from './panes.js'
 import { parsePaneRead, type HerdrAgentInfo } from './rpc.js'
@@ -45,7 +45,7 @@ interface PaneHandoffPort {
   promptAndWait(target: HerdrTarget, pane: ManagedPane, text: string, signal?: AbortSignal): Promise<HerdrAgentInfo>
   /** Settle waiting + blocked approval bridge loop. */
   waitUntilSettled(request: AgentSpawnRequest, pane: ManagedPane, initial: HerdrAgentInfo): Promise<void>
-  /** $helm status token projection (mark heal before the self-heal follow-up). */
+  /** $helmx status token projection (mark heal before the self-heal follow-up). */
   project(pane: ManagedPane, token: string): Promise<void>
   /** Failure pane keep-the-scene marker (outcome=failed + redacted failureNote). */
   markFailed(pane: ManagedPane, note: string): Promise<void>
@@ -78,7 +78,7 @@ export class PaneHandoff {
       try {
         raw = await transport.readOutput(target, pane.effectiveCwd, fileName, request.signal)
       } catch (error) {
-        if (error instanceof HelmError && error.code === 'herdr_output_missing') {
+        if (error instanceof HelmxError && error.code === 'herdr_output_missing') {
           return { ok: false, reason: `handoff file missing: ${fileName}`, recoverable: true, kind: 'missing' }
         }
         // Other IO/SSH/permission errors: throw diagnostics as-is; do not self-heal as a missing file.
@@ -103,7 +103,7 @@ export class PaneHandoff {
         validateOrThrow(request.schema, parsed, 'handoff file content failed JSON Schema validation', 'schema_validation_failed', 502)
         return { ok: true, value: JSON.parse(this.port.redact(JSON.stringify(parsed))) as unknown }
       } catch (err) {
-        if (err instanceof HelmError && err.code === 'schema_validation_failed') {
+        if (err instanceof HelmxError && err.code === 'schema_validation_failed') {
           return { ok: false, reason: err.message, recoverable: true, kind: 'invalid' }
         }
         throw err
@@ -147,7 +147,7 @@ export class PaneHandoff {
     if (!attempt.ok) {
       await this.port.markFailed(pane, attempt.reason)
       const snapshot = await this.readDiagnostic(pane)
-      throw new HelmError(
+      throw new HelmxError(
         'herdr_output_contract_violation',
         `pane ${pane.paneId} both handoff attempts failed (${attempt.reason}); pane kept for manual investigation. Last 40 terminal lines (redacted):\n${snapshot}`,
         502,
@@ -162,7 +162,7 @@ export class PaneHandoff {
   private async promptAndWaitHeal(request: AgentSpawnRequest, pane: ManagedPane, reason: string): Promise<void> {
     const target = targetOf(pane)
     const text =
-      `Your previous round did not deliver as required. ${reason}. Write the final result now to ${pane.effectiveCwd}/.helm/${pane.outputFileName}` +
+      `Your previous round did not deliver as required. ${reason}. Write the final result now to ${pane.effectiveCwd}/.helmx/${pane.outputFileName}` +
       (request.schema !== undefined ? ` (a single JSON value satisfying the Schema).\nJSON Schema: ${redactSchemaText(request.schema, this.port.redact)}` : ' (full Markdown).')
     const info = await this.port.promptAndWait(target, pane, this.port.redact(text), request.signal)
     await this.port.waitUntilSettled(request, pane, info)
@@ -188,7 +188,7 @@ export class PaneHandoff {
   /** gate: exactly once after file success; local runLocalGate, remote transport.runGate (same actual cwd and routing baseline env). */
   async runGateFor(request: AgentSpawnRequest, pane: ManagedPane): Promise<void> {
     const baseline = this.port.paneEnvOf(paneStateKey(pane))
-    if (baseline === undefined) throw new HelmError('herdr_context_unavailable', 'task environment is lost; cannot run Gate in the same environment', 409)
+    if (baseline === undefined) throw new HelmxError('herdr_context_unavailable', 'task environment is lost; cannot run Gate in the same environment', 409)
     const env = this.port.applyPaneSecrets(baseline, request.parentConversationId, pane.effectiveCwd, targetOf(pane), request.secretNames ?? [])
     const gate: { ok: boolean; output: string } =
       nodeIdOf(pane) === undefined
@@ -202,7 +202,7 @@ export class PaneHandoff {
     request.onGateResult?.({ ...gate, output: this.port.redact(gate.output) })
     if (!gate.ok) {
       await this.port.markFailed(pane, `gate failed: ${request.gate}`)
-      throw new HelmError(
+      throw new HelmxError(
         'gate_failed',
         `gate command failed (exit!=0): ${request.gate}\n${this.port.redact(gate.output).slice(-2000)}`,
         502,

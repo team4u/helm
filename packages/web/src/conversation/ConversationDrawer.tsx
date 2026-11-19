@@ -1,4 +1,4 @@
-import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
+import { Dialog, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useConversationDetail, useConversationSummary } from '../lib/store-context.js'
 import { ConversationPane } from './ConversationPane.js'

@@ -2,7 +2,7 @@
  * Auth domain routes: GET /api/auth/status, POST /api/auth/setup,
  * POST /api/auth/login (all three endpoints are public and pre-allowed in hub.ts; all other auth subpaths return 404).
  */
-import type { JsonSchema } from '@helm/protocol'
+import type { JsonSchema } from '@helmx/protocol'
 import { jsonOk, errorResponse, readJsonBody, type JsonRedactor } from './http-utils.js'
 import type { KernelRuntimeLike } from './contracts.js'
 import { assertBodySchema } from './validate.js'

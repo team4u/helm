@@ -3,7 +3,7 @@
  * herdr-smoke.mjs — manual real-chain acceptance script for `builtin:herdr` (standalone, not part of pnpm test).
  *
  * Acceptance targets (all real components, zero mocks):
- * - The @helm/hub build artifact: createHelm from packages/hub/dist/app.js;
+ * - The @helmx/hub build artifact: createHelmx from packages/hub/dist/app.js;
  * - The builtin:herdr plugin: setConfig -> enable -> the agent_spawn hook takes over the
  *   external runtime;
  * - A locally installed Herdr service: the script creates its own isolated headless session
@@ -34,8 +34,8 @@
  *    verified those); the replay only verifies no new calls / no new resources.
  *
  * Transport layer: imports createHerdrTransport (the production implementation) from the
- * @helm/plugins build artifact (packages/plugins/dist/herdr/transport.js), transparently
- * wraps call for method counting, and injects it into createHelm({ herdrTransport }); never
+ * @helmx/plugins build artifact (packages/plugins/dist/herdr/transport.js), transparently
+ * wraps call for method counting, and injects it into createHelmx({ herdrTransport }); never
  * mocks returns. The script's own session.snapshot also reuses that transport (each call
  * carries a bounded timeoutMs).
  *
@@ -330,10 +330,10 @@ async function main() {
     check('pi model catalog contains the target model (precondition for real credentials)', modelHit !== undefined, `${args.provider}/${args.model}`)
 
     // ---- 1) Temporary environment layout ----
-    state.tmpRoot = mkdtempSync(join(tmpdir(), 'helm-herdr-smoke-'))
+    state.tmpRoot = mkdtempSync(join(tmpdir(), 'helmx-herdr-smoke-'))
     state.repoDir = join(state.tmpRoot, 'repo')
     state.xdgHome = join(state.tmpRoot, 'xdg')
-    state.dataDir = join(state.tmpRoot, 'helm-data')
+    state.dataDir = join(state.tmpRoot, 'helmx-data')
     state.gateCountPath = join(state.tmpRoot, 'gate-count')
     const logsDir = join(state.tmpRoot, 'logs')
     mkdirSync(state.repoDir, { recursive: true })
@@ -343,15 +343,15 @@ async function main() {
 
     // ---- 2) Fresh Git repo + seed commit (the host global git config is never written) ----
     runCmd('git', ['-C', state.repoDir, 'init', '-b', 'main'])
-    writeFileSync(join(state.repoDir, 'README.md'), '# helm herdr smoke seed\n')
-    const gitIdentity = ['-c', 'user.name=helm-smoke', '-c', 'user.email=helm-smoke@example.com', '-c', 'commit.gpgsign=false']
+    writeFileSync(join(state.repoDir, 'README.md'), '# helmx herdr smoke seed\n')
+    const gitIdentity = ['-c', 'user.name=helmx-smoke', '-c', 'user.email=helmx-smoke@example.com', '-c', 'commit.gpgsign=false']
     runCmd('git', ['-C', state.repoDir, 'add', 'README.md'])
     runCmd('git', ['-C', state.repoDir, ...gitIdentity, 'commit', '-m', 'seed', '--quiet'])
     const seedHead = runCmd('git', ['-C', state.repoDir, 'rev-parse', 'HEAD']).stdout.trim()
     check('temporary Git repo seed commit done', seedHead.length > 0, seedHead.slice(0, 12))
 
     // ---- 3) Isolated headless Herdr session (foreground server child process + full logs) ----
-    const sessionName = `helm-smoke-${process.pid}-${Date.now().toString(36)}`
+    const sessionName = `helmx-smoke-${process.pid}-${Date.now().toString(36)}`
     const socketPath = join(state.xdgHome, 'herdr', 'sessions', sessionName, 'herdr.sock')
     const herdrEnv = buildHerdrEnv(process.env, state.xdgHome, socketPath)
     const serverLogPath = join(logsDir, 'herdr-server.log')
@@ -430,14 +430,14 @@ async function main() {
       try { deepStrictEqual(baselineIds(snapshot), baseline); return true } catch { return false }
     }
 
-    // ---- 5) createHelm (real build artifact + injected counting transport) + plugin enable + Profile ----
-    // createHelm's cwd becomes the root conversation cwd and the herdr default cwd: it points
+    // ---- 5) createHelmx (real build artifact + injected counting transport) + plugin enable + Profile ----
+    // createHelmx's cwd becomes the root conversation cwd and the herdr default cwd: it points
     // at the temp repo, where the herdr worktree create --cwd of isolation:'worktree' builds trees.
-    const { createHelm } = await import(KERNEL_APP_PATH)
+    const { createHelmx } = await import(KERNEL_APP_PATH)
     const traced = createTracedTransport(baseTransport)
     const app = await withDeadline(
-      createHelm({ dataDir: state.dataDir, cwd: state.repoDir, herdrTransport: traced.transport }),
-      'createHelm startup',
+      createHelmx({ dataDir: state.dataDir, cwd: state.repoDir, herdrTransport: traced.transport }),
+      'createHelmx startup',
     )
     state.app = app
     state.workflows = app.workflows
@@ -608,7 +608,7 @@ async function main() {
     log(`HERDR-SMOKE: FAIL — ${runError instanceof Error ? runError.message : String(runError)}`)
   }
   for (const p of problems) log(`CLEANUP-FAIL ${p}`)
-  log(`== helm herdr-smoke summary == PASS ${results.length - failed} / FAIL ${failed}${problems.length > 0 ? ` / cleanup failures ${problems.length}` : ''}`)
+  log(`== helmx herdr-smoke summary == PASS ${results.length - failed} / FAIL ${failed}${problems.length > 0 ? ` / cleanup failures ${problems.length}` : ''}`)
   log(`HERDR-SMOKE: ${ok ? 'PASS' : 'FAIL'}`)
   if (args.json) {
     process.stdout.write(`${JSON.stringify({ ok, passed: results.length - failed, failed, cleanupFailures: problems, results })}\n`)

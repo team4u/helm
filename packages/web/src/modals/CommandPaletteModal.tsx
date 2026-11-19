@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { SearchHit } from '@helm/protocol/browser'
+import type { SearchHit } from '@helmx/protocol/browser'
 import { searchApi } from '../lib/api.js'
 import { commandActionPluginId, commandHint, commandsForConversation } from '../lib/commands-model.js'
-import { resolveLocalizedText } from '@helm/protocol/browser'
-import { HelmIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helm/plugin-client'
+import { resolveLocalizedText } from '@helmx/protocol/browser'
+import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helmx/plugin-client'
 import {
   useConversations,
   useGroupedUi,
@@ -22,10 +22,10 @@ import {
   formatModShortcut,
   resolveFocusedPanel,
   selectRecentConversationsForPalette,
-  type HelmShortcutDetail,
+  type HelmxShortcutDetail,
 } from '../shell/shortcuts-model.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
-import type { CommandSpec } from '@helm/protocol/browser'
+import type { CommandSpec } from '@helmx/protocol/browser'
 
 type PaletteRow =
   | { kind: 'command'; id: string; title: string; hint?: string; shortcut?: string; icon?: string; keywords?: string[]; run: () => void }
@@ -117,8 +117,8 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
         icon: 'sparkles',
         keywords: ['model', 'picker', 'Model', 'Switch model', '模型', '切换模型'],
         run: () => {
-          const detail: HelmShortcutDetail = { action: 'toggle-model-picker', panel: activePanel }
-          window.dispatchEvent(new CustomEvent<HelmShortcutDetail>('helm:shortcut', { detail }))
+          const detail: HelmxShortcutDetail = { action: 'toggle-model-picker', panel: activePanel }
+          window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
         },
       })
     }
@@ -131,8 +131,8 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
         icon: 'list-tree',
         keywords: ['process', 'thinking', 'tools', 'Process', 'Thinking', 'Collapse', '过程', '思考', '工具', '收起'],
         run: () => {
-          const detail: HelmShortcutDetail = { action: 'toggle-process-groups', panel: activePanel }
-          window.dispatchEvent(new CustomEvent<HelmShortcutDetail>('helm:shortcut', { detail }))
+          const detail: HelmxShortcutDetail = { action: 'toggle-process-groups', panel: activePanel }
+          window.dispatchEvent(new CustomEvent<HelmxShortcutDetail>('helmx:shortcut', { detail }))
         },
       })
     }
@@ -237,7 +237,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       id: 'builtin:open-nodes',
       title: t('modals.palette.cmd.openNodes'),
       icon: 'network',
-      keywords: ['node', 'nodes', 'byom', 'helm-node', 'Nodes', '节点', '计算节点'],
+      keywords: ['node', 'nodes', 'byom', 'helmx-node', 'Nodes', '节点', '计算节点'],
       run: () => {
         close()
         actions.openTarget({ kind: 'nodes' })
@@ -504,7 +504,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
             <DialogTitle style={{ display: 'none' }}>{t('modals.palette.dialogTitle')}</DialogTitle>
             <div className="modal-header" style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', gap: 8 }}>
               <div className="search-box" style={{ flex: 1, minWidth: 0 }}>
-                <HelmIcon name="search" size={15} />
+                <HelmxIcon name="search" size={15} />
                 <input
                   ref={inputRef}
                   aria-label={t('modals.palette.searchAria')}
@@ -515,7 +515,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
               </div>
               {searching && (
                 <span className="badge badge-neutral" style={{ height: 22, padding: '0 6px', flexShrink: 0 }}>
-                  <HelmIcon name="loader" size={12} className="spin-slow" />
+                  <HelmxIcon name="loader" size={12} className="spin-slow" />
                   {t('modals.palette.searching')}
                 </span>
               )}
@@ -529,7 +529,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
                 >
                   <span className="palette-close-desktop badge badge-neutral">{t('modals.palette.escToClose')}</span>
                   <span className="palette-close-mobile" style={{ alignItems: 'center', gap: 4 }}>
-                    <HelmIcon name="x" size={13} />
+                    <HelmxIcon name="x" size={13} />
                     <span style={{ fontSize: 11.5 }}>{t('common.close')}</span>
                   </span>
                 </button>
@@ -593,7 +593,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
                 onMouseEnter={() => setSelectedIdx(idx)}
               >
                 <span className="nav-item-main">
-                  <HelmIcon name={row.icon} size={14} />
+                  <HelmxIcon name={row.icon} size={14} />
                   <span className="nav-item-label">{row.title}</span>
                 </span>
                 {(row.hint || row.shortcut) && (
@@ -613,7 +613,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
                 onMouseEnter={() => setSelectedIdx(idx)}
               >
                 <span className="nav-item-main">
-                  <HelmIcon name="message-square" size={14} />
+                  <HelmxIcon name="message-square" size={14} />
                   <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
                     <span className="nav-item-label">
                       {row.hit.title || t('shell.conversationFallback', { id: row.hit.conversationId })}

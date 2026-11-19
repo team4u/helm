@@ -13,11 +13,11 @@
  */
 import { createContext, useContext } from 'react'
 import {
-  DEFAULT_HELM_LOCALE,
+  DEFAULT_HELMX_LOCALE,
   createLocaleTranslator,
   type ComposerController,
   type PluginClientContext as PluginClientContextType,
-} from '@helm/protocol/browser'
+} from '@helmx/protocol/browser'
 import type { PluginClientHostPort } from './host-port.js'
 
 export const PluginClientContext = createContext<PluginClientContextType | null>(null)
@@ -46,7 +46,7 @@ function assertConversationId(id: number, label: string): void {
  *   and explicitly rejects when there is no conversation;
  * - getPluginDoc's second argument reads other plugins' public docs;
  * - locale/translate bind the host port locale (falling back to
- *   DEFAULT_HELM_LOCALE / a derived translator when the host has not wired
+ *   DEFAULT_HELMX_LOCALE / a derived translator when the host has not wired
  *   them yet) so plugin components can resolve LocalizedText display copy;
  * - composer is passed through only when the host provides it (composer slots).
  */
@@ -56,7 +56,7 @@ export function createPluginClientContext(
   conversationId: number | undefined,
   composer?: ComposerController,
 ): PluginClientContextType {
-  const locale = port.locale ?? DEFAULT_HELM_LOCALE
+  const locale = port.locale ?? DEFAULT_HELMX_LOCALE
   return {
     pluginId,
     callAction: (actionId, input, options) => {

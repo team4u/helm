@@ -16,8 +16,8 @@ import type {
   AgentSpawnRequest,
   ConversationPatch,
   ConversationSummary,
-} from '@helm/protocol'
-import { HelmError, isValidEnvName } from '@helm/protocol'
+} from '@helmx/protocol'
+import { HelmxError, isValidEnvName } from '@helmx/protocol'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import type { Harness, Registry } from '@earendil-works/pi-durable'
 import type { EnvFabric } from '../env/index.js'
@@ -42,12 +42,12 @@ import {
   sanitizeAgentExecutionInfo,
   sanitizeAgentGateResult,
   sanitizeAgentNamespacedMeta,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { assertSpawnRequestTitle, isSpawnConversationInTurn, normalizeSpawnTitle, runNativeSpawn } from './spawn.js'
 import { cwdScopeViolationText } from './tools/cwd-scope.js'
 import { validateJsonSchema, type StructuredOutputSession } from './structured-output.js'
-import type { HelmStore } from './store.js'
-import type { HelmToolDeps } from './tool-deps.js'
+import type { HelmxStore } from './store.js'
+import type { HelmxToolDeps } from './tool-deps.js'
 import { buildManagedEnv, runGate } from './tools.js'
 import type { SecretStash } from '../services/index.js'
 
@@ -59,12 +59,12 @@ import type { SecretStash } from '../services/index.js'
 function validateSecretNames(secretNames: string[] | undefined): string[] {
   if (secretNames === undefined) return []
   if (!Array.isArray(secretNames)) {
-    throw new HelmError('validation_error', `secretNames must be a string array (received ${typeof secretNames})`, 400)
+    throw new HelmxError('validation_error', `secretNames must be a string array (received ${typeof secretNames})`, 400)
   }
   const seen = new Set<string>()
   for (const name of secretNames) {
     if (typeof name !== 'string' || name === '' || !isValidEnvName(name)) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `secretNames contains invalid secret name '${String(name)}' (must be a non-empty valid environment variable name)`,
         400,
@@ -72,7 +72,7 @@ function validateSecretNames(secretNames: string[] | undefined): string[] {
       )
     }
     if (seen.has(name)) {
-      throw new HelmError('validation_error', `Duplicate entry in secretNames: ${name}`, 400, { name })
+      throw new HelmxError('validation_error', `Duplicate entry in secretNames: ${name}`, 400, { name })
     }
     seen.add(name)
   }
@@ -80,8 +80,8 @@ function validateSecretNames(secretNames: string[] | undefined): string[] {
 }
 
 interface RuntimeAgentSpawnDeps {
-  readonly store: HelmStore
-  readonly toolDeps: HelmToolDeps
+  readonly store: HelmxStore
+  readonly toolDeps: HelmxToolDeps
   readonly harness: Harness
   readonly registry: Registry
   readonly tracker: ConversationTracker
@@ -123,7 +123,7 @@ export class RuntimeAgentSpawn {
     options?: { secretNames?: string[] },
   ): Record<string, string> {
     if (!Number.isInteger(conversationId) || conversationId <= 0) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `buildSpawnEnv requires a positive integer conversationId (received ${String(conversationId)})`,
         400,
@@ -131,7 +131,7 @@ export class RuntimeAgentSpawn {
       )
     }
     if (typeof cwd !== 'string' || cwd === '') {
-      throw new HelmError('validation_error', `buildSpawnEnv requires a non-empty cwd (received ${String(cwd)})`, 400, {
+      throw new HelmxError('validation_error', `buildSpawnEnv requires a non-empty cwd (received ${String(cwd)})`, 400, {
         cwd,
       })
     }
@@ -141,7 +141,7 @@ export class RuntimeAgentSpawn {
     const stashEnv = this.deps.stashService.envFor(conversationId, names)
     const missing = names.filter((name) => !Object.hasOwn(stashEnv, name))
     if (missing.length > 0) {
-      throw new HelmError(
+      throw new HelmxError(
         'secret_not_found',
         `Secrets missing (or grant disabled) in conversation ${conversationId} stash: ${missing.join(', ')}; check secret names and lifecycle (TTL/turn scope)`,
         404,
@@ -182,7 +182,7 @@ export class RuntimeAgentSpawn {
             isSpawnConversationInTurn(this.deps.harness, resumeId) ||
             [...this.activeSpawnExecutions.values()].some((info) => info.conversationId === resumeId)
           ) {
-            throw new HelmError('subagent_in_use', `Child conversation ${resumeId} already has an execution in flight; concurrent resume is not allowed`, 409)
+            throw new HelmxError('subagent_in_use', `Child conversation ${resumeId} already has an execution in flight; concurrent resume is not allowed`, 409)
           }
           this.activeSpawnExecutions.set(token, { conversationId: resumeId, nodeId: child.nodeId ?? 'local', effectiveCwd: child.cwd })
         }
@@ -192,7 +192,7 @@ export class RuntimeAgentSpawn {
         if (reattachConvId !== undefined) {
           const child = this.deps.store.getConv(reattachConvId)
           if (child === undefined || child.parentConversationId !== request.parentConversationId) {
-            throw new HelmError(
+            throw new HelmxError(
               'not_found',
               `Reattach target child conversation ${reattachConvId} does not exist or does not belong to parent conversation ${request.parentConversationId}; refusing to create a new conversation instead`,
               404,
@@ -207,7 +207,7 @@ export class RuntimeAgentSpawn {
                 (reattachExecId !== undefined && info.executionId === reattachExecId),
             )
           ) {
-            throw new HelmError('subagent_in_use', `Child conversation ${reattachConvId} still has an active reattach or execution in flight; concurrent reattach is not allowed`, 409, {
+            throw new HelmxError('subagent_in_use', `Child conversation ${reattachConvId} still has an active reattach or execution in flight; concurrent reattach is not allowed`, 409, {
               conversationId: reattachConvId,
             })
           }
@@ -219,7 +219,7 @@ export class RuntimeAgentSpawn {
           })
         } else if (reattachExecId !== undefined) {
           if ([...this.activeSpawnExecutions.values()].some((info) => info.executionId === reattachExecId)) {
-            throw new HelmError('subagent_in_use', `External execution ${reattachExecId} still has an active reattach or execution in flight; concurrent reattach is not allowed`, 409, {
+            throw new HelmxError('subagent_in_use', `External execution ${reattachExecId} still has an active reattach or execution in flight; concurrent reattach is not allowed`, 409, {
               executionId: reattachExecId,
             })
           }
@@ -252,14 +252,14 @@ export class RuntimeAgentSpawn {
         // plugin takes over (`handled`) or rewrites output via hooks, so final outputs are always re-checked here.
         const validation = validateJsonSchema(result, request.schema)
         if (!validation.ok) {
-          throw new HelmError('schema_validation_failed', `Subagent final output does not match schema: ${validation.errors.join('; ')}`, 502)
+          throw new HelmxError('schema_validation_failed', `Subagent final output does not match schema: ${validation.errors.join('; ')}`, 502)
         }
       }
       if (request.gate !== undefined && execution?.executionId !== undefined && gate === undefined) {
         throw agentGateResultMissingError({ agentId: request.agentId ?? 'subagent', executionId: execution.executionId, command: request.gate })
       }
       if (gate !== undefined && !gate.ok) {
-        throw new HelmError('gate_failed', `Subagent verification command failed: ${gate.output}`, 502)
+        throw new HelmxError('gate_failed', `Subagent verification command failed: ${gate.output}`, 502)
       }
       return result
     } finally {
@@ -280,7 +280,7 @@ export class RuntimeAgentSpawn {
     if (!(await this.deps.toolDeps.restrictToCwdOf(request.parentConversationId))) return
     const violation = cwdScopeViolationText(request.cwd, parent.cwd)
     if (violation !== undefined) {
-      throw new HelmError('path_outside_workspace', violation, 403, {
+      throw new HelmxError('path_outside_workspace', violation, 403, {
         parentConversationId: request.parentConversationId,
         requestedCwd: request.cwd,
         parentCwd: parent.cwd,
@@ -292,7 +292,7 @@ export class RuntimeAgentSpawn {
   private async preflightForkRequest(request: AgentSpawnRequest): Promise<number | undefined> {    assertSpawnForkFields(request)
     if (request.fork !== true) return undefined
     if ((request.agentType ?? '').includes(':')) {
-      throw new HelmError(
+      throw new HelmxError(
         'unsupported_runtime',
         `fork is only supported for native Profile sub-conversations; unsupported external runtime '${request.agentType}'`,
         400,
@@ -301,7 +301,7 @@ export class RuntimeAgentSpawn {
     }
     const parentMeta = this.deps.store.getConv(request.parentConversationId)
     if (parentMeta === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'not_found',
         `Parent conversation ${request.parentConversationId} not found; cannot fork`,
         404,
@@ -311,7 +311,7 @@ export class RuntimeAgentSpawn {
     const { profileId: effectiveProfileId } = resolveForkMode(request.agentType, true, parentMeta.profileId)
     const profile = await this.deps.conversations.readProfile(effectiveProfileId)
     if (profile === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'not_found',
         `agentType '${effectiveProfileId}' is not a registered Profile (profiles/${effectiveProfileId} not found)`,
         404,
@@ -319,7 +319,7 @@ export class RuntimeAgentSpawn {
       )
     }
     if (profile.runtime !== undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'unsupported_runtime',
         `Profile '${effectiveProfileId}' declares external runtime kind='${profile.runtime.kind}' (agent '${profile.runtime.agent}'); fork is only supported for native Profile sub-conversations`,
         400,
@@ -374,7 +374,7 @@ export class RuntimeAgentSpawn {
       // and do not inherit parent secret grants — reject non-empty `secretNames` here when not handled by an external
       // runtime hook rather than silently pretending secrets were granted; empty arrays impose no grant and pass through.
       if (finalRequest.secretNames !== undefined && finalRequest.secretNames.length > 0) {
-        throw new HelmError(
+        throw new HelmxError(
           'unsupported_secret_grant',
           `Native execution does not support secretNames grants (${finalRequest.secretNames.join(', ')}): native child conversations do not inherit the parent conversation's stash; secret injection is only supported by external runtimes (e.g., builtin:herdr panes) — switch agentType or remove the grant`,
           400,
@@ -448,7 +448,7 @@ export class RuntimeAgentSpawn {
                 createdAt: now,
                 updatedAt: now,
               })
-              this.deps.markConversationOwnership(childId, 'helm')
+              this.deps.markConversationOwnership(childId, 'helmx')
               await this.deps.store.flushPublic()
               await this.deps.tracker.observe(childId)
               if (this.deps.store.getConv(childId) !== undefined && !this.deps.store.isDeleted(childId)) {
@@ -474,7 +474,7 @@ export class RuntimeAgentSpawn {
               const summary = this.deps.conversations.summaryWithOwnership(childId)
               const ownedBy = summary.ownedBy ?? 'human'
               if (ownedBy === 'human') {
-                throw new HelmError(
+                throw new HelmxError(
                   'ownership_conflict',
                   `Child conversation ${childId} is currently human-owned; refusing automatic abort (watchdog hard rule)`,
                   409,
@@ -526,14 +526,14 @@ export class RuntimeAgentSpawn {
   }): Promise<{ nodeId: string; sourceCwd: string; parentCwd: string | undefined }> {
     const parent = this.deps.store.getConv(input.parentConversationId)
     if (parent === undefined) {
-      throw new HelmError('not_found', `Parent conversation ${input.parentConversationId} not found; cannot resolve spawn target`, 404, {
+      throw new HelmxError('not_found', `Parent conversation ${input.parentConversationId} not found; cannot resolve spawn target`, 404, {
         parentConversationId: input.parentConversationId,
       })
     }
     const { profileId, forkSameProfile } = resolveForkMode(input.profileId, input.fork, parent.profileId)
     const profile = await this.deps.conversations.readProfile(profileId)
     if (profile === undefined) {
-      throw new HelmError('not_found', `agentType '${profileId}' is not a registered Profile (profiles/${profileId} not found)`, 404)
+      throw new HelmxError('not_found', `agentType '${profileId}' is not a registered Profile (profiles/${profileId} not found)`, 404)
     }
     // Consolidate source cwd by target node platform (same-profile fork uses request > parent > profile > Hub default;
     // otherwise request > profile > parent > Hub default): worktree source dirs receive the normalized path;
@@ -565,7 +565,7 @@ export class RuntimeAgentSpawn {
   /**
    * Target node process-occupancy snapshot (backend for `ctx.host.inspectNodePathUsage`):
    * scans live processes on the target node via `EnvFabric` (in-process locally / RPC remotely). Failures
-   * (offline, unsupported, permission, incomplete scan) propagate `HelmError` from fabric — this layer never
+   * (offline, unsupported, permission, incomplete scan) propagate `HelmxError` from fabric — this layer never
    * swallows errors or falls back to local. See `protocol/plugin.ts` for snapshot semantics (non-locking;
    * `complete=false` must fail closed).
    */
@@ -573,12 +573,12 @@ export class RuntimeAgentSpawn {
     nodeId: string
     path: string
     signal?: AbortSignal
-  }): Promise<import('@helm/protocol').NodePathUsage> {
+  }): Promise<import('@helmx/protocol').NodePathUsage> {
     if (typeof input.nodeId !== 'string' || input.nodeId === '') {
-      throw new HelmError('validation_error', `inspectNodePathUsage requires a non-empty nodeId (received ${String(input.nodeId)})`, 400)
+      throw new HelmxError('validation_error', `inspectNodePathUsage requires a non-empty nodeId (received ${String(input.nodeId)})`, 400)
     }
     if (typeof input.path !== 'string' || input.path === '' || input.path.includes('\u0000')) {
-      throw new HelmError('validation_error', 'inspectNodePathUsage requires a non-empty path without NUL bytes', 400)
+      throw new HelmxError('validation_error', 'inspectNodePathUsage requires a non-empty path without NUL bytes', 400)
     }
     return this.deps.envFabric.inspectPathUsage(input.nodeId, input.path, input.signal)
   }

@@ -8,10 +8,10 @@
  * process-current directory and are always rejected explicitly.
  *
  * Shape detection and browser-safe path rules (`normalize`/`join`/`dirname`/`basename`) live in
- * `@helm/protocol`; full `node:path` `resolve` semantics (requiring Node) live here;
+ * `@helmx/protocol`; full `node:path` `resolve` semantics (requiring Node) live here;
  * `isAbsoluteTargetPath`/`targetPathShape` are re-exported by `tools.ts` for existing relative imports.
  */
-import { isAbsoluteTargetPath, normalizeTargetPath, targetPathShape, type TargetPlatform } from '@helm/protocol'
+import { isAbsoluteTargetPath, normalizeTargetPath, targetPathShape, type TargetPlatform } from '@helmx/protocol'
 import { posix, win32 } from 'node:path'
 
 /** Windows drive prefix (case-insensitive): `C:` / `c:`, etc. */
@@ -21,7 +21,7 @@ const WINDOWS_DRIVE_RELATIVE = /^[A-Za-z]:($|[^\\/])/
 
 /**
  * Pick the full `node:path` rule set matching a path shape (kernel Node-only usage where `resolve`/`relative`
- * depend on Node implementations; lexical subset lives in `@helm/protocol` `pathRulesForShape`).
+ * depend on Node implementations; lexical subset lives in `@helmx/protocol` `pathRulesForShape`).
  */
 export function nodePathForShape(shape: 'posix' | 'win32' | undefined): typeof posix | typeof win32 {
   return shape === 'win32' ? win32 : posix
@@ -33,7 +33,7 @@ export function nodePathForShape(shape: 'posix' | 'win32' | undefined): typeof p
  * are always rejected (since process cwd semantics cannot be pre-verified).
  *
  * When `platform === 'win32'` (known Windows target): normalizes `base` and absolute `raw` deterministically via
- * `@helm/protocol` `normalizeTargetPath` (converting WSL `/mnt/<drive>`, Git Bash `/<drive>`, and `//server/share`
+ * `@helmx/protocol` `normalizeTargetPath` (converting WSL `/mnt/<drive>`, Git Bash `/<drive>`, and `//server/share`
  * into canonical Windows paths; explicitly rejects unmappable bare POSIX roots while preserving original strings),
  * then resolves relative segments with `win32` rules. When `platform` is omitted (unknown remote platform), keeps
  * existing shape-based behavior without guessing (Linux/macOS and POSIX semantics remain unchanged).

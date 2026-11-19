@@ -9,18 +9,18 @@
  */
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { Harness } from '@earendil-works/pi-durable'
-import type { ConversationSummary, GuardedMutationExpectation } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { ConversationSummary, GuardedMutationExpectation } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type { SecretStash } from '../services/index.js'
 import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
 import { requireConv } from './runtime-helpers.js'
 import { resolveCleanForkAnchor } from './spawn-fork.js'
-import type { HelmStore } from './store.js'
+import type { HelmxStore } from './store.js'
 
 interface ConversationContextOpsHost {
   readonly harness: Harness
-  readonly store: HelmStore
+  readonly store: HelmxStore
   readonly tracker: ConversationTracker
   readonly events: EventHub
   readonly stash: SecretStash
@@ -39,16 +39,16 @@ export class ConversationContextOps {
 
   /** Kernel shutdown guard (shared across context operations). */
   assertOpen(): void {
-    if (this.host.isClosed()) throw new HelmError('runtime_closed', 'kernel is closing; rejecting new input submission', 503)
+    if (this.host.isClosed()) throw new HelmxError('runtime_closed', 'kernel is closing; rejecting new input submission', 503)
   }
 
   /** Fetch existing conversation metadata and SDK handle (throws 404 if missing). */
   async conversationForContextOp(
     id: number,
-  ): Promise<{ meta: NonNullable<ReturnType<HelmStore['getConv']>>; conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>> }> {
+  ): Promise<{ meta: NonNullable<ReturnType<HelmxStore['getConv']>>; conversation: NonNullable<Awaited<ReturnType<Harness['conversation']>>> }> {
     const meta = requireConv(this.host.store, id)
     const conversation = await this.host.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+    if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
     return { meta, conversation }
   }
 
@@ -105,7 +105,7 @@ export class ConversationContextOps {
 
   /**
    * Fork a new conversation from a specified entry or latest clean anchor: calls SDK fork(entryId),
-   * registers helm mirror (inheriting profile/tags/cwd/model/overrides with parent pointing to source), and aligns model.
+   * registers helmx mirror (inheriting profile/tags/cwd/model/overrides with parent pointing to source), and aligns model.
    */
   async forkConversation(
     id: number,
@@ -114,7 +114,7 @@ export class ConversationContextOps {
     this.assertOpen()
     const explicitEntryId = opts?.entryId
     if (explicitEntryId !== undefined && (!Number.isSafeInteger(explicitEntryId) || explicitEntryId <= 0)) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `entryId must be a positive safe integer (received ${String(explicitEntryId)})`,
         400,
@@ -124,7 +124,7 @@ export class ConversationContextOps {
     const explicitParentId = opts?.parentConversationId
     if (explicitParentId !== undefined) {
       if (!Number.isSafeInteger(explicitParentId) || explicitParentId <= 0) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `parentConversationId must be a positive safe integer (received ${String(explicitParentId)})`,
           400,
@@ -132,7 +132,7 @@ export class ConversationContextOps {
         )
       }
       if (this.host.store.getConv(explicitParentId) === undefined || this.host.store.isDeleted(explicitParentId)) {
-        throw new HelmError('not_found', `parent conversation not found: ${explicitParentId}`, 404, {
+        throw new HelmxError('not_found', `parent conversation not found: ${explicitParentId}`, 404, {
           parentConversationId: explicitParentId,
         })
       }
@@ -148,7 +148,7 @@ export class ConversationContextOps {
         BACKGROUND_CONTEXT,
       )
       if (page.items.length === 0 || (page.items[0] as { id: number }).id !== explicitEntryId) {
-        throw new HelmError('not_found', `entry ${explicitEntryId} does not exist in conversation ${id}`, 404, {
+        throw new HelmxError('not_found', `entry ${explicitEntryId} does not exist in conversation ${id}`, 404, {
           conversationId: id,
           entryId: explicitEntryId,
         })

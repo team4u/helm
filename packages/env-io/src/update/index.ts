@@ -1,6 +1,6 @@
 /**
- * The shared self-update engine for long-running Helm processes (`@helm/node` daemon
- * today, the local Hub launcher next), living under `@helm/env-io`'s `update/` subtree
+ * The shared self-update engine for long-running Helmx processes (`@helmx/node` daemon
+ * today, the local Hub launcher next), living under `@helmx/env-io`'s `update/` subtree
  * and re-exported from the package root.
  *
  * Mechanisms provided (policy stays with the consumer):
@@ -8,7 +8,7 @@
  *   tarball download (`downloadVerifiedTarball`), registry allowlisting for RPC-exposed inputs;
  * - immutable release staging: `releases/<version>/<uuid>/` directories with a `.complete`
  *   marker, cache revalidation, layout declared per product via `ReleaseLayout`
- *   (Node's dual `@helm/node` + `@helm/cli` packages, a single Hub payload, or an injected
+ *   (Node's dual `@helmx/node` + `@helmx/cli` packages, a single Hub payload, or an injected
  *   `stageExtractor` for layouts npm staging cannot express);
  * - atomic state: `current.json` / `update-blocked.json` (explicit corruption errors,
  *   `0600` atomic writes) and a cross-process `upgrade.lock`;
@@ -18,7 +18,7 @@
  *   `UpgradeCommitUnconfirmedError`; `current.json` disk format is codec-injectable
  *   (`UpdateStateOps`) so consumers with pre-existing on-disk contracts keep them.
  *
- * The engine depends only on `@helm/protocol` (strict SemVer) and the host package's own
+ * The engine depends only on `@helmx/protocol` (strict SemVer) and the host package's own
  * I/O helpers (atomic writes, process-tree termination); it never imports the kernel,
  * plugins, or the Hub, and keeps no product policy inside.
  */

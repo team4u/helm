@@ -6,13 +6,13 @@
  */
 
 import {
-  HelmError,
+  HelmxError,
   type AgentSpawnRequest,
-  type HelmPluginContext,
+  type HelmxPluginContext,
   type HookResult,
   type PluginDocHandle,
   type TurnSettledPayload,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { type WorkflowRunSummary } from '../contracts.js'
 import { AskCoordinator, type AskEntry } from './asks.js'
 import {
@@ -62,7 +62,7 @@ export interface HerdrRuntimeController {
 }
 
 interface CreateHerdrRuntimeOptions {
-  ctx: HelmPluginContext
+  ctx: HelmxPluginContext
   managedDoc: PluginDocHandle<ManagedDoc>
   overviewDoc: PluginDocHandle<OverviewDoc>
   timingOverrides?: HerdrTimingOverrides
@@ -328,7 +328,7 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
         projector().forget(pane.paneId, nodeIdOf(pane))
         // External settle path synchronously releases the executor-side secret env / not-started markers: afterwards
         // closePane early-exits idempotently due to settled; without aligning here, every in-flight pane closed
-        // would retain a copy of HELM_TOKEN until the disable rebuild.
+        // would retain a copy of HELMX_TOKEN until the disable rebuild.
         executorRef.current?.releasePaneState(pane)
         if (pane.outcome !== 'failed' && pane.outcome !== 'settled') {
           registry.update(nodeIdOf(pane), pane.paneId, {
@@ -378,7 +378,7 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
       await ctx.host.cancelAsk(entry.askId, reason)
     } catch (error) {
       if (
-        error instanceof HelmError &&
+        error instanceof HelmxError &&
         (error.status === 404 ||
           error.code === 'ask_already_settled' ||
           error.code === 'plugin_host_disposed' ||
@@ -417,7 +417,7 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
       const agent = snapshots.get(key)!.agents.find((a) => a.paneId === pane.paneId)
       if (agent === undefined) {
         if (pane.outcome === 'running' && pane.outputFileName !== undefined) {
-          // Keep running pane record across restart so reattach can inspect .helm/<outputFileName> or report herdr_pane_lost honestly.
+          // Keep running pane record across restart so reattach can inspect .helmx/<outputFileName> or report herdr_pane_lost honestly.
           continue
         }
         // Pane already gone: register settled (no resources to reclaim) + align the executor side.
@@ -431,7 +431,7 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
         continue
       }
       // Exact ownership verification: agent.name must equal the recorded agentName (no startsWith --
-      // helm-wf-abc must not claim helm-wf-abcde). Mismatched identity gives up ownership; no wrong closes.
+      // helmx-wf-abc must not claim helmx-wf-abcde). Mismatched identity gives up ownership; no wrong closes.
       if (agent.name !== pane.agentName) {
         registry.update(nodeIdOf(pane), pane.paneId, {
           outcome: 'settled',
@@ -497,7 +497,7 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
         })) as { status?: string } | undefined
         runStatus = summary?.status
       } catch (error) {
-        if (error instanceof HelmError && error.code === 'not_found') {
+        if (error instanceof HelmxError && error.code === 'not_found') {
           runStatus = 'not_found'
         } else {
           continue
@@ -598,7 +598,7 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
     const session = typeof config.session === 'string' && config.session !== '' ? config.session : undefined
     const socketPath = typeof config.socketPath === 'string' && config.socketPath !== '' ? config.socketPath : undefined
     if (session !== undefined && !isValidSessionName(session)) {
-      throw new HelmError('validation_error', `Herdr session name '${session}' is invalid (must start alphanumeric, may contain - _, <= 64 chars)`, 400, {
+      throw new HelmxError('validation_error', `Herdr session name '${session}' is invalid (must start alphanumeric, may contain - _, <= 64 chars)`, 400, {
         session,
       })
     }
@@ -713,7 +713,7 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
           await ctx.host.cancelAsk(entry.askId, 'cancelled')
         } catch (err) {
           const expected =
-            err instanceof HelmError &&
+            err instanceof HelmxError &&
             (err.status === 404 ||
               err.code === 'ask_already_settled' ||
               err.code === 'plugin_host_disposed' ||
@@ -745,7 +745,7 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
         await managedDoc.flush()
       } catch (err) {
         const expected =
-          err instanceof HelmError &&
+          err instanceof HelmxError &&
           (err.code === 'plugin_host_disposed' || err.code === 'plugin_context_expired')
         if (!expected) errors.push(err)
       }
@@ -759,7 +759,7 @@ export function createHerdrRuntime(options: CreateHerdrRuntimeOptions): HerdrRun
     probes.reset()
     if (errors.length > 0) {
       const detail = errors.map((e) => (e instanceof Error ? depsOf().redact(e.message) : String(e))).join('; ')
-      throw new HelmError('plugin_service_stop_failed', `herdr service cleanup failed: ${detail}`, 500, { errors: detail })
+      throw new HelmxError('plugin_service_stop_failed', `herdr service cleanup failed: ${detail}`, 500, { errors: detail })
     }
   }
 

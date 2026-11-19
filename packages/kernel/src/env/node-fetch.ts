@@ -13,7 +13,7 @@
  * - AbortSignal propagation: cancelling during request destroys `req` and the tunnel (driving Response body
  *   termination via error/cancel);
  * - 4xx/5xx are not transport failures: return the Response as-is; only tunnel establishment failures,
- *   socket drops, and timeouts throw HelmError.
+ *   socket drops, and timeouts throw HelmxError.
  */
 
 import http from 'node:http'
@@ -21,7 +21,7 @@ import tls from 'node:tls'
 import net from 'node:net'
 import { Readable } from 'node:stream'
 import type { Duplex } from 'node:stream'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 
 /** Default local TCP connect timeout: matches remote `registry.openTunnel` timeout. */
 const LOCAL_TUNNEL_CONNECT_TIMEOUT_MS = 10_000
@@ -41,17 +41,17 @@ const abandonedBodies = new FinalizationRegistry<() => void>((settle) => {
 
 /**
  * Local node tunnel implementation: connects directly via `net.connect` inside the Hub process (arbitrary host:port).
- * Throws HelmError explicitly on abort/timeout/error and guarantees socket release (never leaks half-open sockets).
+ * Throws HelmxError explicitly on abort/timeout/error and guarantees socket release (never leaks half-open sockets).
  */
 export function connectLocalTunnel(host: string, port: number, signal?: AbortSignal): Promise<Duplex> {
   if (signal?.aborted) {
-    return Promise.reject(new HelmError('aborted', 'tunnel establishment cancelled', 499, { host, port }))
+    return Promise.reject(new HelmxError('aborted', 'tunnel establishment cancelled', 499, { host, port }))
   }
   return new Promise<Duplex>((resolve, reject) => {
     const socket = net.connect({ host, port })
     let settled = false
     const timer = setTimeout(() => {
-      finishErr(new HelmError(
+      finishErr(new HelmxError(
         'node_tunnel_timeout',
         `connect ${host}:${port} timed out (${LOCAL_TUNNEL_CONNECT_TIMEOUT_MS}ms)`,
         504,
@@ -66,7 +66,7 @@ export function connectLocalTunnel(host: string, port: number, signal?: AbortSig
       signal?.removeEventListener('abort', onAbort)
       resolve(socket)
     }
-    const finishErr = (error: HelmError): void => {
+    const finishErr = (error: HelmxError): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
@@ -75,18 +75,18 @@ export function connectLocalTunnel(host: string, port: number, signal?: AbortSig
       reject(error)
     }
     const onAbort = (): void => {
-      finishErr(new HelmError('aborted', 'tunnel establishment cancelled', 499, { host, port }))
+      finishErr(new HelmxError('aborted', 'tunnel establishment cancelled', 499, { host, port }))
     }
     signal?.addEventListener('abort', onAbort, { once: true })
     socket.once('connect', () => {
       if (signal?.aborted) {
-        finishErr(new HelmError('aborted', 'tunnel establishment cancelled', 499, { host, port }))
+        finishErr(new HelmxError('aborted', 'tunnel establishment cancelled', 499, { host, port }))
         return
       }
       finishOk()
     })
     socket.once('error', (error: Error) => {
-      finishErr(new HelmError(
+      finishErr(new HelmxError(
         'node_tunnel_connect_failed',
         `connect ${host}:${port} failed: ${error.message}`,
         502,
@@ -102,7 +102,7 @@ export function connectLocalTunnel(host: string, port: number, signal?: AbortSig
  */
 function tlsOverTunnel(tunnel: Duplex, host: string, signal?: AbortSignal): Promise<Duplex> {
   if (signal?.aborted) {
-    return Promise.reject(new HelmError('aborted', 'TLS handshake cancelled', 499, { host }))
+    return Promise.reject(new HelmxError('aborted', 'TLS handshake cancelled', 499, { host }))
   }
   return new Promise<Duplex>((resolve, reject) => {
     // IP literals participate in certificate SAN checks, but SNI extension only accepts DNS hostnames.
@@ -112,7 +112,7 @@ function tlsOverTunnel(tunnel: Duplex, host: string, signal?: AbortSignal): Prom
       clearTimeout(timer)
       signal?.removeEventListener('abort', onAbort)
     }
-    const fail = (error: HelmError): void => {
+    const fail = (error: HelmxError): void => {
       if (settled) return
       settled = true
       cleanup()
@@ -120,11 +120,11 @@ function tlsOverTunnel(tunnel: Duplex, host: string, signal?: AbortSignal): Prom
       reject(error)
     }
     const timer = setTimeout(() => {
-      fail(new HelmError('node_tunnel_timeout', `TLS handshake timed out (${host})`, 504, { host }))
+      fail(new HelmxError('node_tunnel_timeout', `TLS handshake timed out (${host})`, 504, { host }))
     }, LOCAL_TUNNEL_CONNECT_TIMEOUT_MS)
     timer.unref?.()
     const onAbort = (): void => {
-      fail(new HelmError('aborted', 'TLS handshake cancelled', 499, { host }))
+      fail(new HelmxError('aborted', 'TLS handshake cancelled', 499, { host }))
     }
     signal?.addEventListener('abort', onAbort, { once: true })
     secure.once('secureConnect', () => {
@@ -134,7 +134,7 @@ function tlsOverTunnel(tunnel: Duplex, host: string, signal?: AbortSignal): Prom
       resolve(secure)
     })
     secure.once('error', (error: Error) => {
-      fail(new HelmError(
+      fail(new HelmxError(
         'node_tunnel_connect_failed',
         `TLS handshake failed (${host}): ${error.message}`,
         502,
@@ -142,7 +142,7 @@ function tlsOverTunnel(tunnel: Duplex, host: string, signal?: AbortSignal): Prom
       ))
     })
     secure.once('close', () => {
-      fail(new HelmError('node_tunnel_closed', `connection closed during TLS handshake (${host})`, 502, { host }))
+      fail(new HelmxError('node_tunnel_closed', `connection closed during TLS handshake (${host})`, 502, { host }))
     })
     if (signal?.aborted) onAbort()
   })
@@ -171,7 +171,7 @@ export async function tunnelFetch(
 ): Promise<Response> {
   const url = new URL(request.url)
   if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-    throw new HelmError(
+    throw new HelmxError(
       'node_tunnel_connect_failed',
       `node fetch only supports http/https (got ${url.protocol})`,
       400,
@@ -188,8 +188,8 @@ export async function tunnelFetch(
   try {
     tcp = await openTunnel({ host: hostname, port }, signal)
   } catch (error) {
-    if (error instanceof HelmError) throw error
-    throw new HelmError(
+    if (error instanceof HelmxError) throw error
+    throw new HelmxError(
       'node_tunnel_connect_failed',
       `node ${nodeId} tunnel establishment failed: ${error instanceof Error ? error.message : String(error)}`,
       502,
@@ -203,8 +203,8 @@ export async function tunnelFetch(
     } catch (error) {
       // `tls.connect` destroys `secure` on failure, so explicitly destroy underlying `tcp` to prevent socket leaks.
       tcp.destroy()
-      if (error instanceof HelmError) throw error
-      throw new HelmError(
+      if (error instanceof HelmxError) throw error
+      throw new HelmxError(
         'node_tunnel_connect_failed',
         `node ${nodeId} TLS establishment failed: ${error instanceof Error ? error.message : String(error)}`,
         502,
@@ -215,7 +215,7 @@ export async function tunnelFetch(
 
   return await new Promise<Response>((resolve, reject) => {
     const failTunnel = (code: string, message: string, status: number): void => {
-      const error = new HelmError(code, message, status, { nodeId, url: request.url })
+      const error = new HelmxError(code, message, status, { nodeId, url: request.url })
       tunnel.destroy(error)
       reject(error)
     }
@@ -327,8 +327,8 @@ export async function tunnelFetch(
     const onAbort = (): void => {
       req.destroy()
       // Destroying duplex drives Response body error/cancel.
-      tunnel.destroy(new HelmError('aborted', 'node fetch cancelled', 499, { nodeId, url: request.url }))
-      reject(new HelmError('aborted', 'node fetch cancelled', 499, { nodeId, url: request.url }))
+      tunnel.destroy(new HelmxError('aborted', 'node fetch cancelled', 499, { nodeId, url: request.url }))
+      reject(new HelmxError('aborted', 'node fetch cancelled', 499, { nodeId, url: request.url }))
     }
     if (signal?.aborted) { onAbort(); return }
     signal?.addEventListener('abort', onAbort, { once: true })

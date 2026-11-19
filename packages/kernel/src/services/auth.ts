@@ -20,7 +20,7 @@ import {
 } from 'node:crypto'
 import { promisify } from 'node:util'
 import { join } from 'node:path'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { ConfigService, onConfigInvalidated } from './config.js'
 import { withFileLock } from './file-lock.js'
 
@@ -245,7 +245,7 @@ export class AuthService {
       const state = await this.readStateFromDisk()
       if (state === undefined) {
         // Structured code lets HTTP layer classify (mapped externally to `409 not_setup`).
-        throw new HelmError('auth_not_setup', 'authentication is not configured yet; run setup first', 409)
+        throw new HelmxError('auth_not_setup', 'authentication is not configured yet; run setup first', 409)
       }
       const derived = await hashPassword(
         password,

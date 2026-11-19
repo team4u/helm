@@ -6,10 +6,10 @@
  */
 
 import type { ConversationSummary } from './conversation.js'
-import type { HelmErrorDetail } from './error.js'
+import type { HelmxErrorDetail } from './error.js'
 
 export interface ApiErrorBody {
-  error: HelmErrorDetail
+  error: HelmxErrorDetail
 }
 
 /** `GET /api/auth/status`. */
@@ -63,7 +63,7 @@ export interface SearchHit {
   title?: string
 }
 
-/** Single source of truth for static core CLI command paths (bidirectionally locked with @helm/cli coreCommands() and the built-in skill SKILL.md). */
+/** Single source of truth for static core CLI command paths (bidirectionally locked with @helmx/cli coreCommands() and the built-in skill SKILL.md). */
 export const CORE_CLI_COMMAND_PATHS = [
   'setup',
   'login',

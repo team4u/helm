@@ -9,26 +9,26 @@ import * as ReactDomClient from 'react-dom/client'
 import * as LucideReact from 'lucide-react'
 import { mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
-import { compilePluginClientModule } from '@helm/plugin-build'
+import { compilePluginClientModule } from '@helmx/plugin-build'
 
 export const PLUGIN_CLIENT_CACHE_DIR = fileURLToPath(
-  new URL('../../../../node_modules/.cache/helm-test-plugin-clients', import.meta.url),
+  new URL('../../../../node_modules/.cache/helmx-test-plugin-clients', import.meta.url),
 )
 mkdirSync(PLUGIN_CLIENT_CACHE_DIR, { recursive: true })
 
-/** 将宿主共享 React / Lucide / @helm/plugin-client 命名空间挂载到 globalThis。 */
+/** 将宿主共享 React / Lucide / @helmx/plugin-client 命名空间挂载到 globalThis。 */
 export function mountPluginNamespaceGlobals(pluginClientNamespace: Record<string, unknown>): void {
   Object.assign(globalThis, {
-    __helm_shared_react: React,
-    __helm_shared_react_dom: ReactDom,
-    __helm_shared_react_dom_client: ReactDomClient,
-    __helm_shared_react_jsx_runtime: ReactJsxRuntime,
-    __helm_shared_lucide_react: LucideReact,
-    __helm_shared_plugin_client: pluginClientNamespace,
+    __helmx_shared_react: React,
+    __helmx_shared_react_dom: ReactDom,
+    __helmx_shared_react_dom_client: ReactDomClient,
+    __helmx_shared_react_jsx_runtime: ReactJsxRuntime,
+    __helmx_shared_lucide_react: LucideReact,
+    __helmx_shared_plugin_client: pluginClientNamespace,
   })
 }
 
-/** 通过 @helm/plugin-build 编译真实插件 client 模块并以 data: URL 动态导入。 */
+/** 通过 @helmx/plugin-build 编译真实插件 client 模块并以 data: URL 动态导入。 */
 export async function importCompiledPluginClient(
   pluginId: string,
   root: string,

@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react'
-import { HelmIcon } from '@helm/plugin-client'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { useLocationTargets, useNodes, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import type { WebMessageKey } from '../i18n/catalog.js'
@@ -41,7 +41,7 @@ const CATEGORY_TABS: ReadonlyArray<{ key: NodeCategoryTab; labelKey: WebMessageK
  * - responsive card grid consuming NodeCard in an adaptive flow;
  * - details & diagnostics drawer: the right-side NodeDetailDrawer with node
  *   health checks, enrollment commands and capability lists;
- * - state loop: deeply integrated with the useHelmStore() primaryTarget state
+ * - state loop: deeply integrated with the useHelmxStore() primaryTarget state
  *   and the URL hash;
  * - strictly zero Emoji and Fast Refresh compliant.
  */
@@ -110,7 +110,7 @@ export function NodeCenter({
       <div className="primary-center-topbar pane-topbar">
         <div className="primary-center-title-wrap pane-title-group">
           <div className="primary-center-title">
-            <HelmIcon name="cpu" size={14} />
+            <HelmxIcon name="cpu" size={14} />
             <span>{t('nodes.title')}</span>
           </div>
         </div>
@@ -122,7 +122,7 @@ export function NodeCenter({
             onClick={handleOpenAddNew}
             title={t('nodes.connectTitle')}
           >
-            <HelmIcon name="plus" size={12} />
+            <HelmxIcon name="plus" size={12} />
             <span className="pane-action-label">{t('nodes.connect')}</span>
           </button>
           {isSplit ? (
@@ -139,7 +139,7 @@ export function NodeCenter({
       {/* Toolbar: search input and category pills */}
       <div className="primary-center-toolbar">
         <div className="primary-search-box">
-          <HelmIcon name="search" size={14} />
+          <HelmxIcon name="search" size={14} />
           <input
             type="text"
             placeholder={t('nodes.searchPlaceholder')}
@@ -155,7 +155,7 @@ export function NodeCenter({
               aria-label={t('nodes.searchClear')}
               onClick={() => setQuery('')}
             >
-              <HelmIcon name="x" size={12} />
+              <HelmxIcon name="x" size={12} />
             </button>
           )}
         </div>
@@ -197,7 +197,7 @@ export function NodeCenter({
         ) : (
           <div className="primary-center-empty">
             <div className="primary-center-empty-icon">
-              <HelmIcon name="search" size={28} />
+              <HelmxIcon name="search" size={28} />
             </div>
             <div className="primary-center-empty-text">{t('nodes.emptyTitle')}</div>
             <div className="primary-center-empty-hint text-subtle">
@@ -212,7 +212,7 @@ export function NodeCenter({
                   setActiveTab('all')
                 }}
               >
-                <HelmIcon name="rotate-ccw" size={12} />
+                <HelmxIcon name="rotate-ccw" size={12} />
                 <span>{t('nodes.resetFilters')}</span>
               </button>
             )}

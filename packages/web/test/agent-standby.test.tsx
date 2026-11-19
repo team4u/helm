@@ -1,5 +1,5 @@
 /**
- * Agent standby pane interaction tests: real HelmStoreProvider + real App.
+ * Agent standby pane interaction tests: real HelmxStoreProvider + real App.
  *
  * Covers: deep-link standby without POST, sidebar name/plus new-entry into standby,
  * the first-send chain (create -> submit) with double-click dedupe, create/submit
@@ -13,7 +13,7 @@ import { afterEach, test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
 import {
   ensureHappyDom,
@@ -284,7 +284,7 @@ async function mount(hash: string): Promise<void> {
   })
   await waitForCondition(
     () =>
-      document.querySelector('.helm-shell') !== null &&
+      document.querySelector('.helmx-shell') !== null &&
       document.querySelector('.connection-banner') === null &&
       (state.profilesFail || !document.body.textContent?.includes('Loading profile info')),
   )
@@ -607,7 +607,7 @@ test('split-pane standby first send: the primary conversation stays untouched; t
   assert.equal(state.submitCalls.length, 1)
   assert.equal(window.location.hash, '#/c/1?split=c%2F9', 'the new conversation replaces onto the split without hijacking the primary')
   assert.ok(document.body.textContent?.includes('会话 1'), 'the primary conversation still renders')
-  const splitPanes = document.querySelectorAll('.helm-split-pane')
+  const splitPanes = document.querySelectorAll('.helmx-split-pane')
   assert.ok(splitPanes.length > 0 && splitPanes[0]!.textContent?.includes('会话 9'), 'the split renders the new conversation')
 })
 
@@ -866,7 +866,7 @@ test('logout during the create wait: releases the draft and voids the in-flight 
   await mount('#/a/assistant')
   act(() => { typeInto(textarea(MAIN_LABEL), '将被释放') })
   await act(async () => { pressEnter(textarea(MAIN_LABEL)) })
-  await act(async () => { window.dispatchEvent(new Event('helm:unauthorized')) })
+  await act(async () => { window.dispatchEvent(new Event('helmx:unauthorized')) })
   await settle()
   const key = standbyDraftKey({ panel: 'primary', profileId: 'assistant' })
   assert.equal(getStandbyDraft(key).text, '', 'logout releases the draft synchronously')
@@ -889,7 +889,7 @@ test('logout during the upload wait: no further submit, no attachment revival; t
   act(() => { typeInto(textarea(MAIN_LABEL), '上传中释放') })
   await act(async () => { pressEnter(textarea(MAIN_LABEL)) })
   await waitForCondition(() => state.uploadStarted)
-  await act(async () => { window.dispatchEvent(new Event('helm:unauthorized')) })
+  await act(async () => { window.dispatchEvent(new Event('helmx:unauthorized')) })
   await settle()
   await act(async () => { state.uploadGate!.resolve() })
   await flushMacrotask(0)

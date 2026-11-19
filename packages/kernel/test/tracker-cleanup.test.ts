@@ -2,7 +2,7 @@
  * ConversationTracker input tracking uniqueness and settlement precision regression tests.
  *
  * Bug background (fixed and locked by this file):
- * - Previous rebuildFromEntries created `req:` entries for every historical helm.input in the window
+ * - Previous rebuildFromEntries created `req:` entries for every historical helmx.input in the window
  *   and re-scanned history on every snapshot; turn settlement (takeConsumed) only cleared numeric keys,
  *   keeping historical `req:` keys resident indefinitely; takeAllInputs on abort scanned the entire map,
  *   polluting aborted payload origins and input lists with old historical inputs.
@@ -14,7 +14,7 @@
  *    and entry/inbox rebuild merge into a single record with no duplicates; submissionId lives only in
  *    submissionIndex (mapping side for SDK run.inputs/failure.inputs);
  * 2. Entry rebuild only covers the current run range (run.first and onward) and current inbox, never
- *    resurrecting settled historical helm.input entries: aborting after prior completed rounds contains only current run inputs;
+ *    resurrecting settled historical helmx.input entries: aborting after prior completed rounds contains only current run inputs;
  * 3. Repeated requestIds in the same conversation (SDK per-conversation dedup) rebuild cleanly without duplication;
  * 4. Restart recovery across an active run: observe reconciles missing origin/meta/attachments and index mappings
  *    using authoritative live.run.inputs + submission queries;
@@ -34,11 +34,11 @@ import { join } from 'node:path'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
-import type { ConversationInput, TurnSettledPayload } from '@helm/protocol'
+import type { ConversationInput, TurnSettledPayload } from '@helmx/protocol'
 import { KernelRuntime } from '../src/runtime/index.js'
 import { ConversationTracker } from '../src/runtime/conversations.js'
-import { openHelmDatabase } from '../src/runtime/sqlite.js'
-import { HelmStore } from '../src/runtime/store.js'
+import { openHelmxDatabase } from '../src/runtime/sqlite.js'
+import { HelmxStore } from '../src/runtime/store.js'
 import { cleanupDir, deferred, makeFauxModels, makeTempDir, sleep, waitFor } from './helpers.js'
 
 type FauxHandle = ReturnType<typeof makeFauxModels>['faux']
@@ -72,7 +72,7 @@ const timeout = { timeout: 60_000 } as const
 let root: string
 
 before(async () => {
-  root = await makeTempDir('helm-tracker-')
+  root = await makeTempDir('helmx-tracker-')
 })
 
 after(async () => {
@@ -165,7 +165,7 @@ describe('input uniqueness and no resurrection of history', { timeout: 60_000 },
     }
   })
 
-  it('historical helm.input never resurrects on subsequent scans: trackedInputs returns to zero after several turns', timeout, async () => {
+  it('historical helmx.input never resurrects on subsequent scans: trackedInputs returns to zero after several turns', timeout, async () => {
     const kernel = await openRuntime(join(root, 'no-resurrect'))
     try {
       kernel.__faux.setResponses([
@@ -258,8 +258,8 @@ describe('duplicate requestId submission and restart recovery', { timeout: 60_00
     // explicitly aborts in-flight conversations, preventing a crash-mid-run restart setup).
     const dir = join(root, 'restart-active-run')
     const mkHarness = async () => {
-      const database = await openHelmDatabase(dir)
-      const store = new HelmStore(database)
+      const database = await openHelmxDatabase(dir)
+      const store = new HelmxStore(database)
       await store.load()
       const { models, faux } = makeFauxModels()
       const harness = await Harness.open(
@@ -270,7 +270,7 @@ describe('duplicate requestId submission and restart recovery', { timeout: 60_00
       return { harness, store, database, faux }
     }
     const settled: TurnSettledPayload[] = []
-    const trackerOfHarness = (harness: Harness, store: HelmStore) =>
+    const trackerOfHarness = (harness: Harness, store: HelmxStore) =>
       new ConversationTracker({
         harness,
         store,
@@ -327,7 +327,7 @@ describe('duplicate requestId submission and restart recovery', { timeout: 60_00
           type: 'input',
           content: 'in-flight question before restart',
           entry: {
-            kind: 'helm.input',
+            kind: 'helmx.input',
             data: { id: 'restart-1', text: 'in-flight question before restart', origin: 'agent', createdAt: 5, meta: { from: 'test', seq: 7 } },
           },
           requestId: 'restart-1',
@@ -387,8 +387,8 @@ describe('duplicate requestId submission and restart recovery', { timeout: 60_00
     // (task commits before submit continuation), this case turns red immediately instead of dropping input ownership on fast turns.
     const dir = join(root, 'instant-settle-window')
     const mkHarness = async () => {
-      const database = await openHelmDatabase(dir)
-      const store = new HelmStore(database)
+      const database = await openHelmxDatabase(dir)
+      const store = new HelmxStore(database)
       await store.load()
       const { models, faux } = makeFauxModels()
       const harness = await Harness.open(
@@ -456,7 +456,7 @@ describe('duplicate requestId submission and restart recovery', { timeout: 60_00
           {
             type: 'input',
             content: input.text,
-            entry: { kind: 'helm.input', data: { id: input.id, text: input.text, origin: 'human', createdAt: 1 } },
+            entry: { kind: 'helmx.input', data: { id: input.id, text: input.text, origin: 'human', createdAt: 1 } },
             requestId: input.id,
           },
           BACKGROUND_CONTEXT,

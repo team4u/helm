@@ -9,7 +9,7 @@
 import { createRequire } from 'node:module'
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ArtifactPreviewerSpec, ConversationSummary, PluginUiContribution } from '@helm/protocol'
+import type { ArtifactPreviewerSpec, ConversationSummary, PluginUiContribution } from '@helmx/protocol'
 import {
   collectArtifactPreviewers,
   matchesExtension,

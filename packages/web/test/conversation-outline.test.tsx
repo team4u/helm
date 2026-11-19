@@ -4,7 +4,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
 import {
   buildConversationOutline,
   buildMarkdownOutline,
@@ -90,7 +90,7 @@ test('extractMarkdownHeadings：提取 H1~H3 并严格跳过代码块围栏内�
 
 test('buildConversationOutline 与 filterOutlineNodes：构建完整树、支持关键词过滤与父提问保留', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [
-    { id: '1', kind: 'helm.input', data: { id: 'in-1', text: '帮我分析数据库慢查询\n附上日志', origin: 'human' }, createdAt: 1000 },
+    { id: '1', kind: 'helmx.input', data: { id: 'in-1', text: '帮我分析数据库慢查询\n附上日志', origin: 'human' }, createdAt: 1000 },
     {
       id: '2',
       kind: 'pi.assistant',
@@ -102,7 +102,7 @@ test('buildConversationOutline 与 filterOutlineNodes：构建完整树、支持
       ],
     },
     { id: '3', kind: 'pi.reset', data: { handoff: '已重置' } },
-    { id: '4', kind: 'helm.input', data: { id: 'in-2', text: '接下来优化 Redis 缓存策略', origin: 'human' }, createdAt: 2000 },
+    { id: '4', kind: 'helmx.input', data: { id: 'in-2', text: '接下来优化 Redis 缓存策略', origin: 'human' }, createdAt: 2000 },
     {
       id: '5',
       kind: 'pi.assistant',
@@ -166,7 +166,7 @@ test('buildConversationOutline 与 filterOutlineNodes：构建完整树、支持
 
 test('buildConversationOutline：pending=true 的精简分割线标注为「正在精简上下文…」，已落库精简仍为「上下文已精简」', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [
-    { id: '1', kind: 'helm.input', data: { id: 'in-1', text: '旧问题', origin: 'human' }, createdAt: 1000 },
+    { id: '1', kind: 'helmx.input', data: { id: 'in-1', text: '旧问题', origin: 'human' }, createdAt: 1000 },
     { id: '2', kind: 'pi.compaction', model: [{ role: 'user', content: '摘要' }] },
   ]
   const items = buildTimelineItems(entries, { compacting: true })
@@ -227,7 +227,7 @@ function makeConv(id: number): ConversationSummary {
 test('ConversationPane 顶栏渲染大纲按钮，打开浮层后支持搜索过滤与点击滚动定位目标消息/章节', { timeout: 60_000 }, async () => {
   const conv = makeConv(10)
   const entries: ConversationEntry[] = [
-    { id: '101', kind: 'helm.input', data: { id: 'q1', text: '第一个问题：如何配置节点隧道？', origin: 'human' }, createdAt: 1000 },
+    { id: '101', kind: 'helmx.input', data: { id: 'q1', text: '第一个问题：如何配置节点隧道？', origin: 'human' }, createdAt: 1000 },
     {
       id: '102',
       kind: 'pi.assistant',
@@ -238,7 +238,7 @@ test('ConversationPane 顶栏渲染大纲按钮，打开浮层后支持搜索过
         },
       ],
     },
-    { id: '103', kind: 'helm.input', data: { id: 'q2', text: '第二个问题：如何排查插件加载失败？', origin: 'human' }, createdAt: 2000 },
+    { id: '103', kind: 'helmx.input', data: { id: 'q2', text: '第二个问题：如何排查插件加载失败？', origin: 'human' }, createdAt: 2000 },
     {
       id: '104',
       kind: 'pi.assistant',
@@ -316,10 +316,10 @@ test('ConversationPane 大纲业务卡节点：tool.view 卡经 cardId 二级锚
     BackgroundReportCard: () => e('div', { className: 'stub-report-card' }, 'report stub'),
   })
   const origFetch = globalThis.fetch
-  globalThis.fetch = async () => new Response('', { headers: { 'x-helm-client-hash': 'seeded' } })
+  globalThis.fetch = async () => new Response('', { headers: { 'x-helmx-client-hash': 'seeded' } })
   const conv = makeConv(11)
   const entries: ConversationEntry[] = [
-    { id: '201', kind: 'helm.input', data: { id: 'q1', text: '派子代理调研Outline现状', origin: 'human' }, createdAt: 1000 },
+    { id: '201', kind: 'helmx.input', data: { id: 'q1', text: '派子代理调研Outline现状', origin: 'human' }, createdAt: 1000 },
     {
       id: '202',
       kind: 'pi.assistant',
@@ -334,7 +334,7 @@ test('ConversationPane 大纲业务卡节点：tool.view 卡经 cardId 二级锚
     },
     {
       id: '204',
-      kind: 'helm.input',
+      kind: 'helmx.input',
       data: {
         id: 'in-204',
         text: '后台子代理任务已结算。以下为运行 abc123 的结果数据。',
@@ -354,7 +354,7 @@ test('ConversationPane 大纲业务卡节点：tool.view 卡经 cardId 二级锚
       {
         pluginId: 'builtin:workflow',
         surface: 'timeline.renderer',
-        spec: { id: 'background-report', kinds: ['helm.input'], matchMeta: { renderer: 'workflow:background-report' }, client: { module: 'index.tsx', export: 'BackgroundReportCard' } },
+        spec: { id: 'background-report', kinds: ['helmx.input'], matchMeta: { renderer: 'workflow:background-report' }, client: { module: 'index.tsx', export: 'BackgroundReportCard' } },
       },
     ],
   })
@@ -441,7 +441,7 @@ test('ConversationPane 大纲业务卡节点：tool.view 卡经 cardId 二级锚
 test('ConversationOutlinePopover 三态切换：默认「对话」过滤非人工/卡片，切「仅提问」与「全部」精准生效；showModeToggle=false 保持全量展示', { timeout: 60_000 }, async () => {
   const items = buildTimelineItems(
     [
-      { id: '1', kind: 'helm.input', data: { id: 'q1', text: '人类第一问', origin: 'human' }, createdAt: 1000 },
+      { id: '1', kind: 'helmx.input', data: { id: 'q1', text: '人类第一问', origin: 'human' }, createdAt: 1000 },
       {
         id: '2',
         kind: 'pi.assistant',
@@ -460,7 +460,7 @@ test('ConversationOutlinePopover 三态切换：默认「对话」过滤非人�
         kind: 'pi.tool-result',
         model: [{ role: 'toolResult', toolCallId: 'c1', toolName: 'subagent', content: [{ type: 'text', text: '完成' }] }],
       },
-      { id: '3', kind: 'helm.input', data: { id: 'q2', text: '后台代理触发输入', origin: 'agent' }, createdAt: 2000 },
+      { id: '3', kind: 'helmx.input', data: { id: 'q2', text: '后台代理触发输入', origin: 'agent' }, createdAt: 2000 },
       { id: '4', kind: 'pi.compaction', model: [{ role: 'user', content: '摘要' }] },
     ],
     {
@@ -478,7 +478,7 @@ test('ConversationOutlinePopover 三态切换：默认「对话」过滤非人�
   await act(async () => {
     root!.render(
       e(
-        (await import('./helpers/store.js')).HelmExternalStoreContext.Provider,
+        (await import('./helpers/store.js')).HelmxExternalStoreContext.Provider,
         { value: store },
         e(ConversationOutlinePopover, {
           nodes,
@@ -528,7 +528,7 @@ test('ConversationOutlinePopover 三态切换：默认「对话」过滤非人�
   await act(async () => {
     root!.render(
       e(
-        (await import('./helpers/store.js')).HelmExternalStoreContext.Provider,
+        (await import('./helpers/store.js')).HelmxExternalStoreContext.Provider,
         { value: store },
         e(ConversationOutlinePopover, {
           nodes,

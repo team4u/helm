@@ -24,8 +24,8 @@ import type {
   HubActivityCounts,
   InputOrigin,
   WhenBusy,
-} from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+} from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type { ArtifactService as SvcArtifactService, ProfileService, SecretStash, Profile } from '../services/index.js'
 import type { ConversationTracker } from './conversations.js'
 import type { EventHub } from './events.js'
@@ -37,7 +37,7 @@ import {
 import { toConversationEntry } from './entries.js'
 import { clampThinkingLevelForModel } from './models.js'
 import { THINKING_LEVELS } from './spawn.js'
-import type { HelmStore } from './store.js'
+import type { HelmxStore } from './store.js'
 import { ConversationAttachments } from './conversation-attachments.js'
 import { ConversationContextOps } from './conversation-context-ops.js'
 import { ConversationDetailService } from './conversation-detail.js'
@@ -49,7 +49,7 @@ import { normalizeSessionCwd, trustedPlatformFromEnvFabric, type TrustedNodePlat
 interface ConversationServiceOptions {
   readonly harness: Harness
   readonly storage: { scanConversations(query: never, limit: number, cursor: never, context: unknown): Promise<{ readonly items: ReadonlyArray<{ id: number | string; parent?: { conversationId?: number } }>; next?: unknown }> }
-  readonly store: HelmStore
+  readonly store: HelmxStore
   readonly tracker: ConversationTracker
   readonly events: EventHub
   readonly profilesSvc: ProfileService
@@ -68,9 +68,9 @@ interface ConversationServiceOptions {
   /** Clean up leftover handled tool calls (backstop on delete/abort). */
   readonly evictHandledToolCalls: (conversationId: number) => void
   /** Ownership annotation (restores 'human' as backstop on delete; host-injected). */
-  readonly markOwnership: (id: number, owner: 'helm' | 'bot' | 'human') => void
+  readonly markOwnership: (id: number, owner: 'helmx' | 'bot' | 'human') => void
   /** Current ownership lookup (for summary projection). */
-  readonly ownershipOf: (id: number) => 'helm' | 'bot' | 'human'
+  readonly ownershipOf: (id: number) => 'helmx' | 'bot' | 'human'
   /** Input hook pipeline (host HookBridge.runHookChain). */
   readonly runInputHook: (payload: unknown) => Promise<{ action: string; value?: unknown; reason?: string; result?: unknown } | undefined>
   /** Shutdown guard (isClosed). */
@@ -122,7 +122,7 @@ export interface SubmitInputOptions {
 export class ConversationService {
   private readonly harness: Harness
   private readonly storage: ConversationServiceOptions['storage']
-  private readonly store: HelmStore
+  private readonly store: HelmxStore
   private readonly tracker: ConversationTracker
   private readonly events: EventHub
   private readonly profilesSvc: ProfileService
@@ -248,16 +248,16 @@ export class ConversationService {
   /** Boundary validation for guard payload (throws 400 synchronously): expectedOwnership strictly forbids 'human'. */
   private assertGuardShape(guard: GuardedMutationExpectation): void {
     if (typeof guard !== 'object' || guard === null) {
-      throw new HelmError('validation_error', 'guarded mutation requires a guard object', 400)
+      throw new HelmxError('validation_error', 'guarded mutation requires a guard object', 400)
     }
     if (
       guard.expectedOwnership !== undefined &&
       guard.expectedOwnership !== 'bot' &&
-      guard.expectedOwnership !== 'helm'
+      guard.expectedOwnership !== 'helmx'
     ) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
-        `expectedOwnership only allows 'bot' | 'helm' (automation invariant forbids human): got ${String(guard.expectedOwnership)}`,
+        `expectedOwnership only allows 'bot' | 'helmx' (automation invariant forbids human): got ${String(guard.expectedOwnership)}`,
         400,
         { expectedOwnership: guard.expectedOwnership },
       )
@@ -266,7 +266,7 @@ export class ConversationService {
       guard.expectedStateSeq !== undefined &&
       (!Number.isSafeInteger(guard.expectedStateSeq) || guard.expectedStateSeq < 0)
     ) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `expectedStateSeq must be a non-negative safe integer: got ${String(guard.expectedStateSeq)}`,
         400,
@@ -284,7 +284,7 @@ export class ConversationService {
     // getOwnership throws explicit not_found for missing or tombstoned conversations—never let default routing mask stale targets.
     const ownedBy = this.o.ownershipOf(id)
     if (ownedBy === 'human' || (guard.expectedOwnership !== undefined && ownedBy !== guard.expectedOwnership)) {
-      throw new HelmError(
+      throw new HelmxError(
         'ownership_conflict',
         `conversation ${id} is currently owned by ${ownedBy}${guard.expectedOwnership !== undefined ? ` (expected ${guard.expectedOwnership})` : ''}; refusing automated mutation (human-ownership invariant)`,
         409,
@@ -298,10 +298,10 @@ export class ConversationService {
     if (guard.expectedStateSeq !== undefined) {
       const meta = this.store.getConv(id)
       if (meta === undefined || this.store.isDeleted(id)) {
-        throw new HelmError('not_found', `conversation not found: ${id}`, 404, { conversationId: id })
+        throw new HelmxError('not_found', `conversation not found: ${id}`, 404, { conversationId: id })
       }
       if (meta.stateChangeSeq !== guard.expectedStateSeq) {
-        throw new HelmError(
+        throw new HelmxError(
           'state_seq_conflict',
           `conversation ${id} authoritative watermark ${meta.stateChangeSeq} does not match expected ${guard.expectedStateSeq} (stale probe snapshot; must not act on newer turn)`,
           409,
@@ -350,7 +350,7 @@ export class ConversationService {
         // Unexpectedly running (e.g. post-manual submit during autoResume:false before start): fall through to normal path.
       }
       const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-      if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+      if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
       // Final re-check immediately before abort (zero await gap, catching any ownership change during lookup await).
       this.assertMutationGuard(id, guard)
       const wasBusy = this.tracker.hasLiveWork(id)
@@ -375,10 +375,10 @@ export class ConversationService {
     this.assertWritable()
     this.assertGuardShape(guard)
     if (opts?.whenIdle !== undefined && opts.whenIdle !== 'reject') {
-      throw new HelmError('validation_error', 'guarded submission whenIdle only allows reject', 400)
+      throw new HelmxError('validation_error', 'guarded submission whenIdle only allows reject', 400)
     }
     if (opts?.replaceFromEntryId !== undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         'automated guarded submission does not support replaceFromEntryId (automation must not rewrite history)',
         400,
@@ -490,7 +490,7 @@ export class ConversationService {
     const requested = init.profileId ?? 'assistant'
     const found = await this.readProfile(requested)
     if (!found) {
-      throw new HelmError('validation_error', `profile not found: ${requested} (create profiles/${requested} first)`, 400)
+      throw new HelmxError('validation_error', `profile not found: ${requested} (create profiles/${requested} first)`, 400)
     }
     return requested
   }
@@ -521,7 +521,7 @@ export class ConversationService {
     } else if (nodeId === 'local') {
       effectiveCwd = normalizeCwd(this.o.toolDeps.defaultCwd)
     } else {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `conversation targets remote node ${nodeId} without a cwd (Profile.cwd / parent conversation cwd / init.cwd are all unset; blind execution in node default directory is rejected)`,
         400,
@@ -576,7 +576,7 @@ export class ConversationService {
     if (patch.profileId !== undefined) {
       const found = await this.readProfile(patch.profileId)
       if (!found) {
-        throw new HelmError('validation_error', `profile not found: ${patch.profileId}`, 400)
+        throw new HelmxError('validation_error', `profile not found: ${patch.profileId}`, 400)
       }
     }
     let nextOverride: string | undefined
@@ -599,7 +599,7 @@ export class ConversationService {
     } else {
       const level = patch.thinkingLevel.trim()
       if (level !== '' && !THINKING_LEVELS.has(level)) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `invalid thinkingLevel '${level}'; valid values: ${[...THINKING_LEVELS].join(' | ')}`,
           400,
@@ -633,7 +633,7 @@ export class ConversationService {
       thinkingLevel: (nextThinking as ModelThinkingLevel | undefined) ?? null,
     }
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+    if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
     await conversation.configure(configureChange, BACKGROUND_CONTEXT)
     const latest = requireConv(this.store, id)
     const updated: typeof meta = {
@@ -670,7 +670,7 @@ export class ConversationService {
     requireConv(this.store, id)
     const owners = [...(this.o.managedConversations.get(id) ?? [])]
     if (owners.length > 0) {
-      throw new HelmError(
+      throw new HelmxError(
         'conversation_managed_by_plugin',
         `conversation ${id} is currently managed by plugin(s) (${owners.join(', ')}); release management before deleting`,
         409,
@@ -739,11 +739,11 @@ export class ConversationService {
     this.contextOps.assertOpen()
     const convMeta = requireConv(this.store, id)
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+    if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
 
     if (opts?.requestId !== undefined) {
       if (typeof opts.requestId !== 'string' || opts.requestId.trim() === '') {
-        throw new HelmError('validation_error', 'internal requestId must be a non-empty string', 400)
+        throw new HelmxError('validation_error', 'internal requestId must be a non-empty string', 400)
       }
       const previous = await this.harness.commit(
         (tx) => tx.submissionByRequest(id as never, opts.requestId!),
@@ -759,7 +759,7 @@ export class ConversationService {
         !Array.isArray(opts.attachments) ||
         opts.attachments.some((a) => typeof a !== 'string' || a.length === 0)
       ) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           'attachments must be an array of non-empty artifact ID strings',
           400,
@@ -770,9 +770,9 @@ export class ConversationService {
 
     const effectiveModelRef = await this.resolveEffectiveModel(convMeta.modelOverride, convMeta.profileId)
     if (!effectiveModelRef) {
-      throw new HelmError(
+      throw new HelmxError(
         'model_not_configured',
-        `no model configured for conversation ${id} (profile ${convMeta.profileId}) or globally: configure a model on the Profile, HELM_MODEL, config.json.model, or conversation`,
+        `no model configured for conversation ${id} (profile ${convMeta.profileId}) or globally: configure a model on the Profile, HELMX_MODEL, config.json.model, or conversation`,
         503,
         { conversationId: id, profileId: convMeta.profileId },
       )
@@ -846,7 +846,7 @@ export class ConversationService {
     signal?: AbortSignal,
   ): Promise<ConversationInputResult> {
     if (submissionId.startsWith('handled:')) {
-      throw new HelmError(
+      throw new HelmxError(
         'wait_not_applicable',
         `submission ${submissionId} was handled by an input hook and has no real turn to wait for`,
         409,
@@ -855,12 +855,12 @@ export class ConversationService {
     }
     const numericId = Number(submissionId)
     if (!Number.isInteger(numericId) || numericId <= 0) {
-      throw new HelmError('validation_error', `invalid submissionId: ${submissionId}`, 400)
+      throw new HelmxError('validation_error', `invalid submissionId: ${submissionId}`, 400)
     }
     requireConv(this.store, id)
     const waitContext = signal === undefined ? BACKGROUND_CONTEXT : withAbortSignal(signal, BACKGROUND_CONTEXT)
-    const waitAbortedError = (): HelmError =>
-      new HelmError('aborted', `waiting for result of submission ${submissionId} in conversation ${id} was cancelled`, 499, {
+    const waitAbortedError = (): HelmxError =>
+      new HelmxError('aborted', `waiting for result of submission ${submissionId} in conversation ${id} was cancelled`, 499, {
         conversationId: id,
         submissionId,
       })
@@ -875,7 +875,7 @@ export class ConversationService {
     }
     const submission = await runWaitOp(() => this.harness.submission(numericId as never, waitContext))
     if (!submission) {
-      throw new HelmError('not_found', `submission not found: ${submissionId}`, 404, {
+      throw new HelmxError('not_found', `submission not found: ${submissionId}`, 404, {
         conversationId: id,
         submissionId,
       })
@@ -890,7 +890,7 @@ export class ConversationService {
       String(status.id) !== submissionId ||
       status.type !== 'input'
     ) {
-      throw new HelmError('not_found', `submission ${submissionId} does not belong to conversation ${id}`, 404, {
+      throw new HelmxError('not_found', `submission ${submissionId} does not belong to conversation ${id}`, 404, {
         conversationId: id,
         submissionId,
       })
@@ -904,7 +904,7 @@ export class ConversationService {
     if (settled.status === 'unanswered') {
       const reason = settled.reason ?? 'unknown'
       const aborted = reason === 'aborted' || reason === 'interrupted' || reason === 'reset'
-      throw new HelmError(
+      throw new HelmxError(
         aborted ? 'turn_aborted' : 'turn_failed',
         `conversation ${id} turn produced no answer (${reason}${settled.detail !== undefined ? `: ${String(settled.detail)}` : ''})`,
         aborted ? 499 : 502,
@@ -917,14 +917,14 @@ export class ConversationService {
       )
     }
     if (settled.status !== 'done' || settled.answer === undefined) {
-      throw new HelmError('turn_failed', `submission ${submissionId} settled in non-terminal state ${settled.status}`, 502, {
+      throw new HelmxError('turn_failed', `submission ${submissionId} settled in non-terminal state ${settled.status}`, 502, {
         conversationId: id,
         submissionId,
         status: settled.status,
       })
     }
     const conversation = await runWaitOp(() => this.harness.conversation(id as never, waitContext))
-    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+    if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
     const page = await runWaitOp(() =>
       conversation.entries(
         { minEntryId: settled.answer as never, maxEntryId: settled.answer as never, order: 'ascending' },
@@ -937,7 +937,7 @@ export class ConversationService {
       | { id: number; kind: string; data?: unknown; model?: unknown[] }
       | undefined
     if (raw === undefined || raw.id !== settled.answer) {
-      throw new HelmError('not_found', `answer entry missing: ${settled.answer}`, 502, {
+      throw new HelmxError('not_found', `answer entry missing: ${settled.answer}`, 502, {
         conversationId: id,
         submissionId,
       })
@@ -949,11 +949,11 @@ export class ConversationService {
 
   async withdrawQueuedInput(id: number, opts: { submissionId: number }): Promise<ConversationWithdrawResponse> {
     this.assertWritable()
-    if (this.o.isClosed()) throw new HelmError('runtime_closed', 'kernel is closing; rejecting withdrawal', 503)
+    if (this.o.isClosed()) throw new HelmxError('runtime_closed', 'kernel is closing; rejecting withdrawal', 503)
     requireConv(this.store, id)
     const raw = opts.submissionId
     if (typeof raw !== 'number' || !Number.isSafeInteger(raw) || raw <= 0) {
-      throw new HelmError('validation_error', `submissionId must be a positive safe integer (received ${String(raw)})`, 400, {
+      throw new HelmxError('validation_error', `submissionId must be a positive safe integer (received ${String(raw)})`, 400, {
         conversationId: id,
         submissionId: raw,
       })
@@ -965,14 +965,14 @@ export class ConversationService {
       String(rec.conversationId) !== String(id) ||
       rec.type !== 'input'
     ) {
-      throw new HelmError('not_found', `submission ${raw} does not exist in conversation ${id}`, 404, {
+      throw new HelmxError('not_found', `submission ${raw} does not exist in conversation ${id}`, 404, {
         conversationId: id,
         submissionId: raw,
       })
     }
     const outcome = await this.harness.abortSubmission(raw as never, BACKGROUND_CONTEXT, id as never)
     if (outcome === 'not_found') {
-      throw new HelmError('not_found', `submission ${raw} does not exist in conversation ${id}`, 404, {
+      throw new HelmxError('not_found', `submission ${raw} does not exist in conversation ${id}`, 404, {
         conversationId: id,
         submissionId: raw,
       })
@@ -991,7 +991,7 @@ export class ConversationService {
   async abortConversation(id: number): Promise<void> {
     this.assertWritable()
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+    if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
     const wasBusy = this.tracker.hasLiveWork(id)
     await conversation.abort(BACKGROUND_CONTEXT)
     if (wasBusy) this.tracker.settleAborted(id)
@@ -1059,7 +1059,7 @@ export class ConversationService {
 
   async waitForIdle(id: number): Promise<void> {
     const conversation = await this.harness.conversation(id as never, BACKGROUND_CONTEXT)
-    if (!conversation) throw new HelmError('not_found', `conversation not found: ${id}`, 404)
+    if (!conversation) throw new HelmxError('not_found', `conversation not found: ${id}`, 404)
     await conversation.waitForIdle(BACKGROUND_CONTEXT)
     await this.tracker.waitTurnSettled(id)
   }

@@ -3,7 +3,7 @@
  *
  * 覆盖：
  * - 原生 runNativeSpawn 传 isolation: 'worktree'：真实 git worktree 创建于
- *   仓库同级 .helm-worktrees 下、helm/spawn-* 分支、子会话与 gate 均在
+ *   仓库同级 .helmx-worktrees 下、helmx/spawn-* 分支、子会话与 gate 均在
  *   worktree 目录内执行、onResolved 回传 worktree 元数据；
  * - 并发 4 个 worktree 分配：per-repo mutex 生效，无 .git/config.lock 冲突；
  * - 非 Git 目录：显式 not_a_git_repo；
@@ -17,7 +17,7 @@
  *   git status 失败 fail closed（绝不当作干净或目录缺失）、登记路径被替换
  *   （改签分支/主工作树/软链/locked/缺失目录）拒绝清理且登记保留、
  *   分支删除部分失败先固化 removed 事实并可重试、从已有 worktree 再派生
- *   定位真正主仓（不嵌套 .helm-worktrees）、持久化元数据含机密显式拒绝。
+ *   定位真正主仓（不嵌套 .helmx-worktrees）、持久化元数据含机密显式拒绝。
  *
  * 诚实性纪律：全部走真实临时 Git 仓库（git init + 初始 commit）与真实 SDK
  * Harness（faux 模型输出），worktree/gate 经 NodeExecutionEnv 真实 shell 执行；
@@ -29,7 +29,7 @@ import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/provid
 import { Harness, createRegistry } from '@earendil-works/pi-durable'
 import { NodeExecutionEnv } from '@earendil-works/pi-durable/env/node'
 import { MemoryStorage } from '@earendil-works/pi-durable/storage/memory'
-import { HelmError, type AgentExecutionInfo, type AgentSpawnRequest } from '@helm/protocol'
+import { HelmxError, type AgentExecutionInfo, type AgentSpawnRequest } from '@helmx/protocol'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -46,7 +46,7 @@ import { createWorkflowPlugin } from '../src/workflow.js'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import { ArtifactService, SecretStash } from '../../kernel/src/services/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import {
   assertNoUnhandledRejection,
   createGitTemplate,
@@ -66,7 +66,7 @@ const PROCESS_SCAN_ON = process.platform === 'linux'
 /** 非 Linux 平台断言 cleanup 显式拒绝（进程占用扫描不支持，不伪造 0 占用）。 */
 async function assertCleanupPlatformRejected(fn: () => Promise<unknown>): Promise<void> {
   await assert.rejects(fn, (err: unknown) => {
-    assert.ok(err instanceof HelmError)
+    assert.ok(err instanceof HelmxError)
     assert.equal(err.code, 'worktree_process_check_failed', '非 Linux 平台：进程占用扫描不支持，cleanup 必须显式拒绝')
     return true
   })
@@ -217,7 +217,7 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
       redact: (t) => stash.redact(t),
       getConversation: (id: number) => {
         const m = mirrors.get(id)
-        if (!m) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+        if (!m) throw new HelmxError('not_found', `会话不存在：${id}`, 404)
         return { cwd: m.cwd, nodeId: 'local', status: working.has(id) ? 'working' : 'idle' }
       },
     },
@@ -321,7 +321,7 @@ async function openSpawnHarness(repoDir: string, dataDir: string): Promise<{
     },
     updateConversation: async (childId, patch) => {
       const m = mirrors.get(childId)
-      if (!m) throw new HelmError('not_found', `会话不存在：${childId}`, 404)
+      if (!m) throw new HelmxError('not_found', `会话不存在：${childId}`, 404)
       if (patch.cwd !== undefined) m.cwd = patch.cwd
       if (patch.profileId !== undefined) m.profileId = patch.profileId
       if (patch.model !== undefined) m.modelOverride = patch.model
@@ -358,8 +358,8 @@ let rootDir: string
 let gitTemplate: GitTemplate
 
 before(() => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-native-worktree-'))
-  gitTemplate = createGitTemplate('helm-native-wt-template-')
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-native-worktree-'))
+  gitTemplate = createGitTemplate('helmx-native-wt-template-')
 })
 
 after(() => {
@@ -399,7 +399,7 @@ async function childPromptText(harness: Harness, childId: number): Promise<strin
 // ---------------------------------------------------------------------------
 
 describe('原生 isolation: worktree 基础链路', { timeout: 60_000 }, () => {
-  it('创建真实 worktree 与 helm/spawn-* 分支；onResolved 回传 worktree；子会话与 gate 均在 worktree 内执行', { timeout: 60_000 }, async () => {
+  it('创建真实 worktree 与 helmx/spawn-* 分支；onResolved 回传 worktree；子会话与 gate 均在 worktree 内执行', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't1')
     const repo = makeGitRepo(join(dir, 'repo'))
     const th = await openSpawnHarness(repo, join(dir, 'data'))
@@ -420,13 +420,13 @@ describe('原生 isolation: worktree 基础链路', { timeout: 60_000 }, () => {
       } as never)
       assert.equal(result, '任务完成')
 
-      // onResolved：worktree 元数据回传（path/branch），path 位于同级 .helm-worktrees。
+      // onResolved：worktree 元数据回传（path/branch），path 位于同级 .helmx-worktrees。
       const resolvedWt = resolved !== undefined ? extractWorkflowExecutionMeta(resolved).worktree : undefined
       assert.ok(resolvedWt, 'onResolved 应回传 worktree 元数据')
       const wtPath = resolvedWt!.path
       const wtBranch = resolvedWt!.branch
-      assert.ok(wtBranch.startsWith('helm/spawn-'), `分支名应为 helm/spawn-*：${wtBranch}`)
-      assert.ok(wtPath.includes(join(dir, '.helm-worktrees')), `worktree 应位于同级 .helm-worktrees 下：${wtPath}`)
+      assert.ok(wtBranch.startsWith('helmx/spawn-'), `分支名应为 helmx/spawn-*：${wtBranch}`)
+      assert.ok(wtPath.includes(join(dir, '.helmx-worktrees')), `worktree 应位于同级 .helmx-worktrees 下：${wtPath}`)
       assert.ok(existsSync(wtPath), 'worktree 目录应真实存在')
       assert.ok(existsSync(join(wtPath, 'README.md')), 'worktree 应检出初始提交内容')
       assert.equal(resolved!.effectiveCwd, wtPath, 'effectiveCwd 应为 worktree 目录')
@@ -441,7 +441,7 @@ describe('原生 isolation: worktree 基础链路', { timeout: 60_000 }, () => {
       assert.ok(prompt.includes('<worktree_context>'), `干净源也应注入 worktree 上下文：${prompt.slice(-400)}`)
       assert.ok(prompt.includes('git add') && prompt.includes('git commit'), '上下文应提醒结束回合前提交改动')
       // gate 在 worktree 目录内执行：gate 命令校验 pwd 与 worktree 一致
-      //（HELM_EXPECTED_WT 由下方第二次调用验证；首次用 gate 已通过的事实）。
+      //（HELMX_EXPECTED_WT 由下方第二次调用验证；首次用 gate 已通过的事实）。
       const allocatorRecord = th.allocator.findActive({ path: wtPath })
       assert.ok(allocatorRecord, '受管记录应已登记')
       assert.equal(allocatorRecord!.branch, wtBranch)
@@ -465,18 +465,18 @@ describe('原生 isolation: worktree 基础链路', { timeout: 60_000 }, () => {
         parentConversationId: 1,
         prompt: 'gate 取证',
         isolation: 'worktree',
-        gate: 'pwd > .helm-gate-pwd.txt && test -f README.md',
+        gate: 'pwd > .helmx-gate-pwd.txt && test -f README.md',
         onResolved: (info: AgentExecutionInfo) => {
           wtPath = extractWorkflowExecutionMeta(info).worktree?.path ?? ''
         },
       } as never)
       assert.ok(wtPath !== '', '应回传 worktree path')
       // gate 在 worktree 目录内执行：其产物文件落在 worktree 而非源仓库。
-      assert.ok(existsSync(join(wtPath, '.helm-gate-pwd.txt')), 'gate 产物应落在 worktree 目录内（gate cwd = worktree）')
+      assert.ok(existsSync(join(wtPath, '.helmx-gate-pwd.txt')), 'gate 产物应落在 worktree 目录内（gate cwd = worktree）')
       const { readFileSync } = await import('node:fs')
-      gateOutput = readFileSync(join(wtPath, '.helm-gate-pwd.txt'), 'utf8').trim()
+      gateOutput = readFileSync(join(wtPath, '.helmx-gate-pwd.txt'), 'utf8').trim()
       assert.equal(gateOutput, wtPath, `gate pwd 应为 worktree 目录：${gateOutput}`)
-      assert.ok(!existsSync(join(repo, '.helm-gate-pwd.txt')), '源仓库不得被 gate 污染')
+      assert.ok(!existsSync(join(repo, '.helmx-gate-pwd.txt')), '源仓库不得被 gate 污染')
     } finally {
       await th.close()
     }
@@ -505,7 +505,7 @@ describe('并发 worktree 分配（per-repo mutex）', { timeout: 60_000 }, () =
       assert.equal(branches.size, 4, '4 个分支应互不相同')
       for (const record of records) {
         assert.ok(existsSync(record.path), `worktree 应存在：${record.path}`)
-        assert.ok(record.branch.startsWith('helm/spawn-'))
+        assert.ok(record.branch.startsWith('helmx/spawn-'))
       }
     } finally {
       await th.close()
@@ -527,7 +527,7 @@ describe('非 Git 目录显式拒绝', { timeout: 60_000 }, () => {
       await assert.rejects(
         () => th.allocator.allocate({ nodeId: 'local', sourceCwd: notRepo, parentConversationId: 1 }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError, `应抛 HelmError，实得 ${err}`)
+          assert.ok(err instanceof HelmxError, `应抛 HelmxError，实得 ${err}`)
           assert.equal(err.code, 'not_a_git_repo')
           assert.ok(err.message.includes(notRepo), '错误消息应含目录路径')
           return true
@@ -553,7 +553,7 @@ describe('非 Git 目录显式拒绝', { timeout: 60_000 }, () => {
             isolation: 'worktree',
           } as never),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'not_a_git_repo')
           return true
         },
@@ -683,7 +683,7 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
             cwd: '/tmp/conflicting-cwd',
           } as never),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'resume_cwd_conflict')
           assert.ok(err.message.includes(record!.path), '错误消息应含原 worktree 路径')
           return true
@@ -721,7 +721,7 @@ describe('resume 续接绑定 worktree 的子会话', { timeout: 60_000 }, () =>
             resume: String(childId),
           } as never),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_missing')
           return true
         },
@@ -742,7 +742,7 @@ async function executeCleanupTool(
   docs: Map<string, unknown>,
   input: Record<string, unknown>,
 ): Promise<{ output?: Array<{ type: string; text?: string }>; structuredOutput?: Record<string, unknown>; isError?: boolean }> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-tool-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-wf-tool-'))
   const localExec = async (
     command: string | readonly string[],
     options: { cwd?: string; timeout?: number },
@@ -771,10 +771,10 @@ async function executeCleanupTool(
       makeConversationSummary({ id, cwd: dataDir, model: '', createdAt: 1, updatedAt: 1 }),
     updateConversation: async () => ({}) as never,
     abortConversation: async () => {},
-    getConversationOwnership(id: number): 'helm' | 'bot' | 'human' {
-      // 入口会话 #1 为 human；spawn 派生子会话为 helm-owned（cleanup 工具的
+    getConversationOwnership(id: number): 'helmx' | 'bot' | 'human' {
+      // 入口会话 #1 为 human；spawn 派生子会话为 helmx-owned（cleanup 工具的
       // 归属安全校验依赖真实区分，不能全部伪装 human 遮蔽拒绝分支）。
-      return id === 1 ? 'human' : 'helm'
+      return id === 1 ? 'human' : 'helmx'
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
@@ -867,7 +867,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
       await assert.rejects(
         () => th.allocator.cleanup({ conversationId: childId }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_dirty')
           const details = err.details as { dirtyFiles?: string[] }
           assert.ok(details?.dirtyFiles?.some((f) => f.includes('wip.txt')), 'details 应列出脏文件')
@@ -907,7 +907,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
       await assert.rejects(
         () => th.allocator.cleanup({ conversationId: childId, deleteBranch: true }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_dirty')
           const details = err.details as { unmergedCommits?: number }
           assert.ok((details?.unmergedCommits ?? 0) >= 1, 'details 应报告未合入提交数')
@@ -978,7 +978,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
       await assert.rejects(
         () => th.allocator.cleanup({ path: humanDir }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'not_found')
           return true
         },
@@ -989,7 +989,7 @@ describe('cleanup_worktree', { timeout: 60_000 }, () => {
       await assert.rejects(
         () => th.allocator.cleanup({}),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'validation_error')
           return true
         },
@@ -1089,10 +1089,10 @@ describe('external 登记与真实清理', { timeout: 60_000 }, () => {
     const allocator = bareAllocator(docs)
     try {
       // 手工建一个 external worktree（模拟 herdr worktree.create 产物）。
-      const wtPath = join(dir, '.helm-worktrees', 'repo-ext01')
-      execFileSync('git', ['worktree', 'add', wtPath, '-b', 'helm/wf-ext01'], { cwd: repo })
-      const first = allocator.registerExternal({ nodeId: 'local', path: wtPath, branch: 'helm/wf-ext01', parentConversationId: 1, executionId: 'exec-1' })
-      const second = allocator.registerExternal({ nodeId: 'local', path: wtPath, branch: 'helm/wf-ext01', parentConversationId: 1, executionId: 'exec-1' })
+      const wtPath = join(dir, '.helmx-worktrees', 'repo-ext01')
+      execFileSync('git', ['worktree', 'add', wtPath, '-b', 'helmx/wf-ext01'], { cwd: repo })
+      const first = allocator.registerExternal({ nodeId: 'local', path: wtPath, branch: 'helmx/wf-ext01', parentConversationId: 1, executionId: 'exec-1' })
+      const second = allocator.registerExternal({ nodeId: 'local', path: wtPath, branch: 'helmx/wf-ext01', parentConversationId: 1, executionId: 'exec-1' })
       assert.equal(second.id, first.id, '同 (nodeId,path) 登记应去重为一条')
       assert.equal(rawRecords(docs).filter((r) => r.id === first.id).length, 1, '登记记录不得重复堆积')
       assert.equal(first.repoRoot, '', 'external 初始 repoRoot 为空')
@@ -1124,16 +1124,16 @@ describe('external 登记与真实清理', { timeout: 60_000 }, () => {
     const docs = new Map<string, unknown>()
     const allocator = bareAllocator(docs)
     try {
-      const wtPath = join(dir, '.helm-worktrees', 'repo-ext02')
-      execFileSync('git', ['worktree', 'add', wtPath, '-b', 'helm/wf-ext02'], { cwd: repo })
+      const wtPath = join(dir, '.helmx-worktrees', 'repo-ext02')
+      execFileSync('git', ['worktree', 'add', wtPath, '-b', 'helmx/wf-ext02'], { cwd: repo })
       writeFileSync(join(wtPath, 'feat.txt'), 'x\n')
       execFileSync('git', ['add', '.'], { cwd: wtPath })
       execFileSync('git', ['commit', '-qm', 'feat'], { cwd: wtPath })
-      const record = allocator.registerExternal({ nodeId: 'local', path: wtPath, branch: 'helm/wf-ext02', parentConversationId: 1 })
+      const record = allocator.registerExternal({ nodeId: 'local', path: wtPath, branch: 'helmx/wf-ext02', parentConversationId: 1 })
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_dirty')
           const details = err.details as { unmergedCommits?: number }
           assert.ok((details?.unmergedCommits ?? 0) >= 1, 'baseCommit 为空也必须按主工作树 HEAD 报告未合入提交')
@@ -1157,14 +1157,14 @@ describe('同路径跨节点歧义', { timeout: 60_000 }, () => {
       const sharedPath = join(dir, 'shared-wt')
       // 两个节点各自登记同一路径（真实 worktree 只建一个；local + 远端
       // 节点同名登记模拟多节点同仓同路径场景——歧义检查在 git 探测之前）。
-      execFileSync('git', ['worktree', 'add', sharedPath, '-b', 'helm/spawn-m001'], { cwd: repo })
-      const a = allocator.registerExternal({ nodeId: 'local', path: sharedPath, branch: 'helm/spawn-m001', parentConversationId: 1 })
-      const b = allocator.registerExternal({ nodeId: 'node-b', path: sharedPath, branch: 'helm/spawn-m001', parentConversationId: 1 })
+      execFileSync('git', ['worktree', 'add', sharedPath, '-b', 'helmx/spawn-m001'], { cwd: repo })
+      const a = allocator.registerExternal({ nodeId: 'local', path: sharedPath, branch: 'helmx/spawn-m001', parentConversationId: 1 })
+      const b = allocator.registerExternal({ nodeId: 'node-b', path: sharedPath, branch: 'helmx/spawn-m001', parentConversationId: 1 })
 
       await assert.rejects(
         () => allocator.cleanup({ path: sharedPath }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'validation_error')
           assert.ok(err.message.includes('local') && err.message.includes('node-b'), '错误应列出歧义节点')
           return true
@@ -1172,8 +1172,8 @@ describe('同路径跨节点歧义', { timeout: 60_000 }, () => {
       )
       // findActive 同样拒绝歧义查询。
       assert.throws(() => allocator.findActive({ path: sharedPath }), (err: unknown) => {
-        assert.ok(err instanceof HelmError)
-        assert.equal((err as HelmError).code, 'validation_error')
+        assert.ok(err instanceof HelmxError)
+        assert.equal((err as HelmxError).code, 'validation_error')
         return true
       })
       // 指定 nodeId 精确清理 local 登记（local env 真实执行 git）。
@@ -1206,7 +1206,7 @@ describe('同路径跨节点歧义', { timeout: 60_000 }, () => {
       await assert.rejects(
         () => allocator.cleanup(input as never),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'validation_error', `input=${JSON.stringify(input)}`)
           return true
         },
@@ -1231,7 +1231,7 @@ describe('状态命令失败 fail closed', { timeout: 60_000 }, () => {
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_check_failed', 'status 失败必须显式报错，绝不静默当干净')
           return true
         },
@@ -1258,7 +1258,7 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
         await assert.rejects(
           () => allocator.cleanup({ worktreeId: record.id, ...(force ? { force: true } : {}) }),
           (err: unknown) => {
-            assert.ok(err instanceof HelmError)
+            assert.ok(err instanceof HelmxError)
             assert.equal(err.code, 'worktree_owner_mismatch', `force=${force} 也不可越过归属校验`)
             const details = err.details as { reason?: string }
             assert.equal(details?.reason, 'branch_changed')
@@ -1292,17 +1292,17 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
             ...record,
             id: 'local:' + repo,
             path: repo,
-            branch: 'helm/spawn-fake1',
+            branch: 'helmx/spawn-fake1',
           },
         ],
       }
       docs.set('builtin:workflow:worktree-state', wtAll)
       // 主仓手工建同名分支，使权威登记 branch 匹配后进入 main-worktree 检查。
-      execFileSync('git', ['branch', 'helm/spawn-fake1'], { cwd: repo })
+      execFileSync('git', ['branch', 'helmx/spawn-fake1'], { cwd: repo })
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: 'local:' + repo }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_owner_mismatch')
           const details = err.details as { reason?: string }
           assert.equal(details?.reason, 'main_worktree')
@@ -1326,7 +1326,7 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id, force: true }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_locked', 'locked 检查不可被 force 越过')
           return true
         },
@@ -1356,7 +1356,7 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id, deleteBranch: true }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_missing')
           return true
         },
@@ -1387,7 +1387,7 @@ describe('登记路径被替换/挪用：归属校验拒绝', { timeout: 60_000 
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_owner_mismatch', '软链跳树必须拒绝')
           return true
         },
@@ -1408,16 +1408,16 @@ describe('分支删除部分失败', { timeout: 60_000 }, () => {
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
       // 制造分支 ref 锁：git branch -D 必失败（worktree remove 仍成功）。
-      // 锁文件为完整 ref 路径 + .lock（.git/refs/heads/helm/spawn-<id>.lock）。
-      const refsDir = join(repo, '.git', 'refs', 'heads', 'helm')
+      // 锁文件为完整 ref 路径 + .lock（.git/refs/heads/helmx/spawn-<id>.lock）。
+      const refsDir = join(repo, '.git', 'refs', 'heads', 'helmx')
       mkdirSync(refsDir, { recursive: true })
-      const lockPath = join(refsDir, `spawn-${record.branch.slice('helm/spawn-'.length)}.lock`)
+      const lockPath = join(refsDir, `spawn-${record.branch.slice('helmx/spawn-'.length)}.lock`)
       writeFileSync(lockPath, '')
       if (PROCESS_SCAN_ON) {
         await assert.rejects(
           () => allocator.cleanup({ worktreeId: record.id, deleteBranch: true }),
           (err: unknown) => {
-            assert.ok(err instanceof HelmError)
+            assert.ok(err instanceof HelmxError)
             assert.equal(err.code, 'branch_delete_failed')
             return true
           },
@@ -1448,7 +1448,7 @@ describe('分支删除部分失败', { timeout: 60_000 }, () => {
 })
 
 describe('从已有 worktree 再派生（嵌套隔离）', { timeout: 60_000 }, () => {
-  it('sourceCwd 为隔离 worktree 时定位真正主仓：同级分配不嵌套 .helm-worktrees；baseCommit 取实际源 HEAD', { timeout: 60_000 }, async () => {
+  it('sourceCwd 为隔离 worktree 时定位真正主仓：同级分配不嵌套 .helmx-worktrees；baseCommit 取实际源 HEAD', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't12')
     const repo = makeGitRepo(join(dir, 'repo'))
     const docs = new Map<string, unknown>()
@@ -1469,11 +1469,11 @@ describe('从已有 worktree 再派生（嵌套隔离）', { timeout: 60_000 }, 
       assert.equal(parent.parentWorktreeId, undefined, '主工作树不是受管 Worktree，无父登记 ID')
       assert.equal(child.baseBranch, parent.branch, '子级派生应记录父 Worktree 检出的分支')
       assert.equal(child.parentWorktreeId, parent.id, '源目录是受管隔离树时应记录父登记 ID')
-      // 同级分配：child.path 与 parent.path 同在 <repo>/../.helm-worktrees 下。
+      // 同级分配：child.path 与 parent.path 同在 <repo>/../.helmx-worktrees 下。
       assert.equal(
         dirnameOf(child.path),
         dirnameOf(parent.path),
-        '嵌套派生不得反复嵌套 .helm-worktrees',
+        '嵌套派生不得反复嵌套 .helmx-worktrees',
       )
       assert.ok(existsSync(join(child.path, 'parent-work.txt')), '子树应包含父隔离树已提交内容')
     } finally {
@@ -1498,14 +1498,14 @@ describe('持久化元数据机密检查', { timeout: 60_000 }, () => {
       () =>
         allocator.registerExternal({
           nodeId: 'local',
-          path: `/repo/.helm-worktrees/wt-${SECRET}`,
-          branch: 'helm/wf-s1',
+          path: `/repo/.helmx-worktrees/wt-${SECRET}`,
+          branch: 'helmx/wf-s1',
           parentConversationId: 7,
           conversationId: 9,
           executionId: 'exec-42',
         }),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'worktree_metadata_secret')
         assert.ok(!err.message.includes(SECRET), 'message 绝不泄漏 secret 原文')
         assert.ok(err.message.includes('exec-42'), 'message 应含非机密 executionId 以便定位失败的外部执行')
@@ -1529,7 +1529,7 @@ describe('持久化元数据机密检查', { timeout: 60_000 }, () => {
       await assert.rejects(
         () => allocator.allocate({ nodeId: 'local', sourceCwd: secretRepoRoot, parentConversationId: 1 }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_metadata_secret')
           assert.ok(!err.message.includes(SECRET))
           return true
@@ -1584,7 +1584,7 @@ describe('ignored 文件保护', { timeout: 60_000 }, () => {
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_dirty', 'ignored 文件必须计入脏检查（git worktree remove 无 --force 也会删 ignored 内容）')
           const details = err.details as { dirtyFiles?: string[] }
           assert.ok(details?.dirtyFiles?.some((f) => f.includes('.env')), 'details 应列出 ignored 的 .env')
@@ -1659,12 +1659,12 @@ describe('inspect 只读检视：成功输出脱敏与 diff 驱动隔离（真�
     chmodSync(join(dir, 'fake-textconv.sh'), 0o755)
     writeFileSync(join(repo, 'note.txt'), 'note-v1\n')
     writeFileSync(join(repo, 'data.bin'), 'BINOLD\n')
-    writeFileSync(join(repo, '.gitattributes'), '*.txt diff=helmtest\n*.bin diff=helmtext\n')
+    writeFileSync(join(repo, '.gitattributes'), '*.txt diff=helmxtest\n*.bin diff=helmxtext\n')
     const gitRepo = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] })
     gitRepo(['add', '.'])
     gitRepo(['commit', '-qm', 'add bin + attributes'])
-    gitRepo(['config', 'diff.helmtest.command', join(dir, 'fake-driver.sh')])
-    gitRepo(['config', 'diff.helmtext.textconv', join(dir, 'fake-textconv.sh')])
+    gitRepo(['config', 'diff.helmxtest.command', join(dir, 'fake-driver.sh')])
+    gitRepo(['config', 'diff.helmxtext.textconv', join(dir, 'fake-textconv.sh')])
     const docs = new Map<string, unknown>()
     const allocator = bareAllocator(docs)
     try {
@@ -1701,7 +1701,7 @@ describe('inspect 只读检视：成功输出脱敏与 diff 驱动隔离（真�
       await assert.rejects(
         () => allocator.inspect({ worktreeId: record.id }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_check_failed')
           assert.match(err.message, /bad object|unknown revision|fatal/i)
           return true
@@ -1788,7 +1788,7 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
       nodeCanonicalPath: async () => ({ ok: true, value: '/wt' }) as never,
       // inspect 只读面不触发进程扫描；如被误调即显式拒绝（不伪造）。
       inspectPathUsage: async () => {
-        throw new HelmError('unsupported', 'inspect 用例不扫描进程占用', 501)
+        throw new HelmxError('unsupported', 'inspect 用例不扫描进程占用', 501)
       },
       docStore: {
         get<T>(key: string, initial: T): T {
@@ -1862,7 +1862,7 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
       nodeCanonicalPath: async () => ({ ok: true, value: '/wt' }) as never,
       // inspect 只读面不触发进程扫描；如被误调即显式拒绝（不伪造）。
       inspectPathUsage: async () => {
-        throw new HelmError('unsupported', 'inspect 用例不扫描进程占用', 501)
+        throw new HelmxError('unsupported', 'inspect 用例不扫描进程占用', 501)
       },
       docStore: {
         get<T>(key: string, initial: T): T {
@@ -1876,7 +1876,7 @@ describe('inspect 受限采集上限（受控 exec 分块注入）', { timeout: 
     await assert.rejects(
       () => allocator.inspect({ worktreeId: 'local:/wt' }),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'worktree_check_failed')
         assert.match(err.message, /bad object/)
         assert.match(err.message, /诊断已截断/)
@@ -1920,7 +1920,7 @@ describe('多级派生 baseBranch 字段', { timeout: 60_000 }, () => {
       await assert.rejects(
         () => allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_metadata_secret')
           assert.ok(!err.message.includes(SECRET), 'message 绝不泄漏 secret 原文')
           return true
@@ -1949,7 +1949,7 @@ describe('cleanup mergedInto 与参考提交优先级', { timeout: 60_000 }, () 
         await assert.rejects(
           () => allocator.cleanup({ worktreeId: record.id, mergedInto: bad }),
           (err: unknown) => {
-            assert.ok(err instanceof HelmError, `mergedInto=${JSON.stringify(bad)} 应抛 HelmError`)
+            assert.ok(err instanceof HelmxError, `mergedInto=${JSON.stringify(bad)} 应抛 HelmxError`)
             assert.equal(err.code, 'validation_error')
             assert.ok(err.message.includes('mergedInto'), '错误消息应指向 mergedInto')
             return true
@@ -1973,7 +1973,7 @@ describe('cleanup mergedInto 与参考提交优先级', { timeout: 60_000 }, () 
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id, mergedInto: 'no-such-ref' }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'validation_error', '显式目标不存在必须显式拒绝，绝不回退主工作树')
           assert.ok(err.message.includes('不存在'))
           return true
@@ -2007,7 +2007,7 @@ describe('cleanup mergedInto 与参考提交优先级', { timeout: 60_000 }, () 
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: child.id, mergedInto: 'main' }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_dirty')
           const details = err.details as { unmergedCommits?: number; referenceHead?: string }
           assert.ok((details?.unmergedCommits ?? 0) >= 1, '相对 main 应报告未合入提交（显式目标优先）')
@@ -2107,10 +2107,10 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
             { parentConversationId: 1, prompt: '任务', isolation: 'worktree', agentId: 'agent-rel-1' } as never,
             async (final) => {
               final.onResolved?.({ conversationId: 5, nodeId: 'local', effectiveCwd: final.cwd } as never)
-              throw new HelmError('gate_failed', '模拟门禁失败', 500)
+              throw new HelmxError('gate_failed', '模拟门禁失败', 500)
             },
           ),
-        (err: unknown) => err instanceof HelmError && err.code === 'gate_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'gate_failed',
       )
       assert.equal(Object.keys(leasesOf(th.docs)).length, 0, '确认停止的原生子会话租约应释放')
       const record = th.allocator.getForConversation(5)
@@ -2131,8 +2131,8 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
         assert.equal(done.removed, true)
       } catch (error) {
         assert.ok(
-          error instanceof HelmError && error.code === 'worktree_process_check_failed',
-          `租约释放后 cleanup 只允许进程扫描环境限制，实得：${error instanceof HelmError ? error.code : String(error)}`,
+          error instanceof HelmxError && error.code === 'worktree_process_check_failed',
+          `租约释放后 cleanup 只允许进程扫描环境限制，实得：${error instanceof HelmxError ? error.code : String(error)}`,
         )
       }
     } finally {
@@ -2153,10 +2153,10 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
           th.isolation.aroundSpawn(
             { parentConversationId: 1, prompt: 'p', isolation: 'worktree' } as never,
             async () => {
-              throw new HelmError('gate_failed', 'x', 500)
+              throw new HelmxError('gate_failed', 'x', 500)
             },
           ),
-        (err: unknown) => err instanceof HelmError && err.code === 'gate_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'gate_failed',
       )
       let leases = leasesOf(th.docs)
       assert.equal(Object.keys(leases).length, 1, '不确定状态租约必须保留')
@@ -2164,7 +2164,7 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
       await assert.rejects(
         () => th.isolation.cleanup({ worktreeId: pendingId }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_execution_unknown', '保留租约应阻塞 cleanup')
           return true
         },
@@ -2178,10 +2178,10 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
             { parentConversationId: 1, prompt: 'p', isolation: 'worktree', agentId: 'a7' } as never,
             async (final) => {
               final.onResolved?.({ conversationId: 7, nodeId: 'local' } as never)
-              throw new HelmError('gate_failed', 'x', 500)
+              throw new HelmxError('gate_failed', 'x', 500)
             },
           ),
-        (err: unknown) => err instanceof HelmError && err.code === 'gate_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'gate_failed',
       )
       leases = leasesOf(th.docs)
       assert.equal(Object.keys(leases).length, 2, '会话仍运行时租约必须保留')
@@ -2216,7 +2216,7 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
       await assert.rejects(
         () => th.isolation.cleanup({ conversationId: childId }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'worktree_execution_unknown', '残留租约应阻塞 cleanup')
           return true
         },
@@ -2312,7 +2312,7 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
       // 确认 ext 仍阻塞 cleanup
       await assert.rejects(
         () => th.isolation.cleanup({ conversationId: extId }),
-        (err: unknown) => err instanceof HelmError && err.code === 'worktree_execution_unknown',
+        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_execution_unknown',
       )
       // 确认 idleId 租约已解除（允许 cleanup）
       try {
@@ -2320,8 +2320,8 @@ describe('运行租约释放（原生子会话失败路径）', { timeout: 60_00
         assert.equal(done.removed, true)
       } catch (error) {
         assert.ok(
-          error instanceof HelmError && error.code === 'worktree_process_check_failed',
-          `租约释放后只允许环境 /proc 限制，实得：${error instanceof HelmError ? error.code : String(error)}`,
+          error instanceof HelmxError && error.code === 'worktree_process_check_failed',
+          `租约释放后只允许环境 /proc 限制，实得：${error instanceof HelmxError ? error.code : String(error)}`,
         )
       }
     } finally {
@@ -2384,7 +2384,7 @@ async function openWorkflowPluginHost(options: {
       makeConversationSummary({ id, cwd: options.repoDir, model: '', createdAt: 1, updatedAt: 1 }),
     updateConversation: async () => ({}) as never,
     abortConversation: async () => {},
-    getConversationOwnership: (id: number) => (id === 1 ? 'human' : 'helm'),
+    getConversationOwnership: (id: number) => (id === 1 ? 'human' : 'helmx'),
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
     resolveSpawnTarget: async (input) => {
@@ -2484,7 +2484,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       ]) {
         await assert.rejects(
           () => host.invokeAction('builtin:workflow', 'acquire_worktree', badAcquire),
-          (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+          (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
         )
       }
       for (const badRelease of [
@@ -2495,7 +2495,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       ]) {
         await assert.rejects(
           () => host.invokeAction('builtin:workflow', 'release_worktree_hold', badRelease),
-          (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+          (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
         )
       }
     } finally {
@@ -2546,7 +2546,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       assert.deepEqual(resolvedTargets, [{ parentConversationId: 1, profileId: 'coder', fork: true }])
       assert.equal(acquired.nodeId, 'local')
       assert.equal(acquired.baseCommit, headCommit)
-      assert.ok(acquired.branch.startsWith('helm/spawn-'))
+      assert.ok(acquired.branch.startsWith('helmx/spawn-'))
       assert.equal(acquired.worktreeId, `local:${acquired.path}`)
       assert.ok(existsSync(acquired.path), '真实 Git worktree 目录应创建')
       assert.ok(flushes >= 2, 'openPendingLease 与最终释放落盘均应 flush')
@@ -2573,7 +2573,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
         await assert.rejects(
           () => host.invokeAction('builtin:workflow', 'cleanup_worktree', selector),
           (err: unknown) => {
-            assert.ok(err instanceof HelmError)
+            assert.ok(err instanceof HelmxError)
             assert.equal(err.code, 'worktree_in_use')
             assert.equal(err.status, 409)
             assert.ok(
@@ -2600,7 +2600,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       await assert.rejects(
         () => host.disable('builtin:workflow'),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'plugin_in_use')
           assert.equal(err.status, 409)
           const usages = (err.details as { usages?: Array<{ kind: string; id: string; label: string }> })?.usages ?? []
@@ -2627,7 +2627,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
         await assert.rejects(
           () => host.invokeAction('builtin:workflow', 'release_worktree_hold', mismatch),
           (err: unknown) =>
-            err instanceof HelmError && err.code === 'worktree_hold_mismatch' && err.status === 409,
+            err instanceof HelmxError && err.code === 'worktree_hold_mismatch' && err.status === 409,
         )
       }
       assert.ok(rawRecords(docs).find((r) => r.id === acquired.worktreeId)?.hold, 'mismatch 拒绝后 hold 必须保留')
@@ -2654,7 +2654,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
       if (PROCESS_SCAN_ON) {
         await assert.rejects(
           () => host.invokeAction('builtin:workflow', 'cleanup_worktree', { worktreeId: acquired.worktreeId }),
-          (err: unknown) => err instanceof HelmError && err.code === 'worktree_dirty' && err.status === 409,
+          (err: unknown) => err instanceof HelmxError && err.code === 'worktree_dirty' && err.status === 409,
         )
         try {
           const cleaned = (await host.invokeAction('builtin:workflow', 'cleanup_worktree', {
@@ -2667,8 +2667,8 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
           assert.equal(existsSync(acquired.path), false)
         } catch (error) {
           assert.ok(
-            error instanceof HelmError && error.code === 'worktree_process_check_failed',
-            `释放锁后只允许环境 /proc 限制，实得：${error instanceof HelmError ? error.code : String(error)}`,
+            error instanceof HelmxError && error.code === 'worktree_process_check_failed',
+            `释放锁后只允许环境 /proc 限制，实得：${error instanceof HelmxError ? error.code : String(error)}`,
           )
         }
       }
@@ -2759,7 +2759,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
               hold: badHold,
             }),
           (err: unknown) => {
-            assert.ok(err instanceof HelmError)
+            assert.ok(err instanceof HelmxError)
             assert.equal(err.code, 'worktree_metadata_secret')
             assert.equal(err.status, 400)
             assert.ok(!err.message.includes(secretVal), '错误诊断绝不可含明文机密')
@@ -2768,7 +2768,7 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
         )
       }
       assert.equal(rawRecords(docs).length, 0, '机密前置拦截不得产生任何登记记录')
-      assert.equal(existsSync(join(dir, '.helm-worktrees')), false, '机密前置拦截不得创建孤儿 worktree 目录')
+      assert.equal(existsSync(join(dir, '.helmx-worktrees')), false, '机密前置拦截不得创建孤儿 worktree 目录')
 
       // 2) hold.label 含机密：写入前经 redact 脱敏，落盘原始 JSON 零明文泄漏。
       const acquired = (await host.invokeAction('builtin:workflow', 'acquire_worktree', {
@@ -2794,11 +2794,11 @@ describe('ManagedWorktreeHold 与隐藏内部动作 acquire_worktree / release_w
 
       await assert.rejects(
         () => host.invokeAction('builtin:workflow', 'list_worktrees', {}),
-        (err: unknown) => err instanceof HelmError && err.code === 'worktree_doc_corrupted' && err.status === 500,
+        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_doc_corrupted' && err.status === 500,
       )
       await assert.rejects(
         () => host.disable('builtin:workflow'),
-        (err: unknown) => err instanceof HelmError && err.code === 'plugin_in_use_check_failed' && err.status === 500,
+        (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use_check_failed' && err.status === 500,
       )
     } finally {
       await close()
@@ -2975,7 +2975,7 @@ describe('allocate 批量 Git 预检与非常规布局诚实拒绝', { timeout: 
       execFileSync('git', ['init', '-q', '--bare', bareDir])
       await assert.rejects(
         () => allocator.allocate({ nodeId: 'local', sourceCwd: bareDir, parentConversationId: 1 }),
-        (err: unknown) => err instanceof HelmError && err.code === 'worktree_unsupported_layout',
+        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_unsupported_layout',
       )
 
       // 2) --separate-git-dir -> worktree_unsupported_layout
@@ -2984,7 +2984,7 @@ describe('allocate 批量 Git 预检与非常规布局诚实拒绝', { timeout: 
       execFileSync('git', ['init', '-q', `--separate-git-dir=${sepGit}`, sepWork])
       await assert.rejects(
         () => allocator.allocate({ nodeId: 'local', sourceCwd: sepWork, parentConversationId: 1 }),
-        (err: unknown) => err instanceof HelmError && err.code === 'worktree_unsupported_layout',
+        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_unsupported_layout',
       )
 
       // 3) unborn HEAD（git init 尚无任何 commit）-> worktree_failed
@@ -2992,7 +2992,7 @@ describe('allocate 批量 Git 预检与非常规布局诚实拒绝', { timeout: 
       execFileSync('git', ['init', '-q', '-b', 'main', unbornDir])
       await assert.rejects(
         () => allocator.allocate({ nodeId: 'local', sourceCwd: unbornDir, parentConversationId: 1 }),
-        (err: unknown) => err instanceof HelmError && err.code === 'worktree_failed',
+        (err: unknown) => err instanceof HelmxError && err.code === 'worktree_failed',
       )
     } finally {
       rmSync(dir, { recursive: true, force: true })
@@ -3120,7 +3120,7 @@ describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { tim
           async (final) => {
             ;(final as AgentSpawnRequest).onResolved?.({
               nodeId: 'local',
-              meta: { 'builtin:workflow': { worktree: { path: '/wt/ext-1', branch: 'helm/spawn-ext1' } } },
+              meta: { 'builtin:workflow': { worktree: { path: '/wt/ext-1', branch: 'helmx/spawn-ext1' } } },
               conversationId: 7,
               executionId: 'exec-1',
             })
@@ -3164,7 +3164,7 @@ describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { tim
           executionId: 'exec-ns-1',
           meta: {
             'builtin:workflow': {
-              worktree: { path: '/wt/ext-ns', branch: 'helm/spawn-extns' },
+              worktree: { path: '/wt/ext-ns', branch: 'helmx/spawn-extns' },
               controls: { steer: { pluginId: 'ext:demo', actionId: 'steer' } },
             },
             'other-plugin': { keep: ['ns', { roundtrip: true }] },
@@ -3202,7 +3202,7 @@ describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { tim
     const worktreeId = handle.isolation.allocator.registerExternal({
       nodeId: 'local',
       path: wtPath,
-      branch: 'helm/spawn-resume1',
+      branch: 'helmx/spawn-resume1',
       parentConversationId: 1,
       conversationId: 42,
     }).id
@@ -3220,7 +3220,7 @@ describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { tim
     await assert.rejects(
       () => handle.isolation.cleanup({ worktreeId }),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.ok(
           err.code === 'worktree_execution_unknown' || err.code === 'worktree_in_use',
           `cleanup 应被租约拒绝（实际 ${err.code}）`,
@@ -3241,7 +3241,7 @@ describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { tim
     handle.isolation.allocator.registerExternal({
       nodeId: 'local',
       path: '/wt/resume-race',
-      branch: 'helm/spawn-resume1',
+      branch: 'helmx/spawn-resume1',
       parentConversationId: 1,
       conversationId: 42,
     })
@@ -3253,7 +3253,7 @@ describe('WorktreeIsolation：外部运行时租约与并发窗口保护', { tim
           async () => 'unreachable',
         ),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'worktree_missing')
         return true
       },

@@ -9,7 +9,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationEntry } from '@helm/protocol'
+import type { ConversationEntry } from '@helmx/protocol'
 import { conversationsApi, ApiClientError } from '../src/lib/api.js'
 import {
   buildTimelineItems,
@@ -69,7 +69,7 @@ test('readResultTruncation：truncated 必须 true，totals 仅收窄有限非�
 
 test('buildTimelineItems：marker 随 toolResult 消息归一到配对 ToolTrace，携带 entry id', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([
-    entry('1', 'helm.input', { data: { text: 'run', origin: 'human' } }),
+    entry('1', 'helmx.input', { data: { text: 'run', origin: 'human' } }),
     entry('2', 'pi.assistant', { model: [{ role: 'assistant', content: [{ type: 'toolCall', id: 'call-1', name: 'bash', arguments: { command: 'pnpm test' } }] }] }),
     truncatedResultEntry('3', 'call-1', '预览输出', { totalChars: 9000, totalLines: 300 }),
   ])

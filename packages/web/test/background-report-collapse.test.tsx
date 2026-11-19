@@ -1,6 +1,6 @@
 /**
  * 宿主通用时间线插件接管与 queued 长文本折叠测试：
- * - timeline.renderer 按 matchMeta.renderer 精确接管 helm.input，未标记输入不受影响；
+ * - timeline.renderer 按 matchMeta.renderer 精确接管 helmx.input，未标记输入不受影响；
  * - queuedAgentTextCollapse / HumanMessage 对 agent 长文的折叠、展开/收起与统一灰色胶囊样式。
  */
 import assert from 'node:assert/strict'
@@ -14,12 +14,12 @@ import type {
   ConversationLive,
   ConversationSummary,
   PluginUiContribution,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { groupUiContributions } from '../src/lib/types.js'
 import { buildTimelineItems, queuedAgentTextCollapse } from '../src/conversation/timeline-model.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { makeTestStore } from './helpers/store.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { readHostStyles } from './helpers/host-styles.js'
 
 const e = React.createElement
@@ -32,14 +32,14 @@ GlobalRegistrator.register()
 // 1. 宿主派发：matchMeta.renderer 精确接管
 // ---------------------------------------------------------------------------
 
-test('宿主派发: renderer 标记的 helm.input 接管为插件卡，未标记输入不受影响', { timeout: 60_000 }, () => {
+test('宿主派发: renderer 标记的 helmx.input 接管为插件卡，未标记输入不受影响', { timeout: 60_000 }, () => {
   const sampleUi: PluginUiContribution[] = [
     {
       pluginId: 'sample:report',
       surface: 'timeline.renderer',
       spec: {
         id: 'sample-report',
-        kinds: ['helm.input'],
+        kinds: ['helmx.input'],
         matchMeta: { renderer: 'sample:report-card' },
         client: { module: 'index.tsx', export: 'SampleReportCard' },
       },
@@ -51,7 +51,7 @@ test('宿主派发: renderer 标记的 helm.input 接管为插件卡，未标记
 
   const markedEntry: ConversationEntry = {
     id: '51',
-    kind: 'helm.input',
+    kind: 'helmx.input',
     data: {
       id: 'sample:report:1',
       text: '后台任务已结算',
@@ -61,7 +61,7 @@ test('宿主派发: renderer 标记的 helm.input 接管为插件卡，未标记
     },
   }
   const items = buildTimelineItems(
-    [markedEntry, { id: '52', kind: 'helm.input', data: { text: '普通输入', origin: 'human' } }],
+    [markedEntry, { id: '52', kind: 'helmx.input', data: { text: '普通输入', origin: 'human' } }],
     { timelineRenderers: renderers },
   )
   assert.equal(items[0]!.kind, 'plugin-card')
@@ -69,7 +69,7 @@ test('宿主派发: renderer 标记的 helm.input 接管为插件卡，未标记
     assert.equal(items[0]!.renderer.pluginId, 'sample:report')
     assert.equal(items[0]!.entryId, '51')
   }
-  assert.equal(items[1]!.kind, 'human', '未标记 renderer 的 helm.input 仍走通用人类消息渲染')
+  assert.equal(items[1]!.kind, 'human', '未标记 renderer 的 helmx.input 仍走通用人类消息渲染')
 })
 
 // ---------------------------------------------------------------------------
@@ -86,7 +86,7 @@ test('queuedAgentTextCollapse: 阈值判定与预览截断', { timeout: 60_000 }
   assert.equal(manyLines.collapsed, true, '超过 8 行即折叠')
 })
 
-function makeStore(live: ConversationLive | undefined, entries: ConversationEntry[]): HelmExternalStore {
+function makeStore(live: ConversationLive | undefined, entries: ConversationEntry[]): HelmxExternalStore {
   const conversation: ConversationSummary = {
     id: 1, title: '测试会话', profileId: 'assistant', tags: [], cwd: '/tmp',
     model: 'faux/faux-1', thinkingLevel: 'off', status: live !== undefined ? 'working' : 'idle',

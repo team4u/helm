@@ -8,7 +8,7 @@
 
 import { mkdirSync } from 'node:fs'
 import { basename } from 'node:path'
-import { HelmError, redactJsonValue, type AgentSpawnRequest, type ConversationSummary } from '@helm/protocol'
+import { HelmxError, redactJsonValue, type AgentSpawnRequest, type ConversationSummary } from '@helmx/protocol'
 import { withWorkflowSpawnMeta, type WorkflowRunRequest, type WorkflowRunSummary } from '../../contracts.js'
 import {
   JournalWriter,
@@ -45,7 +45,7 @@ async function claimResumeTakeover(
       active: svc.active.has(currentMarker),
     })
     if (!takeover.ghost) {
-      throw new HelmError(
+      throw new HelmxError(
         'conflict',
         `运行 ${replayFrom.id} 已被 ${currentMarker} 接管续跑（${takeover.reason}）；请从接管的 run 继续或人工核查`,
         409,
@@ -93,13 +93,13 @@ export async function startWorkflowRun(
       : undefined
 
   if (request.label !== undefined && (typeof request.label !== 'string' || request.label.trim() === '')) {
-    throw new HelmError('validation_error', 'label 必须为非空字符串', 400, { label: request.label })
+    throw new HelmxError('validation_error', 'label 必须为非空字符串', 400, { label: request.label })
   }
   const explicitLabel = request.label !== undefined ? svc.redact(request.label.trim()) : undefined
 
   const sources = [request.name, request.script, request.scriptPath].filter((v) => v !== undefined)
   if (sources.length > 1) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       'exactly one of name, script, scriptPath must be provided (or omit all to reuse the old script with resumeFromRunId)',
       400,
@@ -111,7 +111,7 @@ export async function startWorkflowRun(
   if (request.resumeFromRunId !== undefined) {
     replayFrom = svc.runs.load(request.resumeFromRunId)
     if (svc.active.has(replayFrom.id)) {
-      throw new HelmError('conflict', `工作流 ${replayFrom.id} 仍在运行中`, 409, { runId: replayFrom.id })
+      throw new HelmxError('conflict', `工作流 ${replayFrom.id} 仍在运行中`, 409, { runId: replayFrom.id })
     }
     if (replayFrom.kind === 'subagent') {
       if (replayFrom.status === 'running') {
@@ -122,7 +122,7 @@ export async function startWorkflowRun(
         await svc.state.flush?.()
       }
       if (sources.length > 0 && (replayFrom.status === 'failed' || replayFrom.status === 'aborted')) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           '对单子代理执行 resumeFromRunId 时不允许同时提供 name/script/scriptPath',
           400,
@@ -131,13 +131,13 @@ export async function startWorkflowRun(
       }
       const verdict = inspectRunResumability(replayFrom, svc.resumabilityContext(), { mode: 'explicit_resume' })
       if (!verdict.resumable) {
-        throw new HelmError(verdict.code, verdict.reason, 400, {
+        throw new HelmxError(verdict.code, verdict.reason, 400, {
           runId: replayFrom.id,
           status: replayFrom.status,
         })
       }
       if (request.conversationId !== undefined && request.conversationId !== replayFrom.conversationId) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `恢复目标不匹配：子代理 ${replayFrom.id} 属于会话 ${replayFrom.conversationId}，不能改在会话 ${request.conversationId} 下恢复`,
           400,
@@ -151,7 +151,7 @@ export async function startWorkflowRun(
       try {
         svc.host.getConversation(replayFrom.conversationId)
       } catch {
-        throw new HelmError('not_found', `会话 ${replayFrom.conversationId} 不存在，无法在其下续接子代理`, 404, {
+        throw new HelmxError('not_found', `会话 ${replayFrom.conversationId} 不存在，无法在其下续接子代理`, 404, {
           conversationId: replayFrom.conversationId,
         })
       }
@@ -202,14 +202,14 @@ export async function startWorkflowRun(
 
   const conversationId = request.conversationId ?? replayFrom?.conversationId
   if (conversationId === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       '缺少工作流目标会话：提供 conversationId，或从 CLI 使用 --current；工具调用会使用当前会话',
       400,
     )
   }
   if (replayFrom !== undefined && request.conversationId !== undefined && request.conversationId !== replayFrom.conversationId) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `恢复目标不匹配：工作流 ${replayFrom.id} 属于会话 ${replayFrom.conversationId}，不能改在会话 ${request.conversationId} 下恢复`,
       400,
@@ -221,7 +221,7 @@ export async function startWorkflowRun(
   try {
     parent = svc.host.getConversation(conversationId)
   } catch {
-    throw new HelmError('not_found', `会话 ${conversationId} 不存在，无法在其下运行工作流`, 404, {
+    throw new HelmxError('not_found', `会话 ${conversationId} 不存在，无法在其下运行工作流`, 404, {
       conversationId,
     })
   }
@@ -242,7 +242,7 @@ export async function startWorkflowRun(
     scriptPath = svc.library.resolveExplicitPath(request.scriptPath)
     script = svc.library.readScriptFile(scriptPath)
   } else if (replayFrom === undefined) {
-    throw new HelmError('validation_error', '必须提供 name、script 或 scriptPath 之一', 400)
+    throw new HelmxError('validation_error', '必须提供 name、script 或 scriptPath 之一', 400)
   } else {
     script = ''
   }
@@ -254,16 +254,16 @@ export async function startWorkflowRun(
     })
     if (!verdict.resumable) {
       if (verdict.code === 'validation_error') {
-        throw new HelmError('validation_error', verdict.reason, 400, { runId: request.resumeFromRunId })
+        throw new HelmxError('validation_error', verdict.reason, 400, { runId: request.resumeFromRunId })
       }
       if (verdict.code === 'journal_read_failed') {
-        throw new HelmError('journal_read_failed', verdict.reason, 409, {
+        throw new HelmxError('journal_read_failed', verdict.reason, 409, {
           priorRunId: replayFrom.id,
           journalPath: replayFrom.journalPath,
           ...(verdict.journal?.readFailed ?? {}),
         })
       }
-      throw new HelmError(verdict.code, verdict.reason, 409, {
+      throw new HelmxError(verdict.code, verdict.reason, 409, {
         priorRunId: replayFrom.id,
         journalPath: replayFrom.journalPath,
         failedActions: verdict.journal?.failedActions ?? 0,
@@ -284,7 +284,7 @@ export async function startWorkflowRun(
   }
 
   if (script.length > MAX_SCRIPT_LENGTH) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `工作流脚本 ${script.length} 字符，超过上限 ${MAX_SCRIPT_LENGTH}`,
       400,

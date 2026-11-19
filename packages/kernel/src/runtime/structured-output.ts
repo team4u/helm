@@ -9,11 +9,11 @@
  */
 
 import { defineExtension, defineTool, type Extension, type ToolRegistration } from '@earendil-works/pi-durable'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { validateOrThrow } from '../plugins/schema.js'
 
 /** Extension name for native subagent structured output (shared by installation and fork stripping). */
-export const STRUCTURED_OUTPUT_EXTENSION_NAME = 'helm-structured-output'
+export const STRUCTURED_OUTPUT_EXTENSION_NAME = 'helmx-structured-output'
 
 /** Single-conversation structured output task slot: schema + accepted result (undefined = not yet accepted). */
 export interface StructuredOutputSession {
@@ -22,7 +22,7 @@ export interface StructuredOutputSession {
 }
 
 /**
- * Build the helm-structured-output extension (reusable tool definition; re-registering the same name replaces in place).
+ * Build the helmx-structured-output extension (reusable tool definition; re-registering the same name replaces in place).
  * Result slots are looked up in the injected sessions Map (per-runtime instance, isolated by conversationId).
  */
 export function buildStructuredOutputExtension(sessions: Map<number, StructuredOutputSession>): Extension {
@@ -80,7 +80,7 @@ export function buildStructuredOutputExtension(sessions: Map<number, StructuredO
  * would silently let invalid data pass (honesty invariant). */
 export function assertSchemaNotAsync(schema: Record<string, unknown>): void {
   if ((schema as { $async?: unknown }).$async !== undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_plugin_schema',
       'schema contains $async: native subagent synchronous validation boundary does not support async Schemas',
       400,
@@ -97,7 +97,7 @@ function validateAgainstSchema(
     validateOrThrow(schema, value, 'structured output validation failed', 'schema_validation_failed', 502)
     return { ok: true, value }
   } catch (error) {
-    if (error instanceof HelmError && error.code === 'schema_validation_failed') {
+    if (error instanceof HelmxError && error.code === 'schema_validation_failed') {
       return { ok: false, errors: error.message }
     }
     throw error

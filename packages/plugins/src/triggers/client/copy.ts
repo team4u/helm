@@ -7,8 +7,8 @@
  * action error messages pass through unchanged (only the failure prefix is
  * localized).
  */
-import type { HelmLocale, LocalizedText } from '@helm/plugin-client'
-import { resolveLocalizedText } from '@helm/plugin-client'
+import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
+import { resolveLocalizedText } from '@helmx/plugin-client'
 
 /** Manager screen chrome. */
 export const TRIGGERS_SCREEN_TITLE: LocalizedText = { en: 'Triggers', 'zh-CN': '触发器管理' }
@@ -30,7 +30,7 @@ export const TRIGGERS_COL_ACTIONS: LocalizedText = { en: 'Actions', 'zh-CN': '�
 export const TRIGGERS_COL_DESCRIPTION: LocalizedText = { en: 'Description', 'zh-CN': '描述' }
 export const TRIGGERS_COL_CREATED: LocalizedText = { en: 'Created', 'zh-CN': '创建时间' }
 
-/** Loading and empty states (raw helm-table cells, not the SDK DataTable). */
+/** Loading and empty states (raw helmx-table cells, not the SDK DataTable). */
 export const TRIGGERS_CRON_LOADING: LocalizedText = { en: 'Loading cron jobs…', 'zh-CN': 'Cron 任务读取中...' }
 export const TRIGGERS_WEBHOOK_LOADING: LocalizedText = { en: 'Loading webhooks…', 'zh-CN': 'Webhook 端点读取中...' }
 export const TRIGGERS_SETTINGS_LOADING: LocalizedText = { en: 'Loading trigger state…', 'zh-CN': '触发器状态读取中...' }
@@ -76,19 +76,19 @@ export const TRIGGERS_SECRET_MISSING: LocalizedText = { en: 'Not configured', 'z
 export const TRIGGERS_KV_CRON_COUNT: LocalizedText = { en: 'Cron jobs', 'zh-CN': 'Cron 任务数' }
 export const TRIGGERS_KV_WEBHOOK_COUNT: LocalizedText = { en: 'Webhook endpoints', 'zh-CN': 'Webhook 端点数' }
 
-/** Honest-secret footnotes (helm CLI keeps mono command names verbatim). */
+/** Honest-secret footnotes (helmx CLI keeps mono command names verbatim). */
 export const TRIGGERS_MANAGER_NOTE: LocalizedText = {
-  en: 'Secrets are never shown in docs; create and delete via the helm cron / helm webhook commands or the matching action endpoints.',
-  'zh-CN': 'secret 不在文档中展示；创建与删除请使用 helm cron / helm webhook 命令或对应动作端点。',
+  en: 'Secrets are never shown in docs; create and delete via the helmx cron / helmx webhook commands or the matching action endpoints.',
+  'zh-CN': 'secret 不在文档中展示；创建与删除请使用 helmx cron / helmx webhook 命令或对应动作端点。',
 }
 export const TRIGGERS_SETTINGS_NOTE: LocalizedText = {
-  en: 'Manage cron schedules and webhook signing secrets in the trigger manager view or via the helm CLI.',
-  'zh-CN': 'cron 调度细节与 webhook 验签 secret 的管理请前往触发器管理视图或使用 helm CLI。',
+  en: 'Manage cron schedules and webhook signing secrets in the trigger manager view or via the helmx CLI.',
+  'zh-CN': 'cron 调度细节与 webhook 验签 secret 的管理请前往触发器管理视图或使用 helmx CLI。',
 }
 export const TRIGGERS_OPEN_MANAGER: LocalizedText = { en: 'Open trigger manager', 'zh-CN': '打开触发器管理' }
 
 /** Row action failure banner prefix; the backend error message passes through verbatim. */
-export function triggersActionFailed(actionId: string, message: string, locale: HelmLocale): string {
+export function triggersActionFailed(actionId: string, message: string, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `${actionId} failed: ${message}`, 'zh-CN': `${actionId} 失败：${message}` },
     locale,
@@ -96,16 +96,16 @@ export function triggersActionFailed(actionId: string, message: string, locale: 
 }
 
 /** Delivery target summary fragments (assembled by models.ts formatTriggerTargetSummary). */
-export function triggerTargetConversation(conversationId: number, locale: HelmLocale): string {
+export function triggerTargetConversation(conversationId: number, locale: HelmxLocale): string {
   return resolveLocalizedText(
     { en: `Conversation #${conversationId}`, 'zh-CN': `会话 #${conversationId}` },
     locale,
   )
 }
-export function triggerTargetProfile(profileId: string, locale: HelmLocale): string {
+export function triggerTargetProfile(profileId: string, locale: HelmxLocale): string {
   return resolveLocalizedText({ en: `Profile ${profileId}`, 'zh-CN': `角色 ${profileId}` }, locale)
 }
-export function triggerTargetThreadKey(threadKey: string, locale: HelmLocale): string {
+export function triggerTargetThreadKey(threadKey: string, locale: HelmxLocale): string {
   return resolveLocalizedText({ en: `ThreadKey ${threadKey}`, 'zh-CN': `ThreadKey ${threadKey}` }, locale)
 }
 export const TRIGGER_TARGET_DEFAULT: LocalizedText = { en: 'Default routing', 'zh-CN': '默认路由' }

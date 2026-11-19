@@ -1,9 +1,9 @@
 /**
  * Access to the engine-owned `current.json` from the launcher side: the shared update-engine
- * record in `@helm/env-io` ({version, updatedAt, entries}) is the single source of truth; the Hub launcher's only
+ * record in `@helmx/env-io` ({version, updatedAt, entries}) is the single source of truth; the Hub launcher's only
  * contract on top is the `entryPath` entry (absolute path to the committed payload `start.mjs`).
  */
-import { readCurrentRelease, type CurrentReleaseRecord } from '@helm/env-io';
+import { readCurrentRelease, type CurrentReleaseRecord } from '@helmx/env-io';
 import { UsageError } from './io.js';
 
 export interface HubCurrentRelease {
@@ -17,7 +17,7 @@ export async function readCurrentEntry(root: string): Promise<HubCurrentRelease>
   const record = await readCurrentRelease(root);
   if (record === null) {
     throw new UsageError(
-      `no hub release installed under ${root}; run helm update first`,
+      `no hub release installed under ${root}; run helmx update first`,
       'no_release_installed',
     );
   }

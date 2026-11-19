@@ -9,8 +9,8 @@
  * Relationship to `pi-durable` (aligned semantics, independent implementation):
  * - `pi-durable`'s `tools/write` and `tools/edit` serialize via its internal `withFileMutationQueue`,
  *   which is not exported from package entrypoints (deep imports violate package boundaries), and
- *   helm's `write`/`edit` are kernel-owned tools rather than SDK tools;
- * - This module provides the identical queue semantics inside the helm process so both kernel
+ *   helmx's `write`/`edit` are kernel-owned tools rather than SDK tools;
+ * - This module provides the identical queue semantics inside the helmx process so both kernel
  *   `write`/`edit` and the plugin API (`EnvFabric.withFileMutationQueue`) share one implementation.
  *
  * Lock contract:

@@ -1,16 +1,16 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
-  HelmError,
+  HelmxError,
   encodeSessionDocSubParam,
   parseSessionDocSubParam,
   type ConversationDetail,
   type ConversationLive,
   type ConversationSummary,
-  type HelmEvent,
-  type HelmEventType,
-  type HelmResumedFrame,
-  type HelmTransientLiveFrame,
+  type HelmxEvent,
+  type HelmxEventType,
+  type HelmxResumedFrame,
+  type HelmxTransientLiveFrame,
   type PluginSummary,
   type PublicPluginSessionDoc,
   type SessionDocMultiplexAction,
@@ -25,7 +25,7 @@ function assertValidationError(fn: () => unknown, leakedSecrets: readonly string
   } catch (error) {
     caught = error
   }
-  assert.ok(caught instanceof HelmError, `expected HelmError, got ${String(caught)}`)
+  assert.ok(caught instanceof HelmxError, `expected HelmxError, got ${String(caught)}`)
   assert.equal(caught.code, 'validation_error')
   assert.equal(caught.status, 400)
   for (const secret of leakedSecrets) {
@@ -75,7 +75,7 @@ test('encodeSessionDocSubParam ignores extra fields and never leaks stray proper
   assert.ok(!encoded.includes(secret))
 })
 
-test('parseSessionDocSubParam rejects invalid inputs with HelmError(400) and no token echo', { timeout: 60_000 }, () => {
+test('parseSessionDocSubParam rejects invalid inputs with HelmxError(400) and no token echo', { timeout: 60_000 }, () => {
   const secret = 'secret_bearer_token_xyz'
   const badRawStrings = [
     '',
@@ -154,11 +154,11 @@ test('encodeSessionDocSubParam rejects invalid subscription payloads without ech
 })
 
 test('Stage 0 protocol contracts lock transient live, clientHashes, lastEntryId, and multiplex frames', { timeout: 60_000 }, () => {
-  // Compile-time guard: 'conversation.live' must stay excluded from durable HelmEventType / HelmEvent.
-  type LiveExcludedFromEventType = Extract<HelmEventType, 'conversation.live'> extends never ? true : false
-  type LiveExcludedFromHelmEvent = Extract<HelmEvent, { type: 'conversation.live' }> extends never ? true : false
+  // Compile-time guard: 'conversation.live' must stay excluded from durable HelmxEventType / HelmxEvent.
+  type LiveExcludedFromEventType = Extract<HelmxEventType, 'conversation.live'> extends never ? true : false
+  type LiveExcludedFromHelmxEvent = Extract<HelmxEvent, { type: 'conversation.live' }> extends never ? true : false
   const liveExcludedType: LiveExcludedFromEventType = true
-  const liveExcludedEvent: LiveExcludedFromHelmEvent = true
+  const liveExcludedEvent: LiveExcludedFromHelmxEvent = true
   assert.equal(liveExcludedType, true)
   assert.equal(liveExcludedEvent, true)
 
@@ -208,8 +208,8 @@ test('Stage 0 protocol contracts lock transient live, clientHashes, lastEntryId,
     tools: [],
     updatedAt: 2500,
   }
-  const transientFrame: HelmTransientLiveFrame = { live }
-  const resumedFrame: HelmResumedFrame = {
+  const transientFrame: HelmxTransientLiveFrame = { live }
+  const resumedFrame: HelmxResumedFrame = {
     bootId: 'boot-1',
     seq: 10,
     headSeq: 12,

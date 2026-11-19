@@ -2,17 +2,17 @@
  * HTTP boundary primitives: error envelopes, CORS, body reading, and size limits.
  *
  * - Success: raw entity or array (not wrapped in `{ data }`).
- * - Failure: `{ error: { code, message, details? } }`; HelmError carries status and code.
+ * - Failure: `{ error: { code, message, details? } }`; HelmxError carries status and code.
  * - Unexpected 500: never leaks stack traces or internal secrets to clients.
  * - Outbound JSON is redacted value-by-value through redactJsonValue (preserving stash markers and
  *   preventing secrets with quotes/newlines from escaping via serialization) before stringifying.
  */
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { redactJsonValue } from '../redact.js'
 
-// BodyError/readBody are consolidated in @helm/protocol (single shared implementation for kernel and plugins);
+// BodyError/readBody are consolidated in @helmx/protocol (single shared implementation for kernel and plugins);
 // imported here for internal kernel use and re-exported to keep existing relative imports stable.
-import { BodyError, readBody } from '@helm/protocol'
+import { BodyError, readBody } from '@helmx/protocol'
 
 export const DEFAULT_MAX_BODY_BYTES = 1024 * 1024 // 1 MiB
 
@@ -57,7 +57,7 @@ export function jsonOk(redact: JsonRedactor | undefined, body: unknown, init?: R
   // Valid null is returned as-is; undefined violates the output contract (must not fabricate success)
   // and fails explicitly with 500 for upstream diagnosis. Cycles and non-JSON values are also rejected by redactJsonValue.
   if (body === undefined) {
-    throw new HelmError('invalid_output', 'service returned undefined; refusing to serialize as a success response', 500)
+    throw new HelmxError('invalid_output', 'service returned undefined; refusing to serialize as a success response', 500)
   }
   const serialize = redact ?? makeJsonRedactor()
   return new Response(serialize(body), {
@@ -85,9 +85,9 @@ export function errorResponse(
   })
 }
 
-/** HelmError -> Response; all other exceptions become 500 internal_error without leaking stack traces. */
+/** HelmxError -> Response; all other exceptions become 500 internal_error without leaking stack traces. */
 export function errorToResponse(redactor: JsonRedactor | undefined, redactText: (text: string) => string, error: unknown): Response {
-  if (error instanceof HelmError) {
+  if (error instanceof HelmxError) {
     // details may contain internal values (including secrets), so serialize through redaction too.
     return errorResponse(redactor, error.status, error.code, error.message, error.details)
   }
@@ -178,7 +178,7 @@ export async function readBinaryBodyWithLimit(request: Request, maxBytes: number
   if (declaredHeader !== null) {
     const declared = Number(declaredHeader)
     if (Number.isFinite(declared) && declared > maxBytes) {
-      throw new HelmError('artifact_too_large', `request body exceeds ${maxBytes} byte limit`, 413, { maxBytes })
+      throw new HelmxError('artifact_too_large', `request body exceeds ${maxBytes} byte limit`, 413, { maxBytes })
     }
   }
   const reader = request.body?.getReader()
@@ -192,7 +192,7 @@ export async function readBinaryBodyWithLimit(request: Request, maxBytes: number
       totalBytes += value.byteLength
       if (totalBytes > maxBytes) {
         await reader.cancel().catch(() => {})
-        throw new HelmError('artifact_too_large', `request body exceeds ${maxBytes} byte limit`, 413, { maxBytes })
+        throw new HelmxError('artifact_too_large', `request body exceeds ${maxBytes} byte limit`, 413, { maxBytes })
       }
       chunks.push(value)
     }

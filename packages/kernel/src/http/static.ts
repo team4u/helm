@@ -235,7 +235,7 @@ export class StaticServe {
       'content-length': String(gz !== undefined ? gz.byteLength : body.byteLength),
       ...(compressible ? { vary: 'Accept-Encoding' } : {}),
       ...(gz !== undefined ? { 'content-encoding': 'gzip' } : {}),
-      ...(opts.spaFallback ? { 'x-helm-spa-fallback': '1' } : {}),
+      ...(opts.spaFallback ? { 'x-helmx-spa-fallback': '1' } : {}),
     };
     // HEAD: identical status and response headers (including compression headers), empty body on Response
     if (method === 'HEAD') {

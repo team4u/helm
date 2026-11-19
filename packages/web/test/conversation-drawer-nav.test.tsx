@@ -4,7 +4,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import { hangingEventStream } from './helpers/sse-stream.js'
 import type { ResolvedTarget, ActiveModal } from '../src/lib/types.js'
 
@@ -18,8 +18,8 @@ Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
 const { ConversationDrawer } = await import('../src/conversation/ConversationDrawer.js')
-const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
-const { useHelmStore } = await import('../src/lib/store-context.js')
+const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
+const { useHelmxStore } = await import('../src/lib/store-context.js')
 const e = React.createElement
 const originalFetch = globalThis.fetch
 let root: Root | undefined
@@ -96,7 +96,7 @@ function installFetch(fixture: FetchFixture = {}): void {
 }
 
 function App(): React.ReactNode {
-  const store = useHelmStore()
+  const store = useHelmxStore()
   observed = {
     primary: store.primaryTarget,
     split: store.splitTarget,
@@ -107,12 +107,12 @@ function App(): React.ReactNode {
   const primary = store.primaryTarget.kind === 'conversation' ? store.primaryTarget : null
   const split = store.splitTarget?.kind === 'conversation' ? store.splitTarget : null
   return e(React.Fragment, null,
-    e('div', { className: 'helm-panes' },
+    e('div', { className: 'helmx-panes' },
       primary !== null
         ? e(ConversationPane, { key: `primary:${primary.conversationId}`, conversationId: primary.conversationId })
         : null,
       split !== null
-        ? e('div', { className: 'helm-split-pane' },
+        ? e('div', { className: 'helmx-split-pane' },
             e(ConversationPane, {
               key: `split:${split.conversationId}`,
               conversationId: split.conversationId,
@@ -141,7 +141,7 @@ async function mount(hash: string, fixture?: FetchFixture): Promise<void> {
   installFetch(fixture)
   await act(async () => {
     root = createRoot(host!)
-    root.render(e(HelmStoreProvider, null, e(App)))
+    root.render(e(HelmxStoreProvider, null, e(App)))
   })
   await settle()
 }
@@ -170,8 +170,8 @@ test('全站不再渲染祖先回退按钮：抽屉/主屏/分屏顶栏均无面
   assert.ok(observed?.workbenchOpen)
   // 抽屉（子会话 #111）、主屏（根 #999）、分屏（子会话 #111）均不渲染祖先回退按钮
   assert.equal(ancestorButtons('.conversation-drawer').length, 0, '抽屉不应渲染祖先回退按钮')
-  assert.equal(ancestorButtons('.helm-panes > .helm-pane').length, 0, '主屏不应渲染祖先回退按钮')
-  assert.equal(ancestorButtons('.helm-split-pane').length, 0, '分屏不应渲染祖先回退按钮')
+  assert.equal(ancestorButtons('.helmx-panes > .helmx-pane').length, 0, '主屏不应渲染祖先回退按钮')
+  assert.equal(ancestorButtons('.helmx-split-pane').length, 0, '分屏不应渲染祖先回退按钮')
   assert.ok(document.querySelector('.conversation-drawer .conversation-drawer-close-btn'), '抽屉仍有关闭按钮')
 })
 

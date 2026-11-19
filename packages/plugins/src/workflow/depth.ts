@@ -16,7 +16,7 @@
  *   maxSubagentDepth 字段（均校验在 HARD_MAX_SUBAGENT_DEPTH 内，受管子代理
  *   不能提高继承的上限）。
  */
-import { HelmError, type PluginDocHandle } from '@helm/protocol'
+import { HelmxError, type PluginDocHandle } from '@helmx/protocol'
 import { HARD_MAX_SUBAGENT_DEPTH } from '../contracts.js'
 
 /** 受管子代理登记条目（插件私有 doc `subagent-conversations` 持久事实）。 */
@@ -33,8 +33,8 @@ export interface ManagedSubagentEntry {
 }
 
 /** 深度超限统一错误（含事实细节，工具/动作入口与 agent_spawn 兜底共用）。 */
-export function depthExceededError(depth: number, maxSubagentDepth: number, conversationId: number): HelmError {
-  return new HelmError(
+export function depthExceededError(depth: number, maxSubagentDepth: number, conversationId: number): HelmxError {
+  return new HelmxError(
     'subagent_depth_exceeded',
     `会话 ${conversationId} 是第 ${depth} 层受管子代理（子树派生上限 ${maxSubagentDepth} 层），已达上限，不能再派生子代理或启动嵌套工作流`,
     403,
@@ -88,7 +88,7 @@ export function createManagedSubagentRegistry(deps: {
       !Number.isSafeInteger(entry.parentConversationId) || entry.parentConversationId < 1 ||
       entry.parentConversationId === conversationId
     ) {
-      throw new HelmError('subagent_record_invalid', `受管子代理 ${conversationId} 的深度登记无效`, 500, { conversationId })
+      throw new HelmxError('subagent_record_invalid', `受管子代理 ${conversationId} 的深度登记无效`, 500, { conversationId })
     }
     return { managed: true, depth: entry.depth, maxSubagentDepth: entry.maxSubagentDepth }
   }

@@ -19,7 +19,7 @@
 import type { Server as HttpServer, IncomingMessage } from 'node:http'
 import type { Duplex } from 'node:stream'
 import { WebSocketServer, createWebSocketStream, type WebSocket } from 'ws'
-import type { NodeTunnelControl, NodeTunnelErrorCode, NodeTunnelHello } from '@helm/protocol'
+import type { NodeTunnelControl, NodeTunnelErrorCode, NodeTunnelHello } from '@helmx/protocol'
 import type { NodeRegistry } from './registry.js'
 
 export interface NodeTunnelGatewayOptions {
@@ -50,7 +50,7 @@ export function attachNodeTunnelGateway(server: HttpServer, options: NodeTunnelG
     registry,
     path = '/ws/node-tunnel',
     helloTimeoutMs = DEFAULT_HELLO_TIMEOUT_MS,
-    log = (message: string) => console.error(`[helm] node tunnel gateway: ${message}`),
+    log = (message: string) => console.error(`[helmx] node tunnel gateway: ${message}`),
   } = options
   // Data-phase frame cap is 1 MiB (daemon stream writer HWM stays aligned with frames);
   // first-frame hello is independently capped at <= 4096 bytes.

@@ -12,7 +12,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationSummary, PluginClientContext as PluginClientContextType, WorkbenchPanelProps } from '@helm/protocol'
+import type { ConversationSummary, PluginClientContext as PluginClientContextType, WorkbenchPanelProps } from '@helmx/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../src/contracts.js'
 import {
   React,
@@ -75,10 +75,10 @@ function workbenchConversation(): ConversationSummary {
 
 const INSPECT_RAW = {
   record: {
-    id: 'local:/repo/.helm-worktrees/app-ab12cd34',
+    id: 'local:/repo/.helmx-worktrees/app-ab12cd34',
     nodeId: 'local',
-    path: '/repo/.helm-worktrees/app-ab12cd34',
-    branch: 'helm/spawn-ab12cd34',
+    path: '/repo/.helmx-worktrees/app-ab12cd34',
+    branch: 'helmx/spawn-ab12cd34',
     baseCommit: '5f1e9c0ffffffffffffffffffffffffffffffffff',
     repoRoot: '/repo',
     dirtySource: false,
@@ -89,7 +89,7 @@ const INSPECT_RAW = {
     createdAt: 123,
   },
   exists: true,
-  currentBranch: 'helm/spawn-ab12cd34',
+  currentBranch: 'helmx/spawn-ab12cd34',
   currentHead: 'aa11'.repeat(10),
   dirtyFiles: ['?? draft.txt', '?? note.txt'],
   dirtyFileCount: 2,
@@ -104,7 +104,7 @@ const INSPECT_RAW = {
 test('parseWorktreeInspectResult：合法形状完整解析；非法形状返回 undefined 不伪造', { timeout: 60_000 }, () => {
   const parsed = m.parseWorktreeInspectResult(INSPECT_RAW)
   assert.ok(parsed !== undefined)
-  assert.equal(parsed!.worktreeId, 'local:/repo/.helm-worktrees/app-ab12cd34')
+  assert.equal(parsed!.worktreeId, 'local:/repo/.helmx-worktrees/app-ab12cd34')
   assert.equal(parsed!.dirtyFileCount, 2)
   assert.equal(parsed!.commitsAhead, 1)
   assert.equal(parsed!.diffBase, 'baseCommit')
@@ -174,17 +174,17 @@ test('buildWorktreeSelector：登记 ID 优先；无 ID 时 path+nodeId 消歧',
 
 test('buildWorktreeReviewRequest：含坐标与检视统计；分支不一致显式警示', { timeout: 60_000 }, () => {
   const input = {
-    path: '/repo/.helm-worktrees/app-ab12cd34',
-    branch: 'helm/spawn-ab12cd34',
+    path: '/repo/.helmx-worktrees/app-ab12cd34',
+    branch: 'helmx/spawn-ab12cd34',
     nodeId: 'local',
     baseCommit: '5f1e9c0aaa',
     taskLabel: '修复构建',
     inspect: m.parseWorktreeInspectResult(INSPECT_RAW),
   }
   const text = m.buildWorktreeReviewRequest(input)
-  assert.match(text, /\/repo\/\.helm-worktrees\/app-ab12cd34/)
+  assert.match(text, /\/repo\/\.helmx-worktrees\/app-ab12cd34/)
   assert.match(text, /\(node local\)/)
-  assert.match(text, /helm\/spawn-ab12cd34/)
+  assert.match(text, /helmx\/spawn-ab12cd34/)
   assert.match(text, /5f1e9c0aaa\d*/)
   assert.match(text, /Uncommitted changes: 2 files/)
   assert.match(text, /Commits ahead of base: 1/)
@@ -198,13 +198,13 @@ test('buildWorktreeReviewRequest：含坐标与检视统计；分支不一致显
 
   const mismatched = m.buildWorktreeReviewRequest({
     path: '/w',
-    branch: 'helm/spawn-x',
+    branch: 'helmx/spawn-x',
     inspect: m.parseWorktreeInspectResult({ ...INSPECT_RAW, currentBranch: 'main', branchChanged: true }),
   })
   assert.match(mismatched, /currently on branch main, which differs from the registered branch/)
   const zhMismatched = m.buildWorktreeReviewRequest({
     path: '/w',
-    branch: 'helm/spawn-x',
+    branch: 'helmx/spawn-x',
     inspect: m.parseWorktreeInspectResult({ ...INSPECT_RAW, currentBranch: 'main', branchChanged: true }),
   }, 'zh-CN')
   assert.match(zhMismatched, /当前分支 main 与登记分支不一致/)
@@ -457,9 +457,9 @@ test('节点卡改动概览：检视渲染与审阅；completed run 提供「重
     status: 'done',
     label: '实现者',
     worktree: {
-      path: '/repo/.helm-worktrees/app-ab12cd34',
-      branch: 'helm/spawn-ab12cd34',
-      id: 'local:/repo/.helm-worktrees/app-ab12cd34',
+      path: '/repo/.helmx-worktrees/app-ab12cd34',
+      branch: 'helmx/spawn-ab12cd34',
+      id: 'local:/repo/.helmx-worktrees/app-ab12cd34',
       baseCommit: '5f1e9c0aaa',
     },
   })
@@ -516,7 +516,7 @@ test('节点卡改动概览：检视渲染与审阅；completed run 提供「重
     })
     const inspectCalls = ctx.calls.filter((c) => c.action === 'inspect_worktree')
     assert.equal(inspectCalls.length, 1)
-    assert.deepEqual(inspectCalls[0]!.input, { worktreeId: 'local:/repo/.helm-worktrees/app-ab12cd34' })
+    assert.deepEqual(inspectCalls[0]!.input, { worktreeId: 'local:/repo/.helmx-worktrees/app-ab12cd34' })
     assert.match(host.textContent!, /Uncommitted changes/)
     assert.match(host.textContent!, /2 files/)
     assert.match(host.textContent!, /Commits ahead of base/)
@@ -529,7 +529,7 @@ test('节点卡改动概览：检视渲染与审阅；completed run 提供「重
     assert.equal(ctx.submissions.length, 1)
     assert.equal(ctx.submissions[0]!.options?.conversationId, 1)
     assert.equal(ctx.submissions[0]!.options?.whenBusy, 'steer')
-    assert.match(ctx.submissions[0]!.text, /\/repo\/\.helm-worktrees\/app-ab12cd34/)
+    assert.match(ctx.submissions[0]!.text, /\/repo\/\.helmx-worktrees\/app-ab12cd34/)
     assert.match(ctx.submissions[0]!.text, /Review read-only first/)
   } finally {
     unmount()
@@ -540,7 +540,7 @@ test('检视失败显式呈现：错误可见且可重试，绝不伪造空统�
   const wtNode = node({
     id: 'c1',
     status: 'done',
-    worktree: { path: '/repo/.helm-worktrees/gone', branch: 'helm/spawn-gone', id: 'local:/repo/.helm-worktrees/gone' },
+    worktree: { path: '/repo/.helmx-worktrees/gone', branch: 'helmx/spawn-gone', id: 'local:/repo/.helmx-worktrees/gone' },
   })
   const failedRun = run({ id: 'wf_fail', status: 'failed', resumable: true, parentToolCallId: 'wf_call2', nodes: [wtNode] })
   setWorkflowClientStub({
@@ -679,7 +679,7 @@ test('独立子代理卡检视：有工作树时提供入口；点击不触发�
     parentToolCallId: 'call-bg',
     createdAt: 1,
     updatedAt: 2,
-    nodes: [{ id: 'n1', kind: 'agent', status: 'running', conversationId: 11, worktree: { path: '/wt/x', branch: 'helm/x', id: 'local:/wt/x' } }],
+    nodes: [{ id: 'n1', kind: 'agent', status: 'running', conversationId: 11, worktree: { path: '/wt/x', branch: 'helmx/x', id: 'local:/wt/x' } }],
   })
   setWorkflowClientStub({
     docValue: { runs: [bgRun] },
@@ -734,7 +734,7 @@ test('独立子代理卡检视：无登记 ID 时用 path+子会话节点消歧�
     parentToolCallId: 'call-bg2',
     createdAt: 1,
     updatedAt: 2,
-    nodes: [{ id: 'n1', kind: 'agent', status: 'done', conversationId: 12, worktree: { path: '/shared/wt', branch: 'helm/wt' } }],
+    nodes: [{ id: 'n1', kind: 'agent', status: 'done', conversationId: 12, worktree: { path: '/shared/wt', branch: 'helmx/wt' } }],
   })
   setWorkflowClientStub({
     docValue: { runs: [bgRun] },
@@ -773,7 +773,7 @@ test('工作流节点卡不重复渲染检视节：节点外层一处，子代�
     status: 'done',
     conversationId: 12,
     label: '实现者',
-    worktree: { path: '/repo/w', branch: 'helm/w', id: 'local:/repo/w' },
+    worktree: { path: '/repo/w', branch: 'helmx/w', id: 'local:/repo/w' },
   })
   const dslRun = run({ id: 'wf_dsl', status: 'completed', parentToolCallId: 'wf_call4', nodes: [wtNode] })
   const child = { ...workbenchConversation(), id: 12, title: '子会话 12', parentConversationId: 1, cwd: '/repo' }

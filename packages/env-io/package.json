@@ -1,5 +1,5 @@
 {
-  "name": "@helm/env-io",
+  "name": "@helmx/env-io",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -17,9 +17,9 @@
     "test": "tsx --test"
   },
   "dependencies": {
-    "@helm/protocol": "workspace:*"
+    "@helmx/protocol": "workspace:*"
   },
   "devDependencies": {
-    "@helm/test-kit": "workspace:*"
+    "@helmx/test-kit": "workspace:*"
   }
 }

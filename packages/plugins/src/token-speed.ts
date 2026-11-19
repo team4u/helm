@@ -27,11 +27,11 @@
  * migration, no fallback):
  * - Transient sessionDoc (`durable: false`): automatically starts empty on each enable/restart and clears
  *   on disable, conversation deletion, or process exit without SQLite writes or startup DB cleanup;
- * - pi.reset / pi.compaction / helm.rewind landing: the old context is invalid; wipe that
+ * - pi.reset / pi.compaction / helmx.rewind landing: the old context is invalid; wipe that
  *   conversation's speed state completely, never re-reading the old context or falling back to old TPS;
  * - Failed / aborted turns (turn_settled outcome): clear the current measurement outright; an unfinished answer must never pose as a normal terminal state; a runtime completed terminal state stays displayed until the next turn's first measurement overwrites it.
  */
-import { COMPOSER_STATUS_SLOT, HelmError, type PluginDefinition } from '@helm/protocol'
+import { COMPOSER_STATUS_SLOT, HelmxError, type PluginDefinition } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import {
   CONTEXT_INVALIDATION_ENTRY_KINDS,
@@ -131,7 +131,7 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
         try {
           speedDoc.set(conversationId, status)
         } catch (error) {
-          if (!(error instanceof HelmError && error.status === 404)) throw error
+          if (!(error instanceof HelmxError && error.status === 404)) throw error
         }
       }
 
@@ -180,7 +180,7 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
         try {
           speedDoc.delete(conversationId)
         } catch (error) {
-          if (!(error instanceof HelmError && error.status === 404)) throw error
+          if (!(error instanceof HelmxError && error.status === 404)) throw error
         }
       }
 
@@ -208,7 +208,7 @@ export function createTokenSpeedPlugin(options?: { now?: () => number }): Plugin
       })
 
       // Persisted entries: validate the envelope and boundary markers first. pi.reset / pi.compaction /
-      // helm.rewind means the old context is invalid -- wipe that conversation's entire speed state;
+      // helmx.rewind means the old context is invalid -- wipe that conversation's entire speed state;
       // never re-read the old context or fall back to old TPS; pi.assistant completion facts (taskId /
       // usage / stopReason / contentChars) reconcile exactly by request identity, backfill the trailing frame, then refresh the publish.
       ctx.host.onEvent('conversation.entry', (raw) => {

@@ -1,4 +1,4 @@
-import type { HelmPluginContext } from '@helm/protocol'
+import type { HelmxPluginContext } from '@helmx/protocol'
 import {
   RECALL_DOC_NAME,
   ROUTER_TOOL_SCOPE,
@@ -11,7 +11,7 @@ import {
 } from './contracts.js'
 
 /** Registration-time display copy (LocalizedText): resolved by the active UI locale, never execution copy. */
-export function registerSuperAgentUi(ctx: HelmPluginContext): void {
+export function registerSuperAgentUi(ctx: HelmxPluginContext): void {
   ctx.ui.sidebarItem({
     id: 'superagent-router',
     label: { en: 'SuperAgent Hub', 'zh-CN': 'SuperAgent 中枢' },

@@ -16,7 +16,7 @@ import type {
   RpcEnvError,
   RpcExecutionErrorCode,
   RpcFileErrorCode,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 
 describe('env-rpc error code unions: node_draining', () => {
   it('RpcExecutionErrorCode and NodeTunnelErrorCode both include node_draining; aborted kept', { timeout: 60_000 }, () => {

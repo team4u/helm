@@ -6,7 +6,7 @@
  * - SubagentWorkflow：DSL 确定性编排脚本（内联 / 文件 / 已保存定义）；
  * - cleanup_worktree：清理受管隔离 Git Worktree（错误分支绝不伪造 metadata）。
  */
-import { safeResultText, type HelmPluginContext } from '@helm/protocol'
+import { safeResultText, type HelmxPluginContext } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../contracts.js'
 import { normalizeWorkflowArgs } from './engine/runtime.js'
 import type { WorktreeIsolation } from './isolation.js'
@@ -75,7 +75,7 @@ function workflowResultEnvelope(run: WorkflowRunSummary): {
   }
 }
 
-export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowToolDeps): void {
+export function registerWorkflowTools(ctx: HelmxPluginContext, deps: WorkflowToolDeps): void {
   const { workflows, isolation, assertCanSpawn, resolveBackground, syncRunsDoc } = deps
 
   // ---- 模型工具：subagent（见 tool-subagent.ts） ----
@@ -92,7 +92,7 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
       'A workflow returning a run handle means it has started; wait for the terminal-state report before delivering the final result.',
     ],
     description:
-      'Run a SubagentWorkflow deterministic orchestration script in the current conversation. script is inline DSL source, scriptPath points to a script file, and name references a saved workflow (exactly one of the three); providing only resumeFromRunId reuses the original script. args is any JSON passed to the script as-is (string-shaped JSON is auto-unwrapped). Human conversations default to background execution (background defaults to true): the call returns a running summary immediately and the completion arrives as a steer follow-up in this conversation; automated conversations (owned by bot/helm: managed subagents/resident workers/trigger sessions) default to waiting synchronously for the terminal state (runId/status/nodes/result), and an explicit background=true is rejected. While a synchronous run blocks, the workflows detach action (or the UI "move to background") can move it background by runId: the call immediately returns a background handle (ok/background/summary) and the terminal state arrives as a steer follow-up.',
+      'Run a SubagentWorkflow deterministic orchestration script in the current conversation. script is inline DSL source, scriptPath points to a script file, and name references a saved workflow (exactly one of the three); providing only resumeFromRunId reuses the original script. args is any JSON passed to the script as-is (string-shaped JSON is auto-unwrapped). Human conversations default to background execution (background defaults to true): the call returns a running summary immediately and the completion arrives as a steer follow-up in this conversation; automated conversations (owned by bot/helmx: managed subagents/resident workers/trigger sessions) default to waiting synchronously for the terminal state (runId/status/nodes/result), and an explicit background=true is rejected. While a synchronous run blocks, the workflows detach action (or the UI "move to background") can move it background by runId: the call immediately returns a background handle (ok/background/summary) and the terminal state arrives as a steer follow-up.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -248,7 +248,7 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
   ctx.tool({
     name: 'cleanup_worktree',
     description:
-      "Clean up one managed isolated Git worktree (the workspace of a sub-conversation spawned with isolation: 'worktree'). Locate it by worktreeId (node:path), conversationId, or worktree path (may attach nodeId to disambiguate); refused by default when the workspace has uncommitted changes or unmerged commits (inspect/merge first, or pass force: true; force cannot bypass occupancy/ownership/locked checks); optionally pass deleteBranch: true to also delete the helm/spawn-* branch (branch deletion failures can be retried). Only worktrees registered by helm are cleaned; unregistered directories are never touched.",
+      "Clean up one managed isolated Git worktree (the workspace of a sub-conversation spawned with isolation: 'worktree'). Locate it by worktreeId (node:path), conversationId, or worktree path (may attach nodeId to disambiguate); refused by default when the workspace has uncommitted changes or unmerged commits (inspect/merge first, or pass force: true; force cannot bypass occupancy/ownership/locked checks); optionally pass deleteBranch: true to also delete the helmx/spawn-* branch (branch deletion failures can be retried). Only worktrees registered by helmx are cleaned; unregistered directories are never touched.",
     inputSchema: {
       type: 'object',
       properties: {
@@ -256,7 +256,7 @@ export function registerWorkflowTools(ctx: HelmPluginContext, deps: WorkflowTool
         conversationId: { type: 'number', description: 'Sub-conversation ID (mutually exclusive with path)' },
         path: { type: 'string', description: 'Worktree absolute path (mutually exclusive with conversationId; same-name paths across nodes need nodeId)' },
         nodeId: { type: 'string', description: 'Target node ID (only combinable with path, disambiguating same-name paths across nodes)' },
-        deleteBranch: { type: 'boolean', description: 'Also delete the helm/spawn-* branch (kept by default)' },
+        deleteBranch: { type: 'boolean', description: 'Also delete the helmx/spawn-* branch (kept by default)' },
         mergedInto: { type: 'string', description: 'Target branch or commit already merged into; defaults to the recorded baseBranch, falling back to the main worktree HEAD' },
         force: { type: 'boolean', description: 'Force cleanup (only bypasses the uncommitted-changes/unmerged-commits protection; never bypasses occupancy/ownership/locked checks)' },
       },

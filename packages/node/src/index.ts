@@ -1,5 +1,5 @@
 /**
- * `@helm/node`: cross-platform managed node daemon package (`helm-node`).
+ * `@helmx/node`: cross-platform managed node daemon package (`helmx-node`).
  *
  * Exports daemon lifecycle (`createNodeDaemon`, `runNodeDaemon`, `runNodeDaemonHandle`),
  * the per-connection environment RPC server (`createNodeEnvRpcServer`), upgrade/doctor/service

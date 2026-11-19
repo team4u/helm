@@ -3,11 +3,11 @@
  * tracks in-flight tasks, and emits redacted warning notifications for isolated hook failures.
  */
 import {
-  HelmError,
+  HelmxError,
   type HookName,
   type HookPayloadMap,
   type HookResult,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import type { HookPipeline, IsolatedHookError } from './hooks.js';
 import type { PluginTaskTracker } from './tracking.js';
 import type { PluginHostBackend, PluginState } from './types.js';
@@ -48,7 +48,7 @@ export async function dispatchPluginHook<K extends HookName>(
 ): Promise<HookResult<HookPayloadMap[K]>> {
   const pipeline = deps.pipelines.get(name);
   if (!pipeline) {
-    throw new HelmError('unknown_hook', `Unknown hook mount point: ${name}`, 400, { hook: name });
+    throw new HelmxError('unknown_hook', `Unknown hook mount point: ${name}`, 400, { hook: name });
   }
   const participants = pipeline.entries().filter((h) => isHookActive(deps.plugins, h.pluginId));
   if (participants.length === 0) return { action: 'continue' };
@@ -80,7 +80,7 @@ export async function dispatchPluginHookAround(
 ): Promise<unknown> {
   const pipeline = deps.pipelines.get(name);
   if (!pipeline) {
-    throw new HelmError('unknown_hook', `Unknown hook mount point: ${name}`, 400, { hook: name });
+    throw new HelmxError('unknown_hook', `Unknown hook mount point: ${name}`, 400, { hook: name });
   }
   const participants = pipeline.entries().filter((h) => isHookActive(deps.plugins, h.pluginId));
   const label = `hook:${name}`;

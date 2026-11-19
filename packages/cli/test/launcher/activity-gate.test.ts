@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
-import { useTempDir } from '@helm/test-kit/node';
+import { useTempDir } from '@helmx/test-kit/node';
 import { readProcessStartTime, type HubPidRecord } from '../../src/launcher/records.js';
 import { describeActivityCounts, readHubActivityGate } from '../../src/launcher/activity.js';
 import { captureIo, cleanupPid, spawnAlienProcess } from './fixtures.js';
@@ -41,7 +41,7 @@ function idleCounts(): Record<string, number> {
 const idleIo = () => captureIo().io;
 
 test('a fully bound idle heartbeat passes the gate', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-activity-');
+  const dir = useTempDir(t, 'helmx-activity-');
   const writer = spawnAlienProcess();
   t.after(() => cleanupPid(writer));
   const startTime = await readProcessStartTime(writer);
@@ -61,7 +61,7 @@ test('a fully bound idle heartbeat passes the gate', { timeout: 60_000 }, async 
 });
 
 test('busy counts surface verbatim in the gate verdict', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-activity-');
+  const dir = useTempDir(t, 'helmx-activity-');
   const writer = spawnAlienProcess();
   t.after(() => cleanupPid(writer));
   const startTime = await readProcessStartTime(writer);
@@ -86,7 +86,7 @@ test('busy counts surface verbatim in the gate verdict', { timeout: 60_000 }, as
 });
 
 test('a two-level writer binds through ppid (payload wrapper layout)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-activity-');
+  const dir = useTempDir(t, 'helmx-activity-');
   const wrapper = spawnAlienProcess();
   const hub = spawnAlienProcess();
   t.after(() => cleanupPid(wrapper));
@@ -109,7 +109,7 @@ test('a two-level writer binds through ppid (payload wrapper layout)', { timeout
 });
 
 test('every broken link in the chain is unknown, never idle or busy', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-activity-');
+  const dir = useTempDir(t, 'helmx-activity-');
   const writer = spawnAlienProcess();
   const foreign = spawnAlienProcess();
   t.after(() => cleanupPid(writer));
@@ -205,7 +205,7 @@ test('every broken link in the chain is unknown, never idle or busy', { timeout:
 
 
 test('a held wrapper can prove the heartbeat launch without /proc', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-activity-held-');
+  const dir = useTempDir(t, 'helmx-activity-held-');
   const { io } = captureIo();
   const pid = process.pid;
   const record = { ...baseRecord(pid, 0, 3202), startTime: undefined };

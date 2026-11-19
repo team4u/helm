@@ -32,7 +32,7 @@ const timeout = { timeout: 60_000 } as const
 let root: string
 
 before(async () => {
-  root = mkdtempSync(join(tmpdir(), 'helm-crosspath-'))
+  root = mkdtempSync(join(tmpdir(), 'helmx-crosspath-'))
 })
 
 after(async () => {
@@ -46,8 +46,8 @@ after(async () => {
 describe('conversation cwd cross-platform absolute path validation', { timeout: 60_000 }, () => {
   const valid: Array<[string, string]> = [
     ['POSIX root', '/'],
-    ['POSIX absolute', '/srv/work/helm'],
-    ['Windows drive backslash', 'C:\\work\\helm'],
+    ['POSIX absolute', '/srv/work/helmx'],
+    ['Windows drive backslash', 'C:\\work\\helmx'],
     ['Windows drive forward slash', 'D:/repo/project'],
     ['lowercase drive letter', 'c:\\Users\\dev'],
     ['UNC path', '\\\\srv\\share\\dir'],
@@ -89,7 +89,7 @@ describe('conversation cwd cross-platform absolute path validation', { timeout: 
 describe('Profile runtime.workspace cross-platform absolute paths', { timeout: 60_000 }, () => {
   const validWorkspaces = [
     '/workspace/proj',
-    'C:\\build\\helm',
+    'C:\\build\\helmx',
     'D:/repo/project',
     '\\\\srv\\share\\work',
   ]

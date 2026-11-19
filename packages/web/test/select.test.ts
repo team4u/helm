@@ -2,12 +2,12 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import React, { act } from 'react'
 import { renderToString } from 'react-dom/server'
-import type { SelectOption, SelectChangeEvent } from '@helm/plugin-client'
+import type { SelectOption, SelectChangeEvent } from '@helmx/plugin-client'
 import { ensureHappyDom } from './helpers/dom-harness.js'
 
 ensureHappyDom()
 const ReactDOMClient = await import('react-dom/client')
-const { Select, findNextSelectableIndex } = await import('@helm/plugin-client')
+const { Select, findNextSelectableIndex } = await import('@helmx/plugin-client')
 
 const e = React.createElement
 
@@ -52,8 +52,8 @@ test('Select：基础触发器渲染符合无障碍与项目极简视觉规范',
   )
 
   // 1. 结构与容器类名
-  assert.match(html, /class="helm-select composer-env-select"/)
-  assert.match(html, /class="helm-select-trigger"/)
+  assert.match(html, /class="helmx-select composer-env-select"/)
+  assert.match(html, /class="helmx-select-trigger"/)
 
   // 2. 无障碍属性
   assert.match(html, /aria-label="会话执行节点"/)
@@ -61,8 +61,8 @@ test('Select：基础触发器渲染符合无障碍与项目极简视觉规范',
   assert.match(html, /aria-expanded="false"/)
 
   // 3. 选中文案与 Lucide 旋转折叠图标
-  assert.match(html, /<span class="helm-select-label">local \(本机\)<\/span>/)
-  assert.match(html, /helm-select-chevron/)
+  assert.match(html, /<span class="helmx-select-label">local \(本机\)<\/span>/)
+  assert.match(html, /helmx-select-chevron/)
 
   // 4. 严禁包含 Emoji
   assert.equal(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/u.test(html), false)
@@ -81,7 +81,7 @@ test('Select：支持前缀图标与禁用态', { timeout: 60_000 }, () => {
   )
 
   assert.match(html, /disabled=""/)
-  assert.match(html, /helm-select-prefix/)
+  assert.match(html, /helmx-select-prefix/)
 })
 
 test('Select：支持 placeholder 与自定义 size 类名', { timeout: 60_000 }, () => {
@@ -96,8 +96,8 @@ test('Select：支持 placeholder 与自定义 size 类名', { timeout: 60_000 }
     }),
   )
 
-  assert.match(html, /class="helm-select helm-select-sm"/)
-  assert.match(html, /<span class="helm-select-label helm-select-placeholder">请选择节点…<\/span>/)
+  assert.match(html, /class="helmx-select helmx-select-sm"/)
+  assert.match(html, /<span class="helmx-select-label helmx-select-placeholder">请选择节点…<\/span>/)
 })
 
 test('Select：空字符串作为合法选项值（如跟随全局默认）正常呈现与选中', { timeout: 60_000 }, () => {
@@ -114,8 +114,8 @@ test('Select：空字符串作为合法选项值（如跟随全局默认）正�
     }),
   )
 
-  assert.match(html, /<span class="helm-select-label">跟随全局默认节点<\/span>/)
-  assert.doesNotMatch(html, /helm-select-placeholder/)
+  assert.match(html, /<span class="helmx-select-label">跟随全局默认节点<\/span>/)
+  assert.doesNotMatch(html, /helmx-select-placeholder/)
 })
 
 // ---------------------------------------------------------------------------
@@ -164,11 +164,11 @@ test('Select：无障碍角色（role="combobox" / role="listbox"）与状态机
   // 3. 激活态与勾选指示符
   const selectedOptionEl = optionElements[0]
   assert.equal(selectedOptionEl?.getAttribute('data-state'), 'checked')
-  assert.ok(selectedOptionEl?.querySelector('.helm-select-check'), '选中项应渲染 check 勾选指示器')
+  assert.ok(selectedOptionEl?.querySelector('.helmx-select-check'), '选中项应渲染 check 勾选指示器')
 
   const unselectedOptionEl = optionElements[1]
   assert.equal(unselectedOptionEl?.getAttribute('data-state'), 'unchecked')
-  assert.ok(unselectedOptionEl?.querySelector('.helm-select-check') === null, '未选中项不应渲染勾选')
+  assert.ok(unselectedOptionEl?.querySelector('.helmx-select-check') === null, '未选中项不应渲染勾选')
 
   // 4. 禁用态选项
   const disabledOptionEl = optionElements[2]
@@ -256,7 +256,7 @@ test('Select multiple: 渲染多选触发器、全选与清空操作栏及复选
   )
 
   // 1. 结构与多选类名
-  assert.match(html, /class="[^"]*helm-select-multi[^"]*"/)
+  assert.match(html, /class="[^"]*helmx-select-multi[^"]*"/)
   assert.match(html, /2 selected/)
   assert.match(html, /aria-label="模型多选"/)
 

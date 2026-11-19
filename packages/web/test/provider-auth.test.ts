@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ModelProviderSummary, ProviderConfig } from '@helm/protocol'
+import type { ModelProviderSummary, ProviderConfig } from '@helmx/protocol'
 import type { ModelDescriptor } from '../src/lib/api.js'
 import { buildProviderEntries, filterProviderEntries } from '../src/modals/provider-auth-model.js'
 

@@ -1,6 +1,6 @@
 /**
  * Activity Rail 空间导航（方案 B：一级图标切换整个工作空间）——浏览器式交互历史测试
- * （真实 HelmStoreProvider + happy-dom，真实 history push/back/forward）。
+ * （真实 HelmxStoreProvider + happy-dom，真实 history push/back/forward）。
  *
  * 契约要点：
  * - Hash 只表达唯一主舞台目标，全程不出现 sidebar / sidebarSpace 查询参数（无双前缀形态）；
@@ -17,8 +17,8 @@ import * as React from 'react'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import { HelmStoreProvider } from '../src/lib/HelmStoreProvider.js'
-import { useHelmStore } from '../src/lib/store-context.js'
+import { HelmxStoreProvider } from '../src/lib/HelmxStoreProvider.js'
+import { useHelmxStore } from '../src/lib/store-context.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 import type { ResolvedTarget, SidebarSpace } from '../src/lib/types.js'
 
@@ -137,7 +137,7 @@ function mountApp(): Mount {
   let openTargetFn: ((target: ResolvedTarget) => void) | undefined
 
   function App(): React.ReactNode {
-    const store = useHelmStore()
+    const store = useHelmxStore()
     captured = {
       target: describeTarget(store.primaryTarget),
       hash: '',
@@ -153,7 +153,7 @@ function mountApp(): Mount {
   let root: Root | undefined
   act(() => {
     root = createRoot(host)
-    root.render(e(HelmStoreProvider, null, e(App)))
+    root.render(e(HelmxStoreProvider, null, e(App)))
   })
   return {
     probe: () => ({ ...captured, hash: window.location.hash, historyLength: window.history.length }),

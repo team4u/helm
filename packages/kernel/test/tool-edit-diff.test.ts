@@ -9,7 +9,7 @@
  *    secret (window cut piece redaction will leak leak form) must fall back rows=[]/truncated=true and
  *    serialization result without any secret leftover segment; row number/count always reverse reflect original text;
  * 3. tool level:local and remote sharing the same pure function (same content produce out fully consistent diff), structure
- *    output conforms to @helm/protocol EDIT_TOOL_RESULT_SCHEMA(Ajv real validate), literal
+ *    output conforms to @helmx/protocol EDIT_TOOL_RESULT_SCHEMA(Ajv real validate), literal
  *    replace ($& do not explain), failed (missing/many time) never produce succeeded diff and file do not change.
  */
 
@@ -27,7 +27,7 @@ import {
   validateOrThrow,
   type EditToolResult,
   type ToolDiffRow,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { computeEditDiff } from '../src/runtime/tool-edit-diff.js'
 import { createEditTool } from '../src/runtime/tools.js'
 import {
@@ -36,7 +36,7 @@ import {
   SecretStash,
   ensureDataDir,
 } from '../src/services/index.js'
-import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
+import type { HelmxToolDeps } from '../src/runtime/tool-deps.js'
 import type { EnvFabric } from '../src/env/index.js'
 
 const identityRedact = (text: string): string => text
@@ -70,7 +70,7 @@ function assertRows(actual: ToolDiffRow[], expected: ToolDiffRow[]): void {
 let rootDir: string
 
 before(async () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-edit-diff-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-edit-diff-'))
 })
 
 after(async () => {
@@ -483,7 +483,7 @@ function makeApi(cwd: string, conversationId = 1) {
   } as never
 }
 
-async function makeRealDeps(dir: string, stash = new SecretStash()): Promise<HelmToolDeps> {
+async function makeRealDeps(dir: string, stash = new SecretStash()): Promise<HelmxToolDeps> {
   await ensureDataDir(dir)
   const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
   return {
@@ -651,7 +651,7 @@ describe('edit tool: remote sharing the same pure function', { timeout: 60_000 }
     const files = new Map<string, string>([['/workspace/same.txt', content]])
     const env = makeRemoteEnv(files)
     const fabric = makeStubFabric(env)
-    const remoteWithFabric: HelmToolDeps = { ...remoteDeps, envFabric: fabric, nodeIdOf: () => 'test-node' }
+    const remoteWithFabric: HelmxToolDeps = { ...remoteDeps, envFabric: fabric, nodeIdOf: () => 'test-node' }
     const remoteResult = await createEditTool(remoteWithFabric).execute(
       { path: 'same.txt', oldText: 'five', newText: 'FIVE' },
       makeApi('/workspace'),
@@ -673,7 +673,7 @@ describe('edit tool: remote sharing the same pure function', { timeout: 60_000 }
     const files = new Map<string, string>([['/workspace/x.txt', 'a\nb\n']])
     const env = makeRemoteEnv(files)
     const fabric = makeStubFabric(env)
-    const deps: HelmToolDeps = { ...remoteDeps, envFabric: fabric, nodeIdOf: () => 'test-node' }
+    const deps: HelmxToolDeps = { ...remoteDeps, envFabric: fabric, nodeIdOf: () => 'test-node' }
     const result = await createEditTool(deps).execute(
       { path: 'x.txt', oldText: 'zzz', newText: 'y' },
       makeApi('/workspace'),

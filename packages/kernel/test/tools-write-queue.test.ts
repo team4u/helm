@@ -19,7 +19,7 @@ import assert from 'node:assert/strict'
 import { createEditTool, createReadTool, createWriteTool } from '../src/runtime/tools.js'
 import { localWithFileMutationQueue, onFileMutationEnqueue } from '../src/env/file-mutation-queue.js'
 import { ArtifactService, InMemoryArtifactRepository, SecretStash, ensureDataDir } from '../src/services/index.js'
-import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
+import type { HelmxToolDeps } from '../src/runtime/tool-deps.js'
 
 function makeApi(cwd: string, conversationId = 1) {
   return {
@@ -52,7 +52,7 @@ function makeApi(cwd: string, conversationId = 1) {
   } as never
 }
 
-async function makeRealDeps(dir: string): Promise<HelmToolDeps> {
+async function makeRealDeps(dir: string): Promise<HelmxToolDeps> {
   await ensureDataDir(dir)
   const stash = new SecretStash()
   const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
@@ -69,7 +69,7 @@ async function makeRealDeps(dir: string): Promise<HelmToolDeps> {
 let rootDir: string
 
 before(async () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-write-queue-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-write-queue-'))
 })
 
 after(async () => {

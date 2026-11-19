@@ -1,7 +1,7 @@
 /**
- * Contract tests for `helm nodes upgrade`: mock HTTP server simulating Hub
+ * Contract tests for `helmx nodes upgrade`: mock HTTP server simulating Hub
  * (same pattern as cli-nodes-env.test.ts), verifying GET/POST routes, query encoding,
- * request bodies, flag mutual exclusions, --json output, --current (HELM_NODE_ID),
+ * request bodies, flag mutual exclusions, --json output, --current (HELMX_NODE_ID),
  * and honest human output (unconfirmed results never print success).
  * Every test specifies explicit timeout: 60_000.
  */
@@ -29,7 +29,7 @@ const UPGRADE_OK = { ok: true, previousVersion: '0.1.0', targetVersion: '0.2.0',
 // ---------------------------------------------------------------------------
 
 test('nodes upgrade --check: GET /upgrade/check (no query); --registry encoded into query string', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-node-upgrade-')
+  const dir = useTempDir(t, 'helmx-cli-node-upgrade-')
   const hub = await startMockHub(
     {
       'GET /api/nodes/gpu-box/upgrade/check': () => ({ body: CHECK_RESULT }),
@@ -65,7 +65,7 @@ test('nodes upgrade --check: GET /upgrade/check (no query); --registry encoded i
 // ---------------------------------------------------------------------------
 
 test('nodes upgrade: POST /upgrade empty body (upgrades to latest); --version/--registry/--force go in body', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-node-upgrade-')
+  const dir = useTempDir(t, 'helmx-cli-node-upgrade-')
   const hub = await startMockHub(
     {
       'POST /api/nodes/gpu-box/upgrade': () => ({ body: UPGRADE_OK }),
@@ -94,7 +94,7 @@ test('nodes upgrade: POST /upgrade empty body (upgrades to latest); --version/--
 })
 
 test('nodes upgrade: nodeId path encoding (special characters safely escaped)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-node-upgrade-')
+  const dir = useTempDir(t, 'helmx-cli-node-upgrade-')
   const hub = await startMockHub(
     {
       'POST /api/nodes/gpu.box-1/upgrade': () => ({ body: UPGRADE_OK }),
@@ -107,7 +107,7 @@ test('nodes upgrade: nodeId path encoding (special characters safely escaped)', 
 })
 
 test('nodes upgrade human output: shows versions and pid on success; no-op message when up to date; exits 1 on failure without printing success', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-node-upgrade-')
+  const dir = useTempDir(t, 'helmx-cli-node-upgrade-')
   const noop = { ok: true, previousVersion: '0.2.0', targetVersion: '0.2.0', upgraded: false }
   const failed = { ok: false, previousVersion: '0.1.0', targetVersion: '0.2.0', upgraded: false }
   const hub = await startMockHub(
@@ -139,7 +139,7 @@ test('nodes upgrade human output: shows versions and pid on success; no-op messa
 })
 
 test('nodes upgrade --json: HTTP 200 with ok:false also exits 1 with JSON error envelope on stderr', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-node-upgrade-')
+  const dir = useTempDir(t, 'helmx-cli-node-upgrade-')
   const failed = { ok: false, previousVersion: '0.1.0', targetVersion: '0.2.0', upgraded: false }
   const hub = await startMockHub(
     {
@@ -156,7 +156,7 @@ test('nodes upgrade --json: HTTP 200 with ok:false also exits 1 with JSON error 
 })
 
 test('nodes upgrade: unconfirmed result (Hub 502 node_upgrade_unconfirmed) exits with error and prints no success', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-node-upgrade-')
+  const dir = useTempDir(t, 'helmx-cli-node-upgrade-')
   const hub = await startMockHub(
     {
       'POST /api/nodes/gpu-box/upgrade': () => ({
@@ -177,7 +177,7 @@ test('nodes upgrade: unconfirmed result (Hub 502 node_upgrade_unconfirmed) exits
 // ---------------------------------------------------------------------------
 
 test('nodes upgrade: --check and --version/--force are mutually exclusive (rejected explicitly)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-node-upgrade-')
+  const dir = useTempDir(t, 'helmx-cli-node-upgrade-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
@@ -190,15 +190,15 @@ test('nodes upgrade: --check and --version/--force are mutually exclusive (rejec
   assert.equal(hub.hits.length, 0, 'mutual exclusion rejected before sending HTTP request')
 })
 
-test('nodes upgrade --current: reads HELM_NODE_ID; mutually exclusive with nodeId; errors explicitly when missing', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-node-upgrade-')
+test('nodes upgrade --current: reads HELMX_NODE_ID; mutually exclusive with nodeId; errors explicitly when missing', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-node-upgrade-')
   const hub = await startMockHub(
     {
       'POST /api/nodes/env-node/upgrade': () => ({ body: UPGRADE_OK }),
     },
     { autoRegisterCleanup: t },
   )
-  const env = makeCliEnv(hub.url, dir, { HELM_NODE_ID: 'env-node' })
+  const env = makeCliEnv(hub.url, dir, { HELMX_NODE_ID: 'env-node' })
 
   const viaCurrent = await runCliCaptured(['nodes', 'upgrade', '--current'], env)
   assert.equal(viaCurrent.code, 0, viaCurrent.err)
@@ -210,11 +210,11 @@ test('nodes upgrade --current: reads HELM_NODE_ID; mutually exclusive with nodeI
 
   const missing = await runCliCaptured(['nodes', 'upgrade', '--current'], makeCliEnv(hub.url, dir))
   assert.equal(missing.code, 1)
-  assert.match(missing.err, /HELM_NODE_ID/)
+  assert.match(missing.err, /HELMX_NODE_ID/)
 })
 
 test('nodes upgrade: rejects unknown flag; errors on missing node target; rejects invalid --check response shape', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-node-upgrade-')
+  const dir = useTempDir(t, 'helmx-cli-node-upgrade-')
   const hub = await startMockHub(
     {
       'GET /api/nodes/gpu-box/upgrade/check': () => ({ body: { currentVersion: 'x' } }),
@@ -237,7 +237,7 @@ test('nodes upgrade: rejects unknown flag; errors on missing node target; reject
 })
 
 test('nodes list: human table includes version column', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-cli-node-upgrade-')
+  const dir = useTempDir(t, 'helmx-cli-node-upgrade-')
   const nodes = [
     { id: 'local', kind: 'local', online: true, version: '0.2.0', hostname: 'hub', platform: 'linux' },
     { id: 'gpu-box', kind: 'byom', online: true, version: '0.1.0', hostname: 'gpu', platform: 'linux' },

@@ -2,10 +2,10 @@
  * Workbench navigation-location state, split focus, space-memory jump-back,
  * home landing and search-entry locating hook. The browser address-bar
  * read/write boundary (hashchange/popstate and pushState/replaceState) stays
- * in HelmStoreProvider.
+ * in HelmxStoreProvider.
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type Dispatch, type MutableRefObject, type SetStateAction } from 'react'
-import type { ConversationDetail, Profile } from '@helm/protocol/browser'
+import type { ConversationDetail, Profile } from '@helmx/protocol/browser'
 import { entryMatchesReference, type LiveState } from './live-state.js'
 import { defaultSpaceTarget, resolveSpaceSwitch, type SpaceTargetInput } from './space-navigation.js'
 import {
@@ -39,7 +39,7 @@ export interface UseLocationNavigationOptions {
   delay: (fn: () => void, ms: number) => void
   pushNotice: (notice: Omit<ToastNotice, 'id' | 'createdAt'>) => void
   /**
-   * Locale seam: this hook runs inside HelmStoreProvider's own body (no
+   * Locale seam: this hook runs inside HelmxStoreProvider's own body (no
    * context access); the Provider does not pass `t` yet, so the English bridge
    * translator keeps today's behavior until the wiring lands.
    */

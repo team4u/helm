@@ -22,9 +22,9 @@ import { pathToFileURL } from 'node:url'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 import { getCurrentTools } from '@earendil-works/pi-ai/utils/transcript'
 
-import { HelmError } from '@helm/protocol'
-import { createPluginBuildProvider } from '@helm/plugin-build'
-import { createHelm } from '../../hub/src/app.js'
+import { HelmxError } from '@helmx/protocol'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
+import { createHelmx } from '../../hub/src/app.js'
 import {
   createGitTemplate,
   deferred,
@@ -52,7 +52,7 @@ const TSX_CLI = createRequire(import.meta.url).resolve('tsx/cli')
 const KERNEL_DIR = new URL('../../kernel/', import.meta.url).pathname
 const PI_AI_FAUX_URL = pathToFileURL(join(KERNEL_DIR, 'node_modules/@earendil-works/pi-ai/dist/providers/faux.js')).href
 const HUB_APP_URL = pathToFileURL(new URL('../../hub/src/app.ts', import.meta.url).pathname).href
-const PLUGIN_BUILD_URL = import.meta.resolve('@helm/plugin-build')
+const PLUGIN_BUILD_URL = import.meta.resolve('@helmx/plugin-build')
 
 async function spawnSigkillSeeder(
   t: TestContext,
@@ -111,7 +111,7 @@ interface SwarmTestEnv {
   dataDir: string
   repoDir: string
   faux: FauxProviderHandle
-  app: Awaited<ReturnType<typeof createHelm>>
+  app: Awaited<ReturnType<typeof createHelmx>>
   close(): Promise<void>
 }
 
@@ -122,7 +122,7 @@ async function openSwarmEnv(root: string): Promise<SwarmTestEnv> {
   const faux = makeFauxProvider({
     models: [{ id: 'faux-1' }, { id: 'faux-2' }],
   })
-  const app = await createHelm({
+  const app = await createHelmx({
     buildProvider: createPluginBuildProvider(),
     dataDir,
     cwd: repoDir,
@@ -190,17 +190,17 @@ function setSwarmRoleResponses(
 }
 
 test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable freedom, swarm skill lifecycle, same-turn tool unlock, byte-constant <active_swarm_group>, and inUse guard', { timeout: 60_000 }, async (t) => {
-  const env = await openSwarmEnv(useTempDir(t, 'helm-swarm-int-'))
+  const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int-'))
   try {
     const { kernel } = env.app
 
-    // 1) Default-enabled in createHelm, zero background resident conversations created on boot!
+    // 1) Default-enabled in createHelmx, zero background resident conversations created on boot!
     const swarmSummary = kernel.plugins.list().find((p) => p.id === SWARM_PLUGIN_ID)
-    assert.ok(swarmSummary, 'createHelm must register builtin:swarm')
+    assert.ok(swarmSummary, 'createHelmx must register builtin:swarm')
     assert.equal(swarmSummary!.enabled, true, 'builtin:swarm must be default-enabled')
     const bootConvs = kernel.listConversations()
     assert.equal(
-      bootConvs.some((c) => c.ownedBy === 'helm' || c.tags.includes(COORDINATOR_TAG) || c.tags.includes(WORKER_TAG)),
+      bootConvs.some((c) => c.ownedBy === 'helmx' || c.tags.includes(COORDINATOR_TAG) || c.tags.includes(WORKER_TAG)),
       false,
       'builtin:swarm must NOT create any global resident conversations on boot',
     )
@@ -237,7 +237,7 @@ test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable free
     assert.match(loadedSkill.text, /Coordinator Rule: Do Not Do the Work/)
     assert.match(loadedSkill.text, /swarm_create_group/)
     assert.match(loadedSkill.text, /swarm_dispatch_worker/)
-    assert.match(loadedSkill.text, /helm swarm/)
+    assert.match(loadedSkill.text, /helmx swarm/)
 
     // 4) Before swarm_create_group: #C sees swarm_create_group + subagent/bash/edit/write, NOT swarm_dispatch_worker/swarm_board_*
     const preCapture: Array<{ toolNames: string[]; sectionsById: Record<string, string> }> = []
@@ -295,14 +295,14 @@ test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable free
     // Duplicate create_group on the same coordinator returns 409 swarm_group_already_active
     await assert.rejects(
       () => kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'create_group', { title: 'Second', conversationId: coord.id }),
-      (err: unknown) => err instanceof HelmError && err.code === 'swarm_group_already_active' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'swarm_group_already_active' && err.status === 409,
     )
 
     // Active group blocks non-force disable of builtin:swarm via inUse()
     await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
     await assert.rejects(
       () => kernel.plugins.disable(SWARM_PLUGIN_ID),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_in_use' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use' && err.status === 409,
     )
 
     // 5) Recruit 2 members, mutate group title/objective, archive 1 member -> coordinator <active_swarm_group> stays 100% byte-identical!
@@ -375,7 +375,7 @@ test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable free
     await kernel.plugins.disable(SWARM_PLUGIN_ID)
     await assert.rejects(
       () => kernel.plugins.executeTool('load_skill', { skillId: SWARM_SKILL_ID }, { conversationId: coord.id }),
-      (err: unknown) => err instanceof HelmError && err.code === 'skill_not_available',
+      (err: unknown) => err instanceof HelmxError && err.code === 'skill_not_available',
     )
   } finally {
     await env.close()
@@ -383,7 +383,7 @@ test('swarm-int1: default-enabled zero-resident boot, idle workflow-disable free
 })
 
 test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks workflow disable & cleanup_worktree, two-mode close_group retain & merge, and closed/detached board_status', { timeout: 60_000 }, async (t) => {
-  const env = await openSwarmEnv(useTempDir(t, 'helm-swarm-int-'))
+  const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int-'))
   try {
     const { kernel } = env.app
     const coord = await kernel.createConversation({ title: 'Release Coordinator', profileId: 'assistant', cwd: env.repoDir })
@@ -531,12 +531,12 @@ test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks wor
     // Held worktree enforces 409 plugin_in_use on disable('builtin:workflow') AND 409 worktree_in_use on cleanup_worktree(force: true)!
     await assert.rejects(
       () => kernel.plugins.disable(WORKFLOW_ID),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_in_use' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_in_use' && err.status === 409,
     )
     await assert.rejects(
       () => kernel.plugins.invokeAction(WORKFLOW_ID, 'cleanup_worktree', { worktreeId: author.worktreeId, force: true }),
       (err: unknown) =>
-        err instanceof HelmError &&
+        err instanceof HelmxError &&
         err.code === 'worktree_in_use' &&
         err.status === 409 &&
         err.message.includes(groupId),
@@ -545,11 +545,11 @@ test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks wor
     // Default close_group({}) without keepWorktree MUST reject unmerged branch with 409 swarm_worktree_unmerged (keeping hold intact!)
     await assert.rejects(
       () => kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId }, { conversationId: coord.id }),
-      (err: unknown) => err instanceof HelmError && err.code === 'swarm_worktree_unmerged' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'swarm_worktree_unmerged' && err.status === 409,
     )
     await assert.rejects(
       () => kernel.plugins.invokeAction(WORKFLOW_ID, 'cleanup_worktree', { worktreeId: author.worktreeId, force: true }),
-      (err: unknown) => err instanceof HelmError && err.code === 'worktree_in_use',
+      (err: unknown) => err instanceof HelmxError && err.code === 'worktree_in_use',
     )
 
     // Unlock-merge mode: close_group({ keepWorktree: true }) releases hold, preserves branch, and strips swarm-coordinator tag to restore bash!
@@ -640,7 +640,7 @@ test('swarm-int2: Author(worktree) + Verifier(readonly) handoff, hold blocks wor
 })
 
 test('swarm-int3: forkFrom clean anchor, #channel addressing & passive wake=false coalescing, abort_worker brake, switch_worker_model, inspect_worker, and @/# completions', { timeout: 60_000 }, async (t) => {
-  const env = await openSwarmEnv(useTempDir(t, 'helm-swarm-int-'))
+  const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int-'))
   try {
     const { kernel } = env.app
     const coord = await kernel.createConversation({ title: 'Context Coordinator', profileId: 'assistant', cwd: env.repoDir })
@@ -763,7 +763,7 @@ test('swarm-int3: forkFrom clean anchor, #channel addressing & passive wake=fals
           { groupId, name: 'coder', model: 'faux/faux-2' },
           { conversationId: coord.id },
         ),
-      (err: unknown) => err instanceof HelmError && err.code === 'swarm_worker_busy' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'swarm_worker_busy' && err.status === 409,
     )
 
     const abortPromise = kernel.plugins.invokeAction(
@@ -795,7 +795,7 @@ test('swarm-int3: forkFrom clean anchor, #channel addressing & passive wake=fals
 })
 
 test('swarm-int4: failed turn auto [blocker], At-Most-Once Silent-Exit Nudge -> fallback [blocker], 0-Token [stall], and Hub restart recovery', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-swarm-selfheal-')
+  const root = useTempDir(t, 'helmx-swarm-selfheal-')
   const dataDir = join(root, 'data')
   const repoDir = join(root, 'repo')
   gitTemplate.cloneTo(repoDir)
@@ -807,7 +807,7 @@ test('swarm-int4: failed turn auto [blocker], At-Most-Once Silent-Exit Nudge -> 
     } else {
       faux.setResponses([])
     }
-    const app = await createHelm({
+    const app = await createHelmx({
       buildProvider: createPluginBuildProvider(),
       dataDir,
       cwd: repoDir,
@@ -953,7 +953,7 @@ test('swarm-int4: failed turn auto [blocker], At-Most-Once Silent-Exit Nudge -> 
 })
 
 test('swarm-int5: /skill:swarm activation loop (task auto-create + same-turn tools, empty/idempotent reuse, worker/child block, non-matching passthrough)', { timeout: 60_000 }, async (t) => {
-  const env = await openSwarmEnv(useTempDir(t, 'helm-swarm-slash-'))
+  const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-slash-'))
   try {
     const { kernel } = env.app
 
@@ -1039,11 +1039,11 @@ test('swarm-int5: /skill:swarm activation loop (task auto-create + same-turn too
     assert.equal(coordSummary.tags.includes(COORDINATOR_TAG), true)
     assert.equal(coordSummary.title, '/skill:swarm 重构鉴权模块并交叉验收', 'auto-title must derive from clean user input')
     const coordDetail = await kernel.getConversationDetail(coord.id, { limit: 20 })
-    const firstHumanInput = coordDetail.entries.find((e) => e.kind === 'helm.input')
+    const firstHumanInput = coordDetail.entries.find((e) => e.kind === 'helmx.input')
     assert.equal(
       (firstHumanInput?.data as { text?: string } | undefined)?.text,
       '/skill:swarm 重构鉴权模块并交叉验收',
-      'helm.input must preserve original /skill:swarm text verbatim without system-prompt wall',
+      'helmx.input must preserve original /skill:swarm text verbatim without system-prompt wall',
     )
     for (const expected of ['swarm_dispatch_worker', 'swarm_board_post', 'swarm_board_read', 'swarm_close_group', 'bash', 'edit', 'write', 'subagent', 'SubagentWorkflow']) {
       assert.ok(turnMeta.toolNames.includes(expected), `expected ${expected} exposed on turn 1 after /skill:swarm`)
@@ -1086,7 +1086,7 @@ test('swarm-int5: /skill:swarm activation loop (task auto-create + same-turn too
     await assert.rejects(
       () => kernel.submitInput(workerId, '/skill:swarm nested attempt'),
       (err: unknown) =>
-        err instanceof HelmError &&
+        err instanceof HelmxError &&
         err.code === 'input_blocked' &&
         err.message.includes('不能在子成员或后台会话中使用 /skill:swarm 发起协同'),
     )
@@ -1099,7 +1099,7 @@ test('swarm-int5: /skill:swarm activation loop (task auto-create + same-turn too
     await assert.rejects(
       () => kernel.submitInput(childConv.id, '/skill:swarm child attempt'),
       (err: unknown) =>
-        err instanceof HelmError &&
+        err instanceof HelmxError &&
         err.code === 'input_blocked' &&
         err.message.includes('不能在子成员或后台会话中使用 /skill:swarm 发起协同'),
     )
@@ -1123,7 +1123,7 @@ test('swarm-int5: /skill:swarm activation loop (task auto-create + same-turn too
     assert.match(emptyArgSection, /briefly ask what task to coordinate/)
     assert.match(emptyArgMessages, /"\/skill:swarm"/)
     const emptyArgDetail = await kernel.getConversationDetail(emptyArgCoord.id, { limit: 10 })
-    const emptyArgInput = emptyArgDetail.entries.find((e) => e.kind === 'helm.input')
+    const emptyArgInput = emptyArgDetail.entries.find((e) => e.kind === 'helmx.input')
     assert.equal((emptyArgInput?.data as { text?: string } | undefined)?.text, '/skill:swarm')
     const emptyArgIndex = kernel.plugins.getPublicDoc(SWARM_PLUGIN_ID, 'index').value as SwarmIndexDoc
     const emptyArgGroup = emptyArgIndex.groups.find((g) => g.coordinatorConversationId === emptyArgCoord.id && g.status === 'active')
@@ -1139,13 +1139,13 @@ test('swarm-int5: /skill:swarm activation loop (task auto-create + same-turn too
 // ---------------------------------------------------------------------------
 
 test('swarm-int6: multi-tool-round worker turn settles once — no mid-turn silent-exit nudge, no false system blocker, single post-done coordinator report', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-swarm-handover-')
+  const root = useTempDir(t, 'helmx-swarm-handover-')
   const dataDir = join(root, 'data')
   const repoDir = join(root, 'repo')
   gitTemplate.cloneTo(repoDir)
 
   const faux = makeFauxProvider({ models: [{ id: 'faux-1' }] })
-  const app = await createHelm({
+  const app = await createHelmx({
     buildProvider: createPluginBuildProvider(),
     dataDir,
     cwd: repoDir,
@@ -1206,7 +1206,7 @@ test('swarm-int6: multi-tool-round worker turn settles once — no mid-turn sile
     // 3) The coordinator received exactly one board report, covering the done post.
     const coordDetail = await app.kernel.getConversationDetail(coord.id, { limit: 50 })
     const reportInputs = coordDetail.entries.filter(
-      (e) => e.kind === 'helm.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
+      (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
     )
     assert.equal(reportInputs.length, 1, `expected exactly one coordinator report, got ${reportInputs.length}`)
     assert.match(JSON.stringify(reportInputs[0]!.data ?? ''), /\[done\] @coder/)
@@ -1216,7 +1216,7 @@ test('swarm-int6: multi-tool-round worker turn settles once — no mid-turn sile
 })
 
 test('swarm-int11: done non-race catch-up, failed-turn queued wakeup delivery, active worker delete lock + disabled-period reconcile', { timeout: 60_000 }, async (t) => {
-  const env = await openSwarmEnv(useTempDir(t, 'helm-swarm-int7-'))
+  const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int7-'))
   try {
     const { kernel } = env.app
     const coord = await kernel.createConversation({ title: 'Catchup Coord', profileId: 'assistant', cwd: env.repoDir })
@@ -1273,7 +1273,7 @@ test('swarm-int11: done non-race catch-up, failed-turn queued wakeup delivery, a
     // Hold longer than COORDINATOR_BATCH_WINDOW_MS (50ms) while beta is still mid-turn!
     await new Promise((r) => setTimeout(r, 90))
     const midTurnReports = (await kernel.getConversationDetail(coord.id, { limit: 20 })).entries.filter(
-      (e) => e.kind === 'helm.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
+      (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
     )
     assert.equal(midTurnReports.length, 0, 'done post must NOT trigger 50ms race report while worker is still settling trailing text')
 
@@ -1285,7 +1285,7 @@ test('swarm-int11: done non-race catch-up, failed-turn queued wakeup delivery, a
     // Coordinator must have received final report after beta settled with empty activeWorkingMembers!
     const coordDetail = await kernel.getConversationDetail(coord.id, { limit: 50 })
     const reports = coordDetail.entries
-      .filter((e) => e.kind === 'helm.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'))
+      .filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'))
       .map((e) => JSON.stringify(e.data ?? ''))
     assert.equal(reports.length, 1, 'coordinator must receive report once worker settles idle')
     assert.match(reports[0]!, /\[done\] @beta/)
@@ -1294,7 +1294,7 @@ test('swarm-int11: done non-race catch-up, failed-turn queued wakeup delivery, a
     // 2) Active worker conversation lock blocks deletion while active, releases after close or archive
     await assert.rejects(
       () => kernel.deleteConversation(beta.workerConversationId),
-      (err: unknown) => err instanceof HelmError && err.code === 'conversation_managed_by_plugin' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'conversation_managed_by_plugin' && err.status === 409,
     )
     await kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'archive_worker', { groupId, name: 'beta' }, { conversationId: coord.id })
     await kernel.deleteConversation(beta.workerConversationId)
@@ -1407,7 +1407,7 @@ test('swarm-int11: done non-race catch-up, failed-turn queued wakeup delivery, a
 })
 
 test('swarm-int12: external runtime & nodeId rejection, flat forkFrom, skill whitelist gating, bounded index lazy load & prompt metadata', { timeout: 60_000 }, async (t) => {
-  const env = await openSwarmEnv(useTempDir(t, 'helm-swarm-int8-'))
+  const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int8-'))
   try {
     const { kernel } = env.app
     // 1) External runtime profile rejected with 400 unsupported_runtime
@@ -1430,7 +1430,7 @@ test('swarm-int12: external runtime & nodeId rejection, flat forkFrom, skill whi
     })
     await assert.rejects(
       () => kernel.submitInput(noSkillCoord.id, '/skill:swarm try orchestrating'),
-      (err: unknown) => err instanceof HelmError && err.code === 'input_blocked',
+      (err: unknown) => err instanceof HelmxError && err.code === 'input_blocked',
       'Profile with skills=[] must block /skill:swarm trigger',
     )
 
@@ -1472,7 +1472,7 @@ test('swarm-int12: external runtime & nodeId rejection, flat forkFrom, skill whi
           { groupId, name: 'ext', prompt: 'Should fail', profileId: 'ext-agent' },
           { conversationId: coord.id },
         ),
-      (err: unknown) => err instanceof HelmError && err.code === 'unsupported_runtime' && err.status === 400,
+      (err: unknown) => err instanceof HelmxError && err.code === 'unsupported_runtime' && err.status === 400,
     )
     await assert.rejects(
       () =>
@@ -1482,7 +1482,7 @@ test('swarm-int12: external runtime & nodeId rejection, flat forkFrom, skill whi
           { groupId, name: 'badnode', prompt: 'Should fail', nodeId: 'nonexistent-node' },
           { conversationId: coord.id },
         ),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
     )
 
     env.faux.setResponses([
@@ -1609,7 +1609,7 @@ function isSettledStatus(status: string): boolean {
 }
 
 test('swarm-int7: real SIGKILL mid-turn resumes streaming worktree worker with zero duplicate input, keeps worktree active, and cleans up on close_group', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-swarm-sigkill-worker-')
+  const root = useTempDir(t, 'helmx-swarm-sigkill-worker-')
   const dataDir = join(root, 'data')
   const repoDir = join(root, 'repo')
   gitTemplate.cloneTo(repoDir)
@@ -1618,7 +1618,7 @@ test('swarm-int7: real SIGKILL mid-turn resumes streaming worktree worker with z
     import { writeSync } from 'node:fs'
     import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
     import { fauxProvider, fauxAssistantMessage } from ${JSON.stringify(PI_AI_FAUX_URL)}
-    import { createHelm } from ${JSON.stringify(HUB_APP_URL)}
+    import { createHelmx } from ${JSON.stringify(HUB_APP_URL)}
 
     const faux = fauxProvider({
       models: [{ id: 'faux-1' }],
@@ -1628,7 +1628,7 @@ test('swarm-int7: real SIGKILL mid-turn resumes streaming worktree worker with z
     faux.setResponses([
       fauxAssistantMessage('这是一段Swarm成员在隔离worktree中慢速流式执行任务确保被真实SIGKILL中断的输出内容'),
     ])
-    const app = await createHelm({
+    const app = await createHelmx({
       buildProvider: createPluginBuildProvider(),
       dataDir: ${JSON.stringify(dataDir)},
       cwd: ${JSON.stringify(repoDir)},
@@ -1696,7 +1696,7 @@ test('swarm-int7: real SIGKILL mid-turn resumes streaming worktree worker with z
     coordinator: [fauxAssistantMessage('Coordinator received recovery done report.')],
   })
 
-  const app = await createHelm({
+  const app = await createHelmx({
     buildProvider: createPluginBuildProvider(),
     dataDir,
     cwd: repoDir,
@@ -1734,7 +1734,7 @@ test('swarm-int7: real SIGKILL mid-turn resumes streaming worktree worker with z
     assert.equal(inspectedBeforeClose.exists, true)
 
     const workerDetail = await app.kernel.getConversationDetail(seeded.workerId, { limit: 50 })
-    const workerInputs = workerDetail.entries.filter((e) => e.kind === 'helm.input')
+    const workerInputs = workerDetail.entries.filter((e) => e.kind === 'helmx.input')
     assert.equal(workerInputs.length, 1, `expected 1 deduplicated wakeup input, got ${workerInputs.length}`)
 
     const read = (await app.kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'board_read', { groupId: seeded.groupId })) as {
@@ -1745,7 +1745,7 @@ test('swarm-int7: real SIGKILL mid-turn resumes streaming worktree worker with z
 
     const coordDetail = await app.kernel.getConversationDetail(seeded.coordId, { limit: 50 })
     const reports = coordDetail.entries.filter(
-      (e) => e.kind === 'helm.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
+      (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
     )
     assert.equal(reports.length, 1)
     assert.match(JSON.stringify(reports[0]!.data ?? ''), /\[done\] @coder/)
@@ -1771,7 +1771,7 @@ test('swarm-int7: real SIGKILL mid-turn resumes streaming worktree worker with z
 
 test('swarm-int8: SIGKILL before toolResult commit replays swarm_dispatch_worker and swarm_board_post idempotently with replay=safe', { timeout: 60_000 }, async (t) => {
   // ---- Phase A: SIGKILL inside onToolResult(swarm_dispatch_worker) ----
-  const rootA = useTempDir(t, 'helm-swarm-replay-dispatch-')
+  const rootA = useTempDir(t, 'helmx-swarm-replay-dispatch-')
   const dataDirA = join(rootA, 'data')
   const repoDirA = join(rootA, 'repo')
   gitTemplate.cloneTo(repoDirA)
@@ -1780,7 +1780,7 @@ test('swarm-int8: SIGKILL before toolResult commit replays swarm_dispatch_worker
     import { writeSync } from 'node:fs'
     import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
     import { fauxProvider, fauxAssistantMessage, fauxToolCall } from ${JSON.stringify(PI_AI_FAUX_URL)}
-    import { createHelm } from ${JSON.stringify(HUB_APP_URL)}
+    import { createHelmx } from ${JSON.stringify(HUB_APP_URL)}
 
     const faux = fauxProvider({ models: [{ id: 'faux-1' }], tokensPerSecond: 500 })
     let coordId = 0
@@ -1807,7 +1807,7 @@ test('swarm-int8: SIGKILL before toolResult commit replays swarm_dispatch_worker
       () => new Promise(() => {}),
     ])
 
-    const app = await createHelm({
+    const app = await createHelmx({
       buildProvider: createPluginBuildProvider(),
       dataDir: ${JSON.stringify(dataDirA)},
       cwd: ${JSON.stringify(repoDirA)},
@@ -1862,7 +1862,7 @@ test('swarm-int8: SIGKILL before toolResult commit replays swarm_dispatch_worker
     ],
   })
 
-  const appA = await createHelm({
+  const appA = await createHelmx({
     buildProvider: createPluginBuildProvider(),
     dataDir: dataDirA,
     cwd: repoDirA,
@@ -1912,13 +1912,13 @@ test('swarm-int8: SIGKILL before toolResult commit replays swarm_dispatch_worker
     )
     assert.equal(dispatchErrors.length, 0, 'replay of swarm_dispatch_worker must not raise 409 conflict')
     const workerDetailA = await appA.kernel.getConversationDetail(coderA.conversationId, { limit: 50 })
-    assert.equal(workerDetailA.entries.filter((e) => e.kind === 'helm.input').length, 1)
+    assert.equal(workerDetailA.entries.filter((e) => e.kind === 'helmx.input').length, 1)
   } finally {
     await appA.close()
   }
 
   // ---- Phase B: SIGKILL inside onToolResult(swarm_board_post) ----
-  const rootB = useTempDir(t, 'helm-swarm-replay-post-')
+  const rootB = useTempDir(t, 'helmx-swarm-replay-post-')
   const dataDirB = join(rootB, 'data')
   const repoDirB = join(rootB, 'repo')
   gitTemplate.cloneTo(repoDirB)
@@ -1927,7 +1927,7 @@ test('swarm-int8: SIGKILL before toolResult commit replays swarm_dispatch_worker
     import { writeSync } from 'node:fs'
     import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
     import { fauxProvider, fauxAssistantMessage, fauxToolCall } from ${JSON.stringify(PI_AI_FAUX_URL)}
-    import { createHelm } from ${JSON.stringify(HUB_APP_URL)}
+    import { createHelmx } from ${JSON.stringify(HUB_APP_URL)}
 
     const faux = fauxProvider({ models: [{ id: 'faux-1' }], tokensPerSecond: 500 })
     faux.setResponses([
@@ -1937,7 +1937,7 @@ test('swarm-int8: SIGKILL before toolResult commit replays swarm_dispatch_worker
       ),
       () => new Promise(() => {}),
     ])
-    const app = await createHelm({
+    const app = await createHelmx({
       buildProvider: createPluginBuildProvider(),
       dataDir: ${JSON.stringify(dataDirB)},
       cwd: ${JSON.stringify(repoDirB)},
@@ -1989,7 +1989,7 @@ test('swarm-int8: SIGKILL before toolResult commit replays swarm_dispatch_worker
     coder: [fauxAssistantMessage('Coder completed after board_post replay.')],
     coordinator: [fauxAssistantMessage('Coordinator acknowledged single done report.')],
   })
-  const appB = await createHelm({
+  const appB = await createHelmx({
     buildProvider: createPluginBuildProvider(),
     dataDir: dataDirB,
     cwd: repoDirB,
@@ -2013,7 +2013,7 @@ test('swarm-int8: SIGKILL before toolResult commit replays swarm_dispatch_worker
     assert.equal(donePosts.length, 1, `replaying swarm_board_post must keep exactly 1 done post, got ${donePosts.length}`)
     const coordDetailB = await appB.kernel.getConversationDetail(infoB.coordId, { limit: 50 })
     const reportsB = coordDetailB.entries.filter(
-      (e) => e.kind === 'helm.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
+      (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report'),
     )
     assert.equal(reportsB.length, 1)
   } finally {
@@ -2026,7 +2026,7 @@ test('swarm-int8: SIGKILL before toolResult commit replays swarm_dispatch_worker
 // ---------------------------------------------------------------------------
 
 test('swarm-int9: boot reconciliation rolls back uncommitted WAL tail, converges orphan/stale tags, and cleans orphan swarm worktree holds without touching workflow holds', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-swarm-orphans-')
+  const root = useTempDir(t, 'helmx-swarm-orphans-')
   const env1 = await openSwarmEnv(root)
   let groupId = ''
   let group2Id = ''
@@ -2159,7 +2159,7 @@ test('swarm-int9: boot reconciliation rolls back uncommitted WAL tail, converges
   )
 
   const faux2 = makeFauxProvider({ models: [{ id: 'faux-1' }] })
-  const app2 = await createHelm({
+  const app2 = await createHelmx({
     buildProvider: createPluginBuildProvider(),
     dataDir: env1.dataDir,
     cwd: env1.repoDir,
@@ -2208,7 +2208,7 @@ test('swarm-int9: boot reconciliation rolls back uncommitted WAL tail, converges
 // ---------------------------------------------------------------------------
 
 test('swarm-int10: runtime.started reconciliation wakes uncommitted inflightWakeup, nudges silent-exit member, and posts blocker for errored member', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-swarm-reconcile-')
+  const root = useTempDir(t, 'helmx-swarm-reconcile-')
   const env1 = await openSwarmEnv(root)
   let groupId = ''
   let group2Id = ''
@@ -2404,7 +2404,7 @@ test('swarm-int10: runtime.started reconciliation wakes uncommitted inflightWake
     ],
   })
 
-  const app2 = await createHelm({
+  const app2 = await createHelmx({
     buildProvider: createPluginBuildProvider(),
     dataDir: env1.dataDir,
     cwd: env1.repoDir,
@@ -2450,7 +2450,7 @@ test('swarm-int10: runtime.started reconciliation wakes uncommitted inflightWake
 
     const detailB = await app2.kernel.getConversationDetail(workerBId, { limit: 50 })
     const nudgesB = detailB.entries.filter(
-      (e) => e.kind === 'helm.input' && JSON.stringify(e.data ?? '').includes('swarm_silent_exit_nudge'),
+      (e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_silent_exit_nudge'),
     )
     assert.equal(nudgesB.length, 1, `expected 1 silent-exit nudge for workerB, got ${nudgesB.length}`)
 
@@ -2463,7 +2463,7 @@ test('swarm-int10: runtime.started reconciliation wakes uncommitted inflightWake
 
     const coordDetail = await app2.kernel.getConversationDetail(coordId, { limit: 50 })
     const coordReportText = JSON.stringify(
-      coordDetail.entries.filter((e) => e.kind === 'helm.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report')),
+      coordDetail.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data ?? '').includes('swarm_board_report')),
     )
     assert.match(coordReportText, /@workerA/)
     assert.match(coordReportText, /@workerB/)

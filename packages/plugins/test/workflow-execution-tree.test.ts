@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationSummary, PluginClientContext as PluginClientContextType } from '@helm/protocol'
+import type { ConversationSummary, PluginClientContext as PluginClientContextType } from '@helmx/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../src/contracts.js'
 import {
   React,
@@ -154,7 +154,7 @@ test('buildExecutionTree 回归：人类 fork 会话与 SuperAgent 驻留 Worker
     title: 'SuperAgent Worker',
     doing: 'Worker 正在执行',
   })
-  const realSubagent = summary(11, 'working', 1, { ownedBy: 'helm', title: '真子代理', doing: '真实子代理任务' })
+  const realSubagent = summary(11, 'working', 1, { ownedBy: 'helmx', title: '真子代理', doing: '真实子代理任务' })
 
   const conversations = [summary(1, 'idle', undefined, { ownedBy: 'human' }), humanFork, superagentWorker, realSubagent]
 
@@ -956,12 +956,12 @@ test('主徽章同源有效状态：父 idle + 后代 blocked/working 不显示�
     const trigger = host.querySelector('.subagent-live-trigger')!
     assert.ok(trigger !== null)
     const badgeTexts = Array.from(trigger.querySelectorAll('.badge')).map((b) => b.textContent ?? '')
-    const lights = Array.from(trigger.querySelectorAll('.helm-status-light'))
+    const lights = Array.from(trigger.querySelectorAll('.helmx-status-light'))
     const lightLabels = lights.map((l) => l.getAttribute('aria-label') ?? '')
     assert.ok(lightLabels.some((label) => label.includes('Awaiting approval')), `主状态灯可访问名称应为同源有效状态（Awaiting approval），实际：${lightLabels.join('|')}`)
     assert.ok(lightLabels.some((label) => label.includes('Self: Done')), '自身终态经灯的可访问名称交代清楚')
     assert.ok(!badgeTexts.includes('Self: Done'), '自身状态文字不再以常驻徽章重复摆在头部')
-    assert.ok(trigger.querySelector('.helm-status-light-blocked .status-dot-blocked') !== null, 'blocked 为实心 warn 灯')
+    assert.ok(trigger.querySelector('.helmx-status-light-blocked .status-dot-blocked') !== null, 'blocked 为实心 warn 灯')
     const warnBadge = trigger.querySelector('.badge-warn') as HTMLElement
     assert.match(warnBadge.getAttribute('title') ?? '', /确认删除文件 \(#5\) awaiting approval/, '后代审批徽章 title 应含审批摘要')
   } finally {
@@ -986,7 +986,7 @@ test('自身 AskDoc 有单即等待审批（pendingAskCount>0，status 仍 worki
   try {
     const trigger = host.querySelector('.subagent-live-trigger')!
     const badgeTexts = Array.from(trigger.querySelectorAll('.badge')).map((b) => b.textContent ?? '')
-    const lightTexts = Array.from(trigger.querySelectorAll('.helm-status-light')).map((l) => l.textContent ?? '')
+    const lightTexts = Array.from(trigger.querySelectorAll('.helmx-status-light')).map((l) => l.textContent ?? '')
     assert.ok(lightTexts.includes('Awaiting approval'), `AskDoc 有单即等待审批，实际：${[...badgeTexts, ...lightTexts].join('|')}`)
     assert.ok(!lightTexts.includes('Running'), '有单不得仍显示执行中')
   } finally {
@@ -1039,7 +1039,7 @@ test('紧凑子项：深层 workflow / external run 行原位展开直系子项�
       assert.ok(row.querySelector('.execution-child-id') === null, '无会话 run 行不得伪造 #id 前缀')
       assert.match(row.getAttribute('aria-label') ?? '', /Expand direct children/, '应提供展开直系子项入口')
       assert.match(row.textContent ?? '', /Running/, 'run 真实状态保留')
-      assert.ok(row.querySelector('.helm-status-light .status-dot-working') !== null, '主状态为统一状态灯')
+      assert.ok(row.querySelector('.helmx-status-light .status-dot-working') !== null, '主状态为统一状态灯')
     }
     assert.equal(host.querySelectorAll('.execution-child-row').length, 2, '初始仅两个 run 行')
     act(() => {

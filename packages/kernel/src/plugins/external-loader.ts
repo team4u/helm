@@ -1,7 +1,7 @@
 /**
  * Automatic discovery and dynamic loading of external plugin directories.
  *
- * Module layout (behavior unchanged): manifest parsing (plugin.json / package.json `helm` field)
+ * Module layout (behavior unchanged): manifest parsing (plugin.json / package.json `helmx` field)
  * lives in plugin-manifest.ts; startup full scans and incremental rescans
  * (loadExternalPlugins / rescanExternalPlugins) live in scan-visitor.ts;
  * this module owns entrypoint resolution, module import & definition boundary validation,
@@ -18,7 +18,7 @@
  * - When `plugin.json` exists: must parse as a JSON object; resolves the relative entrypoint from `main`
  *   (falling back to convention entry probes), strictly bounded inside the plugin directory (guards against
  *   path traversal, and `realpath` ensures symlinks cannot escape the root). Corrupt manifests, non-objects,
- *   invalid `main`, out-of-bounds entrypoints, or missing entrypoints throw explicit `HelmError`s rather than
+ *   invalid `main`, out-of-bounds entrypoints, or missing entrypoints throw explicit `HelmxError`s rather than
  *   being silently ignored (honesty invariant). Optional fields on `plugin.json`: `clientRoot` (frontend
  *   source dir), `clientDependencies` (frontend controlled npm specifier array resolved relative to the
  *   plugin dir), and `dependencies` (cross-plugin ID array); invalid values are explicitly rejected.
@@ -27,7 +27,7 @@
  *   directory and skips it silently.
  * - `.ts` / `.tsx` / `.mts` / `.cts` entrypoints are transpiled in-process by `backend-ts-loader` (with
  *   `import.meta.url` pointing to the real plugin source file; relative `.js -> .ts` imports, node built-ins,
- *   local `node_modules`, and host `@helm/*` singletons are all available).
+ *   local `node_modules`, and host `@helmx/*` singletons are all available).
  * - IO errors: only ENOENT / ENOTDIR count as missing files; EACCES and other IO errors throw explicitly
  *   rather than being mistaken for a pure data directory.
  *
@@ -48,7 +48,7 @@ import { lstatSync, readdirSync, readFileSync, realpathSync, statSync } from 'no
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
-  HelmError,
+  HelmxError,
   PREBUILT_CLIENT_DIR_NAME,
   parseNonEmptyLocalizedText,
   type LocalizedText,
@@ -56,15 +56,15 @@ import {
   type PluginDefinition,
   type PluginDiagnosticError,
   type PluginSummary,
-} from '@helm/protocol';
+} from '@helmx/protocol';
 import { registerPluginTsRoot, nextPluginGeneration, type BackendTsTransformFn } from './backend-ts-loader.js';
 import { isBuiltinPluginDataDirName } from './plugin-dir-name.js';
 import {
   MANIFEST_PLUGIN_ID_PATTERN,
-  readHelmClientDependencies,
-  readHelmClientDist,
-  readHelmClientRoot,
-  readHelmField,
+  readHelmxClientDependencies,
+  readHelmxClientDist,
+  readHelmxClientRoot,
+  readHelmxField,
   readManifest,
   readManifestOptional,
 } from './plugin-manifest.js';
@@ -138,7 +138,7 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
     const code = (err as NodeJS.ErrnoException).code;
     if (code !== 'ENOENT' && code !== 'ENOTDIR') {
       // Re-throw real I/O errors such as EACCES explicitly instead of misclassifying as a plain data directory
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_scan_failed',
         `external plugin directory cannot read: ${manifestPath}(${err instanceof Error ? err.message : String(err)})`,
         500,
@@ -150,9 +150,9 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
   if (!manifestExists) {
     const probed = probeConventionEntry(dirPath);
     if (probed !== undefined) return probed;
-    // Fallback to standard npm entrypoint: `package.json#helm.main` / `main` (`.js` rewrites to matching `.ts` source).
-    const helm = readHelmField(dirPath);
-    const mainSpec = helm?.main;
+    // Fallback to standard npm entrypoint: `package.json#helmx.main` / `main` (`.js` rewrites to matching `.ts` source).
+    const helmx = readHelmxField(dirPath);
+    const mainSpec = helmx?.main;
     if (mainSpec !== undefined) {
       // npm packages often point `.js` at transpiled artifacts; prefer matching `.ts`/`.tsx` sources when present.
       const tsCandidate = mainSpec.replace(/\.js$/, '.ts').replace(/\.mjs$/, '.mts').replace(/\.cjs$/, '.cts');
@@ -174,7 +174,7 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
   if (main === undefined) {
     const probed = probeConventionEntry(dirPath);
     if (probed !== undefined) return probed;
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_entry_missing',
       `External plugin ${dirPath} plugin.json does not declare main and no conventional entry (${CONVENTION_ENTRIES.join(' / ')}) was found`,
       500,
@@ -182,7 +182,7 @@ export async function resolvePluginEntry(dirPath: string): Promise<string | unde
     );
   }
   if (typeof main !== 'string' || main.length === 0) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_manifest_invalid',
       `External plugin ${dirPath} plugin.json main must be a non-empty string`,
       500,
@@ -197,7 +197,7 @@ function resolveManifestEntryFile(dirPath: string, rawMain: string, fieldLabel: 
   const dirReal = realpathSync(dirAbs);
   const entry = resolve(dirAbs, rawMain);
   if (isLexicallyOutsidePluginDir(dirAbs, dirReal, rawMain, entry)) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_manifest_invalid',
       `External plugin ${dirPath} ${fieldLabel} escapes plugin directory: ${rawMain}`,
       400,
@@ -217,12 +217,12 @@ function assertEntryFile(dirPath: string, main: string, entry: string, dirReal =
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'ENOENT' || code === 'ENOTDIR') {
-      throw new HelmError('plugin_entry_missing', `External plugin ${dirPath} entry file is missing: ${main}`, 500, {
+      throw new HelmxError('plugin_entry_missing', `External plugin ${dirPath} entry file is missing: ${main}`, 500, {
         dirPath,
         main,
       });
     }
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_scan_failed',
       `External plugin entry cannot be read: ${entry} (${err instanceof Error ? err.message : String(err)})`,
       500,
@@ -230,13 +230,13 @@ function assertEntryFile(dirPath: string, main: string, entry: string, dirReal =
     );
   }
   if (!isFile) {
-    throw new HelmError('plugin_entry_missing', `External plugin ${dirPath} entry is not a regular file: ${main}`, 500, {
+    throw new HelmxError('plugin_entry_missing', `External plugin ${dirPath} entry is not a regular file: ${main}`, 500, {
       dirPath,
       main,
     });
   }
   if (isOutsideBase(dirReal, real)) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_manifest_invalid',
       `External plugin ${dirPath} plugin.json main (resolved symlink) escapes plugin directory: ${main}`,
       400,
@@ -255,7 +255,7 @@ function probeConventionEntry(dirPath: string): string | undefined {
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code !== 'ENOENT' && code !== 'ENOTDIR') {
-        throw new HelmError(
+        throw new HelmxError(
           'plugin_scan_failed',
           `external plugin directory probe failed: ${join(dirPath, name)}(${err instanceof Error ? err.message : String(err)})`,
           500,
@@ -276,7 +276,7 @@ function normalizeCodeDependencies(
 ): string[] {
   if (values === undefined) return [];
   if (!Array.isArray(values) || values.some((value) => typeof value !== 'string' || !MANIFEST_PLUGIN_ID_PATTERN.test(value))) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_plugin_definition',
       `External plugin ${dirPath} definition ${pluginId}.dependencies must be an array of plugin IDs (letters, digits, :, _, - only)`,
       400,
@@ -300,13 +300,13 @@ export async function importPluginDefinition(
   const entryUrl =
     options.generation === undefined
       ? pathToFileURL(entryPath).href
-      : `${pathToFileURL(entryPath).href}?helmgen=${options.generation}`;
+      : `${pathToFileURL(entryPath).href}?helmxgen=${options.generation}`;
   let mod: { default?: unknown; plugin?: unknown };
   try {
     mod = (await import(entryUrl)) as { default?: unknown; plugin?: unknown };
   } catch (err) {
-    if (err instanceof HelmError) throw err; // Transpilation error already carries file/line diagnostics.
-    throw new HelmError(
+    if (err instanceof HelmxError) throw err; // Transpilation error already carries file/line diagnostics.
+    throw new HelmxError(
       'plugin_load_failed',
       `Failed to load external plugin module: ${entryPath}${options.generation !== undefined ? ` (generation ${options.generation})` : ''} (${err instanceof Error ? err.message : String(err)})`,
       500,
@@ -322,8 +322,8 @@ export async function importPluginDefinition(
  * optional localized `name`, and `definePlugin` function.
  */
 export function assertExternalDefinition(candidate: unknown, dirPath: string): PluginDefinition {
-  const fail = (detail: string): HelmError =>
-    new HelmError('invalid_plugin_definition', `Invalid external plugin export in ${dirPath}: ${detail}`, 400, { dirPath });
+  const fail = (detail: string): HelmxError =>
+    new HelmxError('invalid_plugin_definition', `Invalid external plugin export in ${dirPath}: ${detail}`, 400, { dirPath });
   if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) {
     throw fail('did not export a default or plugin definition object');
   }
@@ -336,7 +336,7 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
     throw fail('icon must be a non-empty string when provided');
   }
   if (def.id.startsWith('builtin:')) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_plugin_definition',
       `External plugin ${dirPath} id cannot start with 'builtin:': ${def.id}`,
       400,
@@ -344,7 +344,7 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
     );
   }
   if (def.id.includes(':')) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_plugin_definition',
       `External plugin ${dirPath} id cannot contain ':' (smoke number; colons are reserved for builtin: namespaces): ${def.id}`,
       400,
@@ -361,9 +361,9 @@ export function assertExternalDefinition(candidate: unknown, dirPath: string): P
  * External plugin definition normalization:
  * - Strip `locked` (external plugins cannot mark themselves resident/non-unloadable);
  * - Cross-plugin dependencies: merge & deduplicate code and manifest (`plugin.json` `dependencies` /
- *   `package.json#helm.dependencies`); invalid manifest values already fail when read;
+ *   `package.json#helmx.dependencies`); invalid manifest values already fail when read;
  * - Frontend controlled npm dependencies: normalize manifest specifiers (`plugin.json` `clientDependencies` /
- *   `package.json#helm.clientDependencies`) into `npmDependencies` anchored at the plugin directory itself
+ *   `package.json#helmx.clientDependencies`) into `npmDependencies` anchored at the plugin directory itself
  *   while stripping code-declared `npmDependencies` so external plugins cannot open arbitrary bare dependencies;
  * - Default missing `clientRoot` to the plugin directory itself; require a string when provided; resolve
  *   relative paths inside the plugin directory (escapes reject explicitly); preserve absolute paths.
@@ -420,7 +420,7 @@ function assertContainedInPluginDir(
 ): void {
   const dirAbs = resolve(dirPath);
   if (isLexicallyOutsidePluginDir(dirAbs, dirReal, rawPath, resolvedPath)) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_plugin_definition',
       `External plugin ${dirPath} ${fieldLabel} escapes plugin directory: ${rawPath}`,
       400,
@@ -430,7 +430,7 @@ function assertContainedInPluginDir(
   try {
     const resolved = resolveNearestRealpathSync(resolvedPath);
     if (resolved.kind === 'dangling-symlink' || isOutsideBase(dirReal, resolved.real)) {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_plugin_definition',
         `External plugin ${dirPath} ${fieldLabel} symlink escapes plugin directory: ${rawPath}`,
         400,
@@ -438,8 +438,8 @@ function assertContainedInPluginDir(
       );
     }
   } catch (err) {
-    if (err instanceof HelmError) throw err;
-    throw new HelmError(
+    if (err instanceof HelmxError) throw err;
+    throw new HelmxError(
       'invalid_plugin_definition',
       `External plugin ${dirPath} ${fieldLabel} cannot be accessed: ${err instanceof Error ? err.message : String(err)}`,
       400,
@@ -456,7 +456,7 @@ function resolveExternalPrebuiltClientDir(
 ): string | undefined {
   if (codePrebuiltDir !== undefined && codePrebuiltDir !== '') {
     if (typeof codePrebuiltDir !== 'string') {
-      throw new HelmError(
+      throw new HelmxError(
         'invalid_plugin_definition',
         `External plugin ${dirPath} prebuiltClientDir must be a non-empty string`,
         400,
@@ -468,10 +468,10 @@ function resolveExternalPrebuiltClientDir(
     const { rootReal } = readPrebuiltClientManifest(resolvedPrebuilt, pluginId);
     return rootReal;
   }
-  const helmClientDist = readHelmClientDist(dirPath);
-  if (helmClientDist !== undefined) {
-    const resolvedDist = resolve(dirPath, helmClientDist);
-    assertContainedInPluginDir(dirPath, dirReal, helmClientDist, resolvedDist, 'clientDist');
+  const helmxClientDist = readHelmxClientDist(dirPath);
+  if (helmxClientDist !== undefined) {
+    const resolvedDist = resolve(dirPath, helmxClientDist);
+    assertContainedInPluginDir(dirPath, dirReal, helmxClientDist, resolvedDist, 'clientDist');
     const { rootReal } = readPrebuiltClientManifest(resolvedDist, pluginId);
     return rootReal;
   }
@@ -480,7 +480,7 @@ function resolveExternalPrebuiltClientDir(
     lstatSync(defaultDist);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
-    throw new HelmError(
+    throw new HelmxError(
       'prebuilt_client_invalid',
       `External plugin ${dirPath} ${PREBUILT_CLIENT_DIR_NAME} cannot be accessed: ${err instanceof Error ? err.message : String(err)}`,
       400,
@@ -508,17 +508,17 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
   const normalized = { ...definition };
   delete normalized.locked;
   // Frontend controlled npm dependencies: external plugins honor manifest declarations anchored to dirPath only.
-  const clientDeps = readHelmClientDependencies(dirPath);
+  const clientDeps = readHelmxClientDependencies(dirPath);
   delete normalized.npmDependencies;
   if (clientDeps.length > 0) {
     normalized.npmDependencies = Object.fromEntries(clientDeps.map((spec) => [spec, dirPath]));
   }
-  // Cross-plugin dependencies: merge & deduplicate code and manifest (`plugin.json` and `package.json#helm`);
+  // Cross-plugin dependencies: merge & deduplicate code and manifest (`plugin.json` and `package.json#helmx`);
   // self-dependencies are rejected at the host registration boundary.
   const codeDeps = normalizeCodeDependencies(dirPath, definition.id, definition.dependencies);
   const manifestDeps = [
     ...(readManifestOptional(dirPath)?.dependencies ?? []),
-    ...(readHelmField(dirPath)?.dependencies ?? []),
+    ...(readHelmxField(dirPath)?.dependencies ?? []),
   ];
   const seenDeps = new Set<string>();
   const mergedDeps: string[] = [];
@@ -546,12 +546,12 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
   }
   const clientRoot = normalized.clientRoot;
   if (clientRoot === undefined || clientRoot === '') {
-    // When not explicitly declared, read `plugin.json` / `package.json#helm.clientRoot`;
+    // When not explicitly declared, read `plugin.json` / `package.json#helmx.clientRoot`;
     // only default to the plugin directory itself if no prebuilt `dist-client` bundle exists.
-    const helmClientRoot = readHelmClientRoot(dirPath);
-    if (helmClientRoot !== undefined) {
-      const resolvedRoot = resolve(dirPath, helmClientRoot);
-      assertContainedInPluginDir(dirPath, dirReal, helmClientRoot, resolvedRoot, 'clientRoot');
+    const helmxClientRoot = readHelmxClientRoot(dirPath);
+    if (helmxClientRoot !== undefined) {
+      const resolvedRoot = resolve(dirPath, helmxClientRoot);
+      assertContainedInPluginDir(dirPath, dirReal, helmxClientRoot, resolvedRoot, 'clientRoot');
       normalized.clientRoot = resolvedRoot;
       return normalized;
     }
@@ -563,7 +563,7 @@ export function normalizeDefinition(definition: PluginDefinition, dirPath: strin
     return normalized;
   }
   if (typeof clientRoot !== 'string' || clientRoot.length === 0) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_plugin_definition',
       `External plugin ${dirPath} clientRoot must be a non-empty string`,
       400,
@@ -641,7 +641,7 @@ async function findPluginSource(
     }
   }
   if (hits.length > 1) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_reload_ambiguous',
       `multiple plugin directories declare id ${pluginId}: ${hits.map((h) => h.dir).join(', ')}; cannot determine reload source`,
       409,
@@ -668,7 +668,7 @@ export async function reloadExternalPlugin(
   options: { doctor?: (dir: string) => Promise<void> } = {},
 ): Promise<{ pluginId: string; wasEnabled: boolean; generation: number }> {
   if (pluginId.startsWith('builtin:')) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_locked',
       `built-in plugin ${pluginId} cannot be hot-reloaded (restart Hub to apply built-in plugin changes)`,
       403,
@@ -677,12 +677,12 @@ export async function reloadExternalPlugin(
   }
   const current = (await plugins.list()).find((s) => s.id === pluginId);
   if (!current) {
-    throw new HelmError('unknown_plugin', `unregistered plugin: ${pluginId}`, 404, { pluginId });
+    throw new HelmxError('unknown_plugin', `unregistered plugin: ${pluginId}`, 404, { pluginId });
   }
   const wasEnabled = current.enabled;
   const source = await findPluginSource(dataDir, pluginId, { transform: tsTransformOf(plugins) });
   if (source === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_source_missing',
       `no external plugin source directory with id ${pluginId} found under ${join(dataDir, 'plugins')}`,
       404,
@@ -698,7 +698,7 @@ export async function reloadExternalPlugin(
   // Obtain a fresh cache-busting generation for the actual reload import.
   const entryPath = await resolvePluginEntry(sourceDir);
   if (entryPath === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_reload_failed',
       `plugin entrypoint disappeared during reload (source changed between preflight and swap): ${sourceDir}`,
       500,
@@ -714,7 +714,7 @@ export async function reloadExternalPlugin(
       sourceDir,
     );
     if (definition.id !== pluginId) {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_reload_failed',
         `plugin id changed during reload (preflight ${pluginId} -> actual ${definition.id}); aborting swap`,
         409,
@@ -735,7 +735,7 @@ export async function reloadExternalPlugin(
       } catch (rollbackErr) {
         rollbackError = rollbackErr;
       }
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_reload_failed',
         `re-registration failed during reload ${rollbackError === undefined ? '(rolled back to pre-reload instance; previous definition remains active)' : '(rollback also failed; plugin is currently unregistered — fix manually and retry)'}: ${err instanceof Error ? err.message : String(err)}`,
         500,
@@ -753,7 +753,7 @@ export async function reloadExternalPlugin(
     }
     const after = (await plugins.list()).find((s) => s.id === pluginId);
     if (!after) {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_reload_failed',
         `plugin ${pluginId} missing from host list after reload (inconsistent internal state)`,
         500,

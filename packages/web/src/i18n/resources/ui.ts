@@ -3,7 +3,7 @@
  * plus lib-level display fallbacks. Owner: the lib-ui partition.
  *
  * Note: SDK component defaults (CopyButton / Select / DataTable / ViewBoundary)
- * are localized inside `@helm/plugin-client` via the host locale port — never
+ * are localized inside `@helmx/plugin-client` via the host locale port — never
  * duplicate those default strings here; only web-owned overrides belong.
  */
 import type { MessageTable } from '../messages.js'

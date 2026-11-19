@@ -9,7 +9,7 @@
  */
 
 /** 探针归属权：'human' 会话/终端窗格严禁发送按键或中止指令，仅允许只读诊断与通知。 */
-export type WatchdogOwnership = 'helm' | 'bot' | 'human'
+export type WatchdogOwnership = 'helmx' | 'bot' | 'human'
 
 /** 探针目标类别：conversation = 原生会话；external = 外部运行时目标（如 Herdr 窗格）。 */
 type WatchdogTargetKind = 'conversation' | 'external'
@@ -59,7 +59,7 @@ export const DIAGNOSTICS_COLLECT_EVENT = 'diagnostics.collect'
 // 边界校验：事件入口 / 追加入口 / 终态复验三层同源（诚实性纪律）
 // ---------------------------------------------------------------------------
 
-import { HelmError, isJsonObject } from '@helm/protocol'
+import { HelmxError, isJsonObject } from '@helmx/protocol'
 
 /** 校验单个探针形状；返回错误描述（null = 合法）。与原 hooks.ts watchdog_tick 校验同构。 */
 function probeViolation(p: unknown): string | null {
@@ -71,7 +71,7 @@ function probeViolation(p: unknown): string | null {
     (p['conversationId'] !== undefined &&
       !(typeof p['conversationId'] === 'number' && Number.isInteger(p['conversationId']) && (p['conversationId'] as number) > 0)) ||
     (p['nodeId'] !== undefined && (typeof p['nodeId'] !== 'string' || p['nodeId'].length === 0)) ||
-    !['helm', 'bot', 'human'].includes(String(p['ownedBy'])) ||
+    !['helmx', 'bot', 'human'].includes(String(p['ownedBy'])) ||
     typeof p['status'] !== 'string' ||
     (p['stateChangeSeq'] !== undefined &&
       !(typeof p['stateChangeSeq'] === 'number' && Number.isInteger(p['stateChangeSeq']) && (p['stateChangeSeq'] as number) >= 0)) ||
@@ -114,7 +114,7 @@ export function collectionViolation(value: unknown): string | null {
 export function parseCollection(payload: unknown): DiagnosticsCollection {
   const violation = collectionViolation(payload)
   if (violation !== null) {
-    throw new HelmError('invalid_diagnostics_collection', `diagnostics.collect 载荷校验失败：${violation}`, 400, {
+    throw new HelmxError('invalid_diagnostics_collection', `diagnostics.collect 载荷校验失败：${violation}`, 400, {
       violation,
     })
   }
@@ -128,14 +128,14 @@ export function parseCollection(payload: unknown): DiagnosticsCollection {
 export function appendProbes(collection: DiagnosticsCollection, probes: unknown[]): void {
   const violation = collectionViolation(collection)
   if (violation !== null) {
-    throw new HelmError('invalid_diagnostics_collection', `diagnostics.collect 追加前校验失败：${violation}`, 400, {
+    throw new HelmxError('invalid_diagnostics_collection', `diagnostics.collect 追加前校验失败：${violation}`, 400, {
       violation,
     })
   }
   for (const probe of probes) {
     const probeIssue = probeViolation(probe)
     if (probeIssue !== null) {
-      throw new HelmError('invalid_diagnostics_probe', `diagnostics.collect 探针校验失败：${probeIssue}`, 400, {
+      throw new HelmxError('invalid_diagnostics_probe', `diagnostics.collect 探针校验失败：${probeIssue}`, 400, {
         violation: probeIssue,
         probe,
       })
@@ -148,7 +148,7 @@ export function appendProbes(collection: DiagnosticsCollection, probes: unknown[
 export function assertValidCollection(collection: DiagnosticsCollection): void {
   const violation = collectionViolation(collection)
   if (violation !== null) {
-    throw new HelmError('invalid_diagnostics_collection', `diagnostics.collect 终态校验失败：${violation}`, 500, {
+    throw new HelmxError('invalid_diagnostics_collection', `diagnostics.collect 终态校验失败：${violation}`, 500, {
       violation,
     })
   }

@@ -4,7 +4,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
 import { hangingEventStream, type SseFrameSender } from './helpers/sse-stream.js'
 import { typeIntoControl } from './helpers/dom-harness.js'
 import type { ResolvedTarget } from '../src/lib/types.js'
@@ -25,10 +25,10 @@ Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { ConversationPane } = await import('../src/conversation/ConversationPane.js')
 const { ConversationWindowStage } = await import('../src/conversation/ConversationWindowStage.js')
-const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
-const { useHelmStore } = await import('../src/lib/store-context.js')
+const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
+const { useHelmxStore } = await import('../src/lib/store-context.js')
 const { composerDirty } = await import('../src/conversation/composer-dirty.js')
-const { App: HelmApp } = await import('../src/App.js')
+const { App: HelmxApp } = await import('../src/App.js')
 const e = React.createElement
 const originalFetch = globalThis.fetch
 
@@ -100,14 +100,14 @@ function installFetch(): void {
 }
 
 function Harness({ limit }: { limit?: number }) {
-  const store = useHelmStore()
+  const store = useHelmxStore()
   navigateTo = (target, opts) => store.openTarget(target, opts)
   const activeConversationId = store.primaryTarget.kind === 'conversation' ? store.primaryTarget.conversationId : null
   return e(React.Fragment, null,
-    e('div', { className: 'helm-primary-pane' },
+    e('div', { className: 'helmx-primary-pane' },
       e(ConversationWindowStage, { activeConversationId, ...(limit !== undefined ? { limit } : {}) })),
     store.splitTarget !== null && store.splitTarget.kind === 'conversation'
-      ? e('div', { className: 'helm-split-pane' },
+      ? e('div', { className: 'helmx-split-pane' },
           e(ConversationPane, {
             key: `split-conv-${store.splitTarget.conversationId}`,
             conversationId: store.splitTarget.conversationId,
@@ -124,7 +124,7 @@ async function mount(hash: string, options: { strictMode?: boolean; limit?: numb
   document.body.appendChild(host)
   installFetch()
   const tree = e(Harness, options.limit !== undefined ? { limit: options.limit } : {})
-  const wrapped = e(HelmStoreProvider, null, options.strictMode === true ? e(React.StrictMode, null, tree) : tree)
+  const wrapped = e(HelmxStoreProvider, null, options.strictMode === true ? e(React.StrictMode, null, tree) : tree)
   await act(async () => {
     root = createRoot(host!)
     root.render(wrapped)
@@ -137,7 +137,7 @@ async function settle(): Promise<void> {
 }
 
 function findPane(conversationId: number): HTMLElement | null {
-  return [...document.querySelectorAll<HTMLElement>('.helm-pane')].find(
+  return [...document.querySelectorAll<HTMLElement>('.helmx-pane')].find(
     (pane) => pane.querySelector('.pane-title-btn')?.textContent?.includes(`keepalive-c${conversationId}`) === true,
   ) ?? null
 }
@@ -194,7 +194,7 @@ async function mountRealApp(hash: string): Promise<void> {
   installFetch()
   await act(async () => {
     root = createRoot(host!)
-    root.render(e(HelmApp))
+    root.render(e(HelmxApp))
   })
   await settle()
 }
@@ -330,7 +330,7 @@ test('survives switching to a non-conversation target and back', { timeout: 60_0
   const stage = stageElement()
   assert.ok(stage.classList.contains('is-idle'), '非会话主屏目标下舞台应折叠')
   assert.ok(windowCount() === 1, '窗口缓存应保留（不卸载）')
-  assert.ok(stage.querySelector('.helm-pane') !== null, '隐藏窗口仍在舞台内')
+  assert.ok(stage.querySelector('.helmx-pane') !== null, '隐藏窗口仍在舞台内')
   assert.ok(findPane(1) === paneA, '非会话目标往返不应卸载 A 窗口')
 
   await openConversation(1)
@@ -351,9 +351,9 @@ test('split pane instances stay separate from the primary window pool', { timeou
   await act(async () => { navigateTo!({ kind: 'conversation', conversationId: 2 }, { split: true }) })
   await settle()
 
-  const splitHost = document.querySelector<HTMLElement>('.helm-split-pane')
+  const splitHost = document.querySelector<HTMLElement>('.helmx-split-pane')
   assert.ok(splitHost, '分屏容器应渲染')
-  const paneSplit = splitHost!.querySelector<HTMLElement>('.helm-pane')
+  const paneSplit = splitHost!.querySelector<HTMLElement>('.helmx-pane')
   assert.ok(paneSplit, '分屏会话窗格应渲染')
   assert.ok(paneSplit!.closest('.conversation-window-stage') === null, '分屏窗格不属于 primary 窗口池')
   assert.ok(windowCount() === 1, '分屏会话不进入 primary 窗口池')
@@ -362,7 +362,7 @@ test('split pane instances stay separate from the primary window pool', { timeou
   assert.ok(paneSplit!.querySelector('.timeline-scroll') !== scrollerA, '分屏与 primary 不共享滚动容器实例')
 
   await openConversation(3)
-  assert.ok(splitHost!.querySelector('.helm-pane') === paneSplit, 'primary 切换不影响分屏窗格实例')
+  assert.ok(splitHost!.querySelector('.helmx-pane') === paneSplit, 'primary 切换不影响分屏窗格实例')
   assert.ok(scrollerA.scrollTop === 280, 'primary 切换后 A 缓存窗口阅读位置不变')
   assert.ok(findPane(3) !== null, 'primary 已切换到 C 窗口')
 })
@@ -399,9 +399,9 @@ test('logout live-state reset clears the whole window pool and dirty reports', {
   assert.ok(windowCount() === 2)
   assert.ok(composerDirty() === true)
 
-  // 登出走 store 的单一重置管道（helm:unauthorized / 用户登出共用），live 被清空为空列表。
+  // 登出走 store 的单一重置管道（helmx:unauthorized / 用户登出共用），live 被清空为空列表。
   await act(async () => {
-    window.dispatchEvent(new Event('helm:unauthorized'))
+    window.dispatchEvent(new Event('helmx:unauthorized'))
   })
   await settle()
   assert.ok(windowCount() === 0, '登出清空 live 后窗口池应整体卸载')
@@ -451,7 +451,7 @@ test('real App shell keeps conversation windows alive across hash navigation', {
 
 test('consumed edit prefill does not resurrect in composer after sending or clearing across A -> B -> A', { timeout: 60_000 }, async () => {
   detailEntriesOverride = {
-    1: [{ id: '42', kind: 'helm.input', data: { text: 'steer message', origin: 'human' } }],
+    1: [{ id: '42', kind: 'helmx.input', data: { text: 'steer message', origin: 'human' } }],
   }
   await mount('#/c/1')
   const paneA = findPane(1)
@@ -494,7 +494,7 @@ test('consumed edit prefill does not resurrect in composer after sending or clea
 
 test('in-progress history edit mode survives A -> B -> A Activity wake', { timeout: 60_000 }, async () => {
   detailEntriesOverride = {
-    1: [{ id: '42', kind: 'helm.input', data: { text: 'pending edit', origin: 'human' } }],
+    1: [{ id: '42', kind: 'helmx.input', data: { text: 'pending edit', origin: 'human' } }],
   }
   await mount('#/c/1')
   const paneA = findPane(1)

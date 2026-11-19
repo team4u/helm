@@ -11,7 +11,7 @@
  * 1. `before_turn`: strips `subagent` / `SubagentWorkflow` on leaf turns at the subtree ceiling
  *    (depth-1 subagents keep dispatch tools so they can dispatch depth-2 children);
  * 2. Tool/action boundaries: `subagent` tool, `SubagentWorkflow` tool, and `run` action reject before creating
- *    any run record (`HelmError('subagent_depth_exceeded')`, carrying facts);
+ *    any run record (`HelmxError('subagent_depth_exceeded')`, carrying facts);
  * 3. `agent_spawn` highest-priority fallback (priority 300, ahead of isolation=200 worktree allocation):
  *    direct `kernel.spawnAgent` calls also reject without recording new entries.
  *
@@ -26,22 +26,22 @@ import {
   fauxAssistantMessage,
   fauxToolCall,
 } from '@earendil-works/pi-ai/providers/faux'
-import { HelmError } from '@helm/protocol'
-import { withWorkflowSpawnMeta } from '@helm/plugins/contracts'
+import { HelmxError } from '@helmx/protocol'
+import { withWorkflowSpawnMeta } from '@helmx/plugins/contracts'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { after, before, describe, test } from 'node:test'
 import assert from 'node:assert/strict'
-import { createHelm } from '../src/app.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createHelmx } from '../src/app.js'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { makeFauxProvider, type FauxProviderHandle } from './helpers/hub-test-env.js'
 
 let rootDir: string
 
 before(() => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-subagent-depth-test-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-subagent-depth-test-'))
 })
 
 after(() => {
@@ -53,7 +53,7 @@ function readRegistryRaw(dataDir: string): Record<string, unknown> {
   const db = new DatabaseSync(join(dataDir, 'state.sqlite'), { readOnly: true })
   try {
     const row = db
-      .prepare("SELECT value FROM helm_plugin_docs WHERE plugin_id = '__global' AND name = ?")
+      .prepare("SELECT value FROM helmx_plugin_docs WHERE plugin_id = '__global' AND name = ?")
       .get('builtin:workflow:subagent-conversations') as { value: string } | undefined
     if (row === undefined) return {}
     return JSON.parse(row.value) as Record<string, unknown>
@@ -67,7 +67,7 @@ function writePluginDocRaw(dataDir: string, name: string, value: unknown): void 
   const db = new DatabaseSync(join(dataDir, 'state.sqlite'))
   try {
     db.prepare(
-      `INSERT INTO helm_plugin_docs (plugin_id, name, value, updated_at) VALUES ('__global', ?, ?, ?)
+      `INSERT INTO helmx_plugin_docs (plugin_id, name, value, updated_at) VALUES ('__global', ?, ?, ?)
        ON CONFLICT(plugin_id, name) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at`,
     ).run(name, JSON.stringify(value), Date.now())
   } finally {
@@ -87,7 +87,7 @@ function registryEntry(dataDir: string, conversationId: number): Record<string, 
  * each entry in `parents` acts as parent for the next spawned child; returns created child IDs.
  */
 async function spawnChain(
-  app: Awaited<ReturnType<typeof createHelm>>,
+  app: Awaited<ReturnType<typeof createHelmx>>,
   faux: FauxProviderHandle,
   parents: number[],
 ): Promise<number[]> {
@@ -118,7 +118,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
   test('top-level spawn depth=1: records depth/parent/ceiling=2; depth-1 subagent keeps subagent/SubagentWorkflow', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth1')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       // Top-level: spawn a subagent (real native spawn, real child conversation, synchronous wait).
       faux.setResponses([
@@ -174,7 +174,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
   test('depth-1 subagent spawns depth-2 via subagent tool: records depth=2; depth-2 strips dispatch tools', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth2')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       // Deterministic FIFO consumption order for synchronous nested spawns:
       // top-level toolUse(subagent) -> depth-1 toolUse(subagent) -> depth-2 text -> depth-1 text -> top-level text.
@@ -238,7 +238,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
   test('depth-2 rejects further spawns (403 subagent_depth_exceeded) and run actions with no run records; depth-1 still allowed', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth3')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       const child1 = (await spawnChain(app, faux, [1]))[0]!
       const child2 = (await spawnChain(app, faux, [child1]))[0]!
@@ -252,7 +252,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
             isolation: 'worktree',
           }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError, `expected HelmError (got ${String(err)})`)
+          assert.ok(err instanceof HelmxError, `expected HelmxError (got ${String(err)})`)
           assert.equal(err.code, 'subagent_depth_exceeded')
           assert.equal(err.status, 403)
           const details = err.details as { depth?: number; maxSubagentDepth?: number } | undefined
@@ -269,7 +269,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
             script: 'export const meta = { name: "t", description: "d" }\nreturn 1',
             conversationId: child2,
           }),
-        (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
+        (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded',
       )
 
       // Zero run records created.
@@ -295,7 +295,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
   test('depth-1 subagent can run SubagentWorkflow: run action succeeds and engine node registers at depth=2', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth4')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       const child1 = (await spawnChain(app, faux, [1]))[0]!
       faux.setResponses([fauxAssistantMessage('engine node subagent answer')])
@@ -315,7 +315,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
       // Depth-2 node is a leaf: direct `spawnAgent` rejects.
       await assert.rejects(
         () => app.kernel.spawnAgent({ parentConversationId: nodeConv, prompt: 'three layer attempt' }),
-        (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
+        (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded',
       )
     } finally {
       await app.close()
@@ -323,16 +323,16 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
   })
 
   // -------------------------------------------------------------------------
-  // 5. Background rejection contract: managed subagent (`helm`-owned) rejects explicit `background: true`
+  // 5. Background rejection contract: managed subagent (`helmx`-owned) rejects explicit `background: true`
   // -------------------------------------------------------------------------
 
   test('managed subagent rejects explicit background: true with no spawn/run; sync default continues working', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth5')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       const child1 = (await spawnChain(app, faux, [1]))[0]!
-      // Depth-1 subagent is a `helm`-owned autonomous conversation: explicit `background: true` must fail
+      // Depth-1 subagent is a `helmx`-owned autonomous conversation: explicit `background: true` must fail
       // without silently downgrading to sync, spawning a child, or creating a run (prevents premature parent return).
       faux.setResponses([
         fauxAssistantMessage(
@@ -383,7 +383,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
       // Depth-2 subagent is a leaf: direct `spawnAgent` rejects.
       await assert.rejects(
         () => app.kernel.spawnAgent({ parentConversationId: child2.id, prompt: 'three layer attempt' }),
-        (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
+        (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded',
       )
     } finally {
       await app.close()
@@ -397,7 +397,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
   test('forked conversations (with parentConversationId) are unaffected: spawn and run actions remain available', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth6')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       // Complete one top-level turn to obtain a forkable entry.
       faux.setResponses([fauxAssistantMessage('top-level answer')])
@@ -437,7 +437,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
   test('SuperAgent workers are unaffected: dispatch_worker conversations can spawn subagents normally', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth7')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       await app.kernel.plugins.enable('builtin:superagent')
       const dispatched = (await app.kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', {
@@ -467,7 +467,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
     const dir = join(rootDir, 'depth8')
     {
       const faux = makeFauxProvider()
-      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+      const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
       try {
         const child1 = (await spawnChain(app, faux, [1]))[0]!
         await spawnChain(app, faux, [child1])
@@ -478,7 +478,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
     // Restart on the same `dataDir`: registry facts remain in effect.
     {
       const faux = makeFauxProvider()
-      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+      const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
       try {
         const child1 = app.kernel.listConversations().find((c) => c.parentConversationId === 1)
         assert.ok(child1, 'depth-1 child conversation should restore after restart')
@@ -493,7 +493,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
               parentConversationId: child2.id,
               prompt: 'after restart dispatch three layer',
             }),
-          (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
+          (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded',
         )
         // Depth-1 control still allowed (can spawn a new depth-2 child after restart).
         const newChild2 = (await spawnChain(app, faux, [child1.id]))[0]!
@@ -515,7 +515,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
     let legacyChildId = 0
     {
       const faux = makeFauxProvider()
-      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+      const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
       try {
         const child1 = (await spawnChain(app, faux, [1]))[0]!
         legacyChildId = child1
@@ -538,7 +538,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
     }
     const faux = makeFauxProvider()
     await assert.rejects(
-      () => createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] }),
+      () => createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] }),
       /深度登记无效/,
     )
   })
@@ -550,7 +550,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
   test('explicit depth grant: maxSubagentDepth=3 permits depth 3 as leaf; descendants inherit ceiling', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'depth10')
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       faux.setResponses([fauxAssistantMessage('one layer answer')])
       let grantedChild = 0
@@ -577,7 +577,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
       await assert.rejects(
         () => app.kernel.spawnAgent({ parentConversationId: child3, prompt: 'four layer attempt' }),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'subagent_depth_exceeded')
           const details = err.details as { depth?: number; maxSubagentDepth?: number } | undefined
           assert.equal(details?.depth, 3)
@@ -596,7 +596,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
               meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: invalid as number }),
             }),
           (err: unknown) => {
-            assert.ok(err instanceof HelmError, `maxSubagentDepth=${invalid} should throw HelmError`)
+            assert.ok(err instanceof HelmxError, `maxSubagentDepth=${invalid} should throw HelmxError`)
             assert.equal(err.code, 'validation_error')
             return true
           },
@@ -611,7 +611,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
               prompt: 'out of bounds authorization',
               meta: withWorkflowSpawnMeta(undefined, { maxSubagentDepth: ceiling }),
             }),
-          (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+          (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
         )
       }
       // Rejected paths record no new registry entries.
@@ -631,7 +631,7 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
     const dir = join(rootDir, 'depth11')
     {
       const faux = makeFauxProvider()
-      const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+      const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
       try {
         assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2)
         for (const invalid of [0, 99, 2.5, Number.NaN]) {
@@ -646,20 +646,20 @@ describe('workflow subagent depth contract (default ceiling 2)', { timeout: 60_0
         const child = (await spawnChain(app, faux, [1]))[0]!
         await assert.rejects(
           () => app.kernel.spawnAgent({ parentConversationId: child, prompt: 'exceeds global one layer' }),
-          (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
+          (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded',
         )
       } finally {
         await app.close()
       }
     }
     const faux = makeFauxProvider()
-    const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
+    const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir: dir, cwd: dir, model: 'faux/faux-1', providers: [faux.provider] })
     try {
       assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 1)
       const child = (await spawnChain(app, faux, [1]))[0]!
       await assert.rejects(
         () => app.kernel.spawnAgent({ parentConversationId: child, prompt: 'after restart still over limit' }),
-        (err: unknown) => err instanceof HelmError && err.code === 'subagent_depth_exceeded',
+        (err: unknown) => err instanceof HelmxError && err.code === 'subagent_depth_exceeded',
       )
       await app.kernel.plugins.setConfig('builtin:workflow', { maxSubagentDepth: null })
       assert.equal(app.kernel.plugins.getConfig('builtin:workflow').maxSubagentDepth, 2)

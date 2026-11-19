@@ -10,7 +10,7 @@
  * sequence mapping; it does no IO, and on extraction failure (no menu) falls back to generic options, never fabricating.
  */
 
-import type { AskFieldOption } from '@helm/protocol'
+import type { AskFieldOption } from '@helmx/protocol'
 
 export interface BlockedSnapshotAiOption {
   /** Human-readable option description (e.g. "Allow this run (once)"). */

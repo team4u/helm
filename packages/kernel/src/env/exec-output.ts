@@ -5,7 +5,7 @@
  * `onEnvExecOutput`, the event is routed by `execId` and unsubscribed once `exec` finishes.
  */
 
-import type { EnvExecOutputEvent } from '@helm/protocol'
+import type { EnvExecOutputEvent } from '@helmx/protocol'
 
 export class ExecOutputHub {
   #handlers = new Map<string, (event: EnvExecOutputEvent) => void>()

@@ -1,6 +1,6 @@
 /**
  * Pure parsing layer for builtin:workflow background settlement reports
- * (precise takeover of helm.input via meta.renderer).
+ * (precise takeover of helmx.input via meta.renderer).
  *
  * Reads the structured `entry.data.meta.report` payload injected by
  * `background.ts` directly (zero prefix-string / newline scraping) and strictly
@@ -9,8 +9,8 @@
  * execution conversationId, `otherRunningTasks` array). Corrupted payloads
  * return an explicit invalid view with `rawText` preserved for copy/inspect.
  */
-import { DEFAULT_HELM_LOCALE, type HelmLocale } from '@helm/plugin-client'
-import type { ConversationEntry } from '@helm/protocol'
+import { DEFAULT_HELMX_LOCALE, type HelmxLocale } from '@helmx/plugin-client'
+import type { ConversationEntry } from '@helmx/protocol'
 import { extractCleanPreviewLine, isPlaceholderRunName, summarizeReadableJson } from './model-format.ts'
 
 export type BackgroundReportKind = 'subagent_report' | 'workflow_report'
@@ -153,7 +153,7 @@ export function isBackgroundReportDefaultOpen(view: BackgroundReportParse): bool
 export function backgroundReportPreview(
   view: BackgroundReportView,
   maxChars: number,
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): string {
   if ((view.status === 'failed' || view.status === 'aborted') && view.error !== undefined && view.error.trim() !== '') {
     return extractCleanPreviewLine(view.error, maxChars)

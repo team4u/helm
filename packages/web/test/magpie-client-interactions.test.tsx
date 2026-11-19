@@ -10,8 +10,8 @@ import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import type { PluginClientContext as PluginClientContextType } from '@helm/protocol'
-import { PluginClientContext, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
+import type { PluginClientContext as PluginClientContextType } from '@helmx/protocol'
+import { PluginClientContext, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
 import { importBuiltinClientModule, mountSharedPluginNamespaces, setBuiltinClientStub } from './helpers/builtin-clients.js'
 
 const e = React.createElement
@@ -31,7 +31,7 @@ interface SpyCtx extends PluginClientContextType {
   actionCalls: Array<{ actionId: string; input: unknown }>
 }
 
-function makeSpyCtx(locale: HelmLocale = 'en'): SpyCtx {
+function makeSpyCtx(locale: HelmxLocale = 'en'): SpyCtx {
   const actionCalls: Array<{ actionId: string; input: unknown }> = []
   const base: PluginClientContextType = {
     pluginId: 'builtin:magpie',

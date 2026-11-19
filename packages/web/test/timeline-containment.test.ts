@@ -4,7 +4,7 @@ import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
-import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helmx/protocol'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 import { renderToString } from 'react-dom/server'
@@ -177,7 +177,7 @@ function makeConv(id: number, overrides: Partial<ConversationSummary> = {}): Con
 }
 
 function humanEntry(id: string, text: string): ConversationEntry {
-  return { id, kind: 'helm.input', data: { id: `in-${id}`, text, origin: 'human' }, createdAt: 1000 }
+  return { id, kind: 'helmx.input', data: { id: `in-${id}`, text, origin: 'human' }, createdAt: 1000 }
 }
 
 function assistantEntry(id: string, text: string): ConversationEntry {
@@ -643,7 +643,7 @@ test('MarkdownView 与 ConversationTimeline：远视口内联媒体、附件图�
     const entries: ConversationEntry[] = [
       {
         id: '1',
-        kind: 'helm.input',
+        kind: 'helmx.input',
         data: {
           id: 'in-1',
           text: '看附件图',

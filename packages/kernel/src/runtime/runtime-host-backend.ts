@@ -8,17 +8,17 @@
  * - Normalize boundary errors consistently (e.g., `normalizeProfileBoundaryError`, `FileNotFoundError -> 404 not_found`).
  */
 
-import { HelmError, isValidProfileId } from '@helm/protocol'
-import type { HelmHostOpenTunnelPort } from '@helm/protocol'
+import { HelmxError, isValidProfileId } from '@helmx/protocol'
+import type { HelmxHostOpenTunnelPort } from '@helmx/protocol'
 import { FileNotFoundError, atomicWriteFile, withFileLock } from '../services/index.js'
 import type { PluginHostBackend, PluginSessionDocStore } from '../plugins/index.js'
-import type { HelmStore } from './store.js'
+import type { HelmxStore } from './store.js'
 import type { KernelRuntime } from './runtime.js'
 
 /** Boundary normalization for `profiles.get/directory`: invalid id -> `400 validation_error`; rethrows all other errors as-is. */
 function normalizeProfileBoundaryError(id: string, err: unknown): unknown {
   if (isValidProfileId(id)) return err
-  return new HelmError('validation_error', `Invalid Profile ID: ${String(id)}`, 400, { profileId: id })
+  return new HelmxError('validation_error', `Invalid Profile ID: ${String(id)}`, 400, { profileId: id })
 }
 
 /**
@@ -28,7 +28,7 @@ function normalizeProfileBoundaryError(id: string, err: unknown): unknown {
 function requirePluginSummary(runtime: KernelRuntime, pluginId: string) {
   const summary = runtime.plugins.list().find((p) => p.id === pluginId)
   if (!summary) {
-    throw new HelmError(
+    throw new HelmxError(
       'plugin_enable_failed',
       `Plugin '${pluginId}' not found in host manifest after lifecycle operation (inconsistent internal state)`,
       500,
@@ -55,7 +55,7 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
           return await runtime.profiles.getSystem(id)
         } catch (err) {
           if (err instanceof FileNotFoundError) {
-            throw new HelmError('not_found', `SYSTEM.md not found for Profile '${id}'`, 404, { profileId: id })
+            throw new HelmxError('not_found', `SYSTEM.md not found for Profile '${id}'`, 404, { profileId: id })
           }
           throw err
         }
@@ -91,7 +91,7 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
     },
     nodeFetch: (nodeId) => runtime.envFabric.nodeFetch(nodeId),
     openTunnel: ((nodeId: string, target: { host?: string; port: number }, signal?: AbortSignal) =>
-      runtime.envFabric.openTunnel(nodeId, target, signal)) as HelmHostOpenTunnelPort,
+      runtime.envFabric.openTunnel(nodeId, target, signal)) as HelmxHostOpenTunnelPort,
     // Host plugin governance ports: delegate directly to PluginHost's public methods (sharing the same chain
     // as HTTP management: per-plugin lifecycle queue, active-task tracking, locked/in-use protection, avoiding a
     // second package management implementation). Returns the latest manifest after enable/disable.
@@ -137,12 +137,12 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
           runtime.getConversation(id)
           return true
         } catch (err) {
-          if (err instanceof HelmError && err.code === 'not_found') return false
+          if (err instanceof HelmxError && err.code === 'not_found') return false
           throw err
         }
       }
       if (!exists(conversationId)) {
-        throw new HelmError('not_found', `conversation not found: ${conversationId}`, 404, { conversationId })
+        throw new HelmxError('not_found', `conversation not found: ${conversationId}`, 404, { conversationId })
       }
       return runtime.artifacts.writeUploaded(conversationId, input, { conversationExists: exists })
     },
@@ -186,7 +186,7 @@ export function createPluginHostBackend(runtime: KernelRuntime): PluginHostBacke
 /**
  * Construct the global durable document store port (shared by `PluginHost` docs and kernel metadata).
  */
-export function createGlobalDocumentStore(store: HelmStore): {
+export function createGlobalDocumentStore(store: HelmxStore): {
   get<T>(key: string, initial: T): T
   set<T>(key: string, value: T): void
   deletePlugin(pluginId: string): void
@@ -211,7 +211,7 @@ export function createGlobalDocumentStore(store: HelmStore): {
 /**
  * Construct the per-conversation durable storage layer required by `PluginHost` (`PluginSessionDocStore`).
  */
-export function createPluginSessionDocStore(store: HelmStore): PluginSessionDocStore {
+export function createPluginSessionDocStore(store: HelmxStore): PluginSessionDocStore {
   return {
     get: (pluginId, name, conversationId) =>
       store.getPluginSessionDoc(pluginId, name, conversationId),

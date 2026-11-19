@@ -9,7 +9,7 @@ import {
   PopoverPortal,
   PopoverContent,
   PopoverArrow,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 import {
   DropdownMenu,
   DropdownMenuRoot,
@@ -60,9 +60,9 @@ test('Popover 原语挂载、数据属性与无障碍属性（SSR）', { timeout
 
   // 浮层内容携带 role="dialog" 与样式类
   assert.match(openHtml, /role="dialog"/)
-  assert.match(openHtml, /helm-popover-content/)
+  assert.match(openHtml, /helmx-popover-content/)
   assert.match(openHtml, /custom-popover/)
-  assert.match(openHtml, /helm-popover-arrow/)
+  assert.match(openHtml, /helmx-popover-arrow/)
   assert.match(openHtml, /浮层正文/)
 
   // 关闭状态
@@ -128,7 +128,7 @@ test('DropdownMenu 原语挂载、数据属性与角色属性（SSR）', { timeo
   // 菜单主体 WAI-ARIA 语义
   assert.match(menuHtml, /role="menu"/)
   assert.match(menuHtml, /data-radix-menu-content/)
-  assert.match(menuHtml, /helm-dropdown-content/)
+  assert.match(menuHtml, /helmx-dropdown-content/)
   assert.match(menuHtml, /pane-more-popover/)
 
   // 菜单项 role="menuitem"
@@ -137,11 +137,11 @@ test('DropdownMenu 原语挂载、数据属性与角色属性（SSR）', { timeo
 
   // 分隔线 role="separator"
   assert.match(menuHtml, /role="separator"/)
-  assert.match(menuHtml, /helm-dropdown-separator/)
+  assert.match(menuHtml, /helmx-dropdown-separator/)
   assert.match(menuHtml, /popover-separator/)
 
   // 危险菜单项样式契约
-  assert.match(menuHtml, /helm-dropdown-item-danger/)
+  assert.match(menuHtml, /helmx-dropdown-item-danger/)
   assert.match(menuHtml, /popover-item-danger/)
 })
 
@@ -175,8 +175,8 @@ test('Tooltip 原语挂载、无障碍属性与独立使用能力（SSR）', { t
 
   assert.match(primitiveHtml, /aria-describedby=/)
   assert.match(primitiveHtml, /role="tooltip"/)
-  assert.match(primitiveHtml, /helm-tooltip-content/)
-  assert.match(primitiveHtml, /helm-tooltip-arrow/)
+  assert.match(primitiveHtml, /helmx-tooltip-content/)
+  assert.match(primitiveHtml, /helmx-tooltip-arrow/)
   assert.match(primitiveHtml, /关闭弹窗/)
 
   // Tooltip 便捷包装器（无需外层 Provider 即可独立安全渲染）

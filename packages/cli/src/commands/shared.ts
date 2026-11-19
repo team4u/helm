@@ -3,7 +3,7 @@
  * Depends only on base layers (hub-client / args / output / errors / options / credentials);
  * never imports any specific command module so domain files keep zero horizontal coupling.
  */
-import type { AuthToken } from '@helm/protocol'
+import type { AuthToken } from '@helmx/protocol'
 import path from 'node:path'
 import { CliError } from '../errors.js'
 import type { HubClient } from '../hub-client.js'
@@ -18,7 +18,7 @@ export interface CommandContext {
   json: boolean
   args: string[]
   dataDir: string
-  /** CLI process working directory: sole base for resolving local relative paths (never silently switched by HELM_CWD). */
+  /** CLI process working directory: sole base for resolving local relative paths (never silently switched by HELMX_CWD). */
   cwd: string
   hub(): Promise<HubClient>
 }
@@ -64,7 +64,7 @@ export function assertNoExtraPositionals(positionals: readonly string[], fromInd
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve conversation target: explicit positional ID or --current (from HELM_CONVERSATION_ID).
+ * Resolve conversation target: explicit positional ID or --current (from HELMX_CONVERSATION_ID).
  * Fails explicitly when both are missing/invalid; explicit positional takes precedence if both are provided.
  */
 export function resolveConversationTarget(
@@ -74,13 +74,13 @@ export function resolveConversationTarget(
 ): number {
   if (positionalId !== undefined) return parsePositiveInt(positionalId, 'conversation ID')
   if (flags.get('current') === true) {
-    const raw = env['HELM_CONVERSATION_ID']
+    const raw = env['HELMX_CONVERSATION_ID']
     if (!raw || !raw.trim()) {
-      throw new CliError('--current requires HELM_CONVERSATION_ID to be set', 'current_conversation_missing')
+      throw new CliError('--current requires HELMX_CONVERSATION_ID to be set', 'current_conversation_missing')
     }
-    return parsePositiveInt(raw, 'HELM_CONVERSATION_ID')
+    return parsePositiveInt(raw, 'HELMX_CONVERSATION_ID')
   }
-  throw new CliError('missing conversation target: pass an explicit <id> or --current (reads HELM_CONVERSATION_ID)', 'missing_conversation_target')
+  throw new CliError('missing conversation target: pass an explicit <id> or --current (reads HELMX_CONVERSATION_ID)', 'missing_conversation_target')
 }
 
 // ---------------------------------------------------------------------------
@@ -241,14 +241,14 @@ export function parseNoFlags(ctx: CommandContext): void {
 // ---------------------------------------------------------------------------
 
 /**
- * Resolve a path against the CLI caller's cwd (never silently switched to HELM_CWD).
- * If HELM_ENV=1 and HELM_CWD differs, attach sessionCwd purely as diagnostic context.
+ * Resolve a path against the CLI caller's cwd (never silently switched to HELMX_CWD).
+ * If HELMX_ENV=1 and HELMX_CWD differs, attach sessionCwd purely as diagnostic context.
  */
 export function resolveCallerPath(ctx: CommandContext, requested: string): { resolvedPath: string; sessionCwd?: string } {
   const resolvedPath = path.resolve(ctx.cwd, requested)
   let sessionCwd: string | undefined
-  if (ctx.env['HELM_ENV'] === '1') {
-    const managed = ctx.env['HELM_CWD']
+  if (ctx.env['HELMX_ENV'] === '1') {
+    const managed = ctx.env['HELMX_CWD']
     if (managed && managed !== ctx.cwd) sessionCwd = managed
   }
   return { resolvedPath, sessionCwd }
@@ -265,7 +265,7 @@ export function pathDetails(requested: string, resolvedPath: string, ctx: Comman
 
 export function pathDiagLines(requested: string, resolvedPath: string, ctx: CommandContext, sessionCwd?: string): string {
   const hint =
-    sessionCwd !== undefined ? `\n  conversation cwd (HELM_CWD)=${sessionCwd} (directory difference is normal when cd'ing; relative paths still resolve against CLI cwd)` : ''
+    sessionCwd !== undefined ? `\n  conversation cwd (HELMX_CWD)=${sessionCwd} (directory difference is normal when cd'ing; relative paths still resolve against CLI cwd)` : ''
   return `\n  requested path=${requested}\n  resolved path=${resolvedPath}\n  CLI cwd=${ctx.cwd}${hint}`
 }
 

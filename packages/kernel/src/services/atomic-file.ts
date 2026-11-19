@@ -1,6 +1,6 @@
 /**
  * Atomic file writes and safe reads with contextual error messages.
- * Write path delegates to the shared `@helm/env-io` primitive (`atomicWriteFile` / `atomicWriteJson`):
+ * Write path delegates to the shared `@helmx/env-io` primitive (`atomicWriteFile` / `atomicWriteJson`):
  * hidden temp file (random UUID + 0600, forced against umask) -> fsync -> rename with bounded
  * transient-lock retry, so crashes never half-truncate and credentials never leak permissions
  * via temp files.
@@ -8,9 +8,9 @@
 import fsp from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { renameAtomically } from '@helm/env-io'
+import { renameAtomically } from '@helmx/env-io'
 
-export { atomicWriteFile, atomicWriteJson } from '@helm/env-io'
+export { atomicWriteFile, atomicWriteJson } from '@helmx/env-io'
 
 export class FileNotFoundError extends Error {
   constructor(path: string) {

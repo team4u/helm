@@ -15,7 +15,7 @@ import type { AddressInfo } from 'node:net'
 import { Readable } from 'node:stream'
 import { createHubHandler } from './hub.js'
 import { createStaticServe } from './static.js'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { attachNodeWsGateway, attachNodeTunnelGateway, type EnvFabric, type NodeWsGateway } from '../env/index.js'
 import type { HubHandle, KernelRuntimeLike, StartHubOptions } from './contracts.js'
 
@@ -90,8 +90,8 @@ export async function startHub(options: StartHubOptions): Promise<NodeHubHandle>
     try {
       await createStaticServe(webDistDir)
     } catch (err) {
-      if (err instanceof HelmError) throw err
-      throw new HelmError(
+      if (err instanceof HelmxError) throw err
+      throw new HelmxError(
         'web_dist_invalid',
         `static hosting directory unavailable: ${webDistDir} (${err instanceof Error ? err.message : String(err)})`,
         500,

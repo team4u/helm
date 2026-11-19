@@ -18,14 +18,14 @@ import { readFileSync } from 'node:fs'
 import * as React from 'react'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import { act } from 'react'
-import type { ComposerScopeProps, ConversationSummary } from '@helm/protocol'
-import { COMPOSER_STATUS_SLOT } from '@helm/protocol'
+import type { ComposerScopeProps, ConversationSummary } from '@helmx/protocol'
+import { COMPOSER_STATUS_SLOT } from '@helmx/protocol'
 import { applySnapshot, emptyLiveState, mergeConversationDetail } from '../src/lib/live-state.js'
 import { makeTestStore } from './helpers/store.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import { seedPluginClientModule } from '../src/lib/plugin-client.js'
 import { groupUiContributions } from '../src/lib/types.js'
-import type { HelmStoreValue } from '../src/lib/types.js'
+import type { HelmxStoreValue } from '../src/lib/types.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -45,7 +45,7 @@ function conv(contextUsage: ConversationSummary['contextUsage']): ConversationSu
   }
 }
 
-function storeOf(conversation: ConversationSummary): HelmExternalStore {
+function storeOf(conversation: ConversationSummary): HelmxExternalStore {
   return makeTestStore({ conversations: [conversation] })
 }
 
@@ -219,7 +219,7 @@ test('rate metrics are not rendered built-in: contextUsage has no response field
 })
 
 test('composer/status host slot: PluginSlot mounts in the status area; contributed components receive ComposerScopeProps', { timeout: 60_000 }, async () => {
-  const { usePluginContext } = await import('@helm/plugin-client')
+  const { usePluginContext } = await import('@helmx/plugin-client')
   // SSR render (same convention as the profile-center slot tests): client components are
   // ready synchronously from the seeded cache, no real fetch from the dynamic-load effect.
   function ComposerStatusProbe(props: ComposerScopeProps) {

@@ -8,7 +8,7 @@ import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
-import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
 import { makeTestStore as makeMockStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
 
@@ -54,7 +54,7 @@ test('HumanMessage 组件渲染：胶囊正文走 MarkdownView，inline 语法�
   const entries: ConversationEntry[] = [
     {
       id: '21',
-      kind: 'helm.input',
+      kind: 'helmx.input',
       data: { id: 'h-1', text: '**加粗** 与 `code`，见 [链接](https://example.com)\n第二行续写', origin: 'human', createdAt: 1 },
     },
   ]

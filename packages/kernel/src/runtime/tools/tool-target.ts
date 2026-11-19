@@ -7,9 +7,9 @@
  * sharing the exact same platform lookup source as `bash`/`runShell`).
  */
 import { BACKGROUND_CONTEXT, type Context } from '@earendil-works/chord/context'
-import { isAbsoluteTargetPath, type TargetPlatform } from '@helm/protocol'
+import { isAbsoluteTargetPath, type TargetPlatform } from '@helmx/protocol'
 import { targetPlatformForNode } from '../target-platform.js'
-import type { HelmToolDeps } from '../tool-deps.js'
+import type { HelmxToolDeps } from '../tool-deps.js'
 
 /** Minimal SDK `ToolApi` subset needed by `write`/`edit`/`register_artifact` (satisfied structurally by both
  * test `makeApi` fakes and real SDK APIs; agent and tool share the same SDK `Context` so cancellation propagates). */
@@ -27,7 +27,7 @@ interface ToolTarget {
 
 /** Resolve conversation target; returns `{ error }` when `cwd` is not absolute (tools surface this with `*_failed`). */
 export async function resolveToolTarget(
-  deps: HelmToolDeps,
+  deps: HelmxToolDeps,
   api: ToolTargetApi,
   context: Context = BACKGROUND_CONTEXT,
 ): Promise<ToolTarget | { error: string }> {

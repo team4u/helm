@@ -16,8 +16,8 @@ import type {
   ModelsChangedEvent,
   PluginBuildProvider,
   TurnSettledPayload,
-} from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+} from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type { ConversationOwnership } from './runtime-ownership.js'
 import {
   ArtifactService as SvcArtifactService,
@@ -34,10 +34,10 @@ import { createEnvFabric, tokenAuthenticator, type EnvFabric } from '../env/inde
 import { AskService } from './asks.js'
 import { ConversationTracker } from './conversations.js'
 import { EventHub, SessionDocEventHub } from './events.js'
-import type { HelmStore } from './store.js'
-import type { HelmToolDeps } from './tool-deps.js'
+import type { HelmxStore } from './store.js'
+import type { HelmxToolDeps } from './tool-deps.js'
 import { buildManagedEnv } from './tools.js'
-import { HelmPluginConfigStore } from './plugin-config-store.js'
+import { HelmxPluginConfigStore } from './plugin-config-store.js'
 import { ConversationService } from './conversation-service.js'
 import { NodeManager } from './node-manager.js'
 import { ModelRegistry } from './model-registry.js'
@@ -78,12 +78,12 @@ export interface AssembledRuntimeServices {
   configSvc: ConfigService
   credentialsSvc: CredentialService
   providersSvc: ProviderService
-  pluginConfig: HelmPluginConfigStore
+  pluginConfig: HelmxPluginConfigStore
   artifactsSvc: SvcArtifactService
   authSvc: SvcAuthService
   modelsRegistry: ModelRegistry
   envFabric: EnvFabric
-  toolDeps: HelmToolDeps
+  toolDeps: HelmxToolDeps
   nodes: NodeManager
   nodeOps: RuntimeNodeOperations
   ownership: RuntimeOwnershipManager
@@ -104,7 +104,7 @@ export function assembleRuntimeServices(
   runtime: KernelRuntime,
   init: RuntimeServicesInit,
   options: {
-    store: HelmStore
+    store: HelmxStore
     stashService: SecretStash
     handledToolCalls: Map<string, { conversationId: number | undefined; result: { output: Array<{ type: 'text'; text: string }>; isError: boolean } }>
     dispatchTurnSettled(payload: TurnSettledPayload, consumed: ConversationInput[]): Promise<void>
@@ -123,7 +123,7 @@ export function assembleRuntimeServices(
   const configSvc = new ConfigService(init.dataDir)
   const credentialsSvc = init.credentials
   const providersSvc = init.providersSvc
-  const pluginConfig = new HelmPluginConfigStore({ config: configSvc, credentials: credentialsSvc })
+  const pluginConfig = new HelmxPluginConfigStore({ config: configSvc, credentials: credentialsSvc })
 
   const artifactRepo = {
     get: (id: string) => options.store.getArtifact(id),
@@ -209,7 +209,7 @@ export function assembleRuntimeServices(
   })
 
   // ---- Tool dependency bundle ----
-  const toolDeps: HelmToolDeps = {
+  const toolDeps: HelmxToolDeps = {
     dataDir: init.dataDir,
     defaultCwd: init.cwd,
     get hubUrl(): string { return runtime.hubUrl },
@@ -225,7 +225,7 @@ export function assembleRuntimeServices(
       try {
         return (await profilesSvc.get(meta.profileId))?.restrictToCwd === true
       } catch (error) {
-        throw new HelmError(
+        throw new HelmxError(
           'profile_read_failed',
           `cannot determine restrictToCwd for profile '${meta.profileId}' of conversation ${id}: ${error instanceof Error ? error.message : String(error)}`,
           500,
@@ -268,7 +268,7 @@ export function assembleRuntimeServices(
     harness: init.harness,
     store: options.store,
     redactError: (text) => options.stashService.redact(text),
-    // Turn unread-count policy: background spawned sub-conversations (helm/bot-owned with a parent chain) are not marked unread.
+    // Turn unread-count policy: background spawned sub-conversations (helmx/bot-owned with a parent chain) are not marked unread.
     ownershipOf: (id) => ownership.getOwnership(id),
     // Context usage: window resolved from live `Models` registry (never fabricated when unknown).
     models: () => modelsRegistry.models,

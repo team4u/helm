@@ -17,9 +17,9 @@
 import { BACKGROUND_CONTEXT } from '@earendil-works/chord/context'
 import type { ContextView, ConversationView, Harness } from '@earendil-works/pi-durable'
 import type { Models } from '@earendil-works/pi-ai'
-import type { ConversationContextUsage, ConversationSummary } from '@helm/protocol'
+import type { ConversationContextUsage, ConversationSummary } from '@helmx/protocol'
 import type { LiveStateShape } from './conversation-mirror.js'
-import type { ConvMeta, HelmStore } from './store.js'
+import type { ConvMeta, HelmxStore } from './store.js'
 import { knownContextWindowOf } from './models.js'
 import {
   assembleContextUsage,
@@ -34,7 +34,7 @@ import type { EntryRecordLike } from './entries.js'
 /** Minimal port from refresh chain to host (ConversationTracker). */
 export interface ContextUsageHost {
   readonly harness: Harness
-  readonly store: HelmStore
+  readonly store: HelmxStore
   /** Emit summary change (conversation.upsert semantic frame). */
   onSummaryChanged(summary: ConversationSummary): void
   /** Read current Models catalog (returns undefined when unavailable: omits contextWindow without fabricating). */
@@ -167,7 +167,7 @@ export class ContextUsageRefresh {
   }
 
   /** Scan context boundaries: trigger refresh only when a new entry beyond the watermark is pi.compaction /
-   * pi.reset / helm.rewind, or when pi.live compaction state (compactions/compactionFailure) changes.
+   * pi.reset / helmx.rewind, or when pi.live compaction state (compactions/compactionFailure) changes.
    * Monotonic watermark prevents re-triggering on streaming snapshots (even when onEntryCommitted is inactive). */
   noteBoundary(
     id: number,
@@ -183,7 +183,7 @@ export class ContextUsageRefresh {
       if (!Number.isFinite(numeric) || numeric <= old) continue
       if (numeric > watermark) watermark = numeric
       const kind = (raw as { kind?: unknown }).kind
-      if (kind === 'pi.compaction' || kind === 'pi.reset' || kind === 'helm.rewind') boundary = true
+      if (kind === 'pi.compaction' || kind === 'pi.reset' || kind === 'helmx.rewind') boundary = true
     }
     this.entryWatermark.set(id, watermark)
     // prev is always a mirror object ({} fallback on adopt) while raw live defaults to {}, preventing false diffs on initial empty snapshots.
@@ -233,7 +233,7 @@ export class ContextUsageRefresh {
         ? models.getModel(meta.model.slice(0, slash), meta.model.slice(slash + 1))
         : undefined
     // Honest window reporting: omit contextWindow when model isn't in Models or only carries an unverified fallback
-    // (e.g. compat gateway / Magpie without upstream window, helmContextWindowKnown === false)—never fake 128k defaults.
+    // (e.g. compat gateway / Magpie without upstream window, helmxContextWindowKnown === false)—never fake 128k defaults.
     const contextWindow = knownContextWindowOf(model)
     const compacting = compactingOf(live?.compactions)
     const usage = assembleContextUsage({

@@ -1,7 +1,7 @@
 /**
  * builtin:superagent 主插件整链验收。
  *
- * 组合纪律：真实 createHelm（真 SQLite + 真 PluginHost + 真 assistant +
+ * 组合纪律：真实 createHelmx（真 SQLite + 真 PluginHost + 真 assistant +
  * WorkflowService）+ faux provider；启用插件走 host.enable（真实 service.start
  * 自举）。不 mock app、不 fake host 端口（纯函数单测除外）。
  *
@@ -19,10 +19,10 @@ import { DatabaseSync } from 'node:sqlite'
 
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
 
-import { HelmError } from '@helm/protocol'
-import { createHelm } from '../../hub/src/app.js'
+import { HelmxError } from '@helmx/protocol'
+import { createHelmx } from '../../hub/src/app.js'
 import { MemoryStore } from '../src/memory/store.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { makeFauxProvider, useTempDir, waitFor, type FauxProviderHandle } from './helpers/plugin-test-env.js'
 import {
   parseMutedSources,
@@ -49,16 +49,16 @@ interface TestEnv {
   dataDir: string
   dbPath: string
   faux: FauxProviderHandle
-  app: Awaited<ReturnType<typeof createHelm>>
+  app: Awaited<ReturnType<typeof createHelmx>>
   /** 提交输入并等回合真正结算（含 turn_settled 钩子）。 */
   submitAndWait(conversationId: number, text: string, opts?: { origin?: 'human' | 'agent' | 'trigger' }): Promise<void>
   close(): Promise<void>
 }
 
 async function makeEnv(): Promise<TestEnv> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-superagent-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-superagent-'))
   const faux = makeFauxProvider()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
+  const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   faux.setResponses([])
   const env: TestEnv = {
     dataDir,
@@ -86,7 +86,7 @@ async function readDocRaw(env: TestEnv, name: string): Promise<unknown> {
   const db = new DatabaseSync(join(env.dataDir, 'state.sqlite'), { readOnly: true })
   try {
     const row = db
-      .prepare("SELECT value FROM helm_plugin_docs WHERE plugin_id = '__global' AND name = ?")
+      .prepare("SELECT value FROM helmx_plugin_docs WHERE plugin_id = '__global' AND name = ?")
       .get(`builtin:superagent:${name}`) as { value: string } | undefined
     assert.ok(row, `doc ${name} 应已持久化`)
     return JSON.parse(row.value)
@@ -110,7 +110,7 @@ async function residentIdsRaw(dataDir: string): Promise<{ router?: number; watch
   const db = new DatabaseSync(join(dataDir, 'state.sqlite'), { readOnly: true })
   try {
     const row = db
-      .prepare("SELECT value FROM helm_plugin_docs WHERE plugin_id = '__global' AND name = 'builtin:superagent:index'")
+      .prepare("SELECT value FROM helmx_plugin_docs WHERE plugin_id = '__global' AND name = 'builtin:superagent:index'")
       .get() as { value: string } | undefined
     assert.ok(row, 'doc index 应已持久化')
     const doc = JSON.parse(row.value) as { routerConversationId?: number; watchdogConversationId?: number }
@@ -146,7 +146,7 @@ const route = (map: Record<string, ReturnType<typeof fauxAssistantMessage>>) => 
 async function waitfoWorkerReport(env: TestEnv, router: number, marker: string): Promise<void> {
   await waitFor(async () => {
     const detail = await env.app.kernel.getConversationDetail(router, { limit: 50 })
-    return detail.entries.some((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes(marker))
+    return detail.entries.some((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes(marker))
   })
 }
 
@@ -252,7 +252,7 @@ test('superagent2: doc 边界验证与 RecallGraph 去重/检索纯函数', { ti
 // 2. 默认停用注册 / 启用自举 / 幂等 / 保护释放
 // ---------------------------------------------------------------------------
 
-test('superagent3: createHelm 默认停用注册；无 UI、无动作、无会话副作用', { timeout: 60_000 }, async () => {
+test('superagent3: createHelmx 默认停用注册；无 UI、无动作、无会话副作用', { timeout: 60_000 }, async () => {
   const env = await makeEnv()
   try {
     const host = env.app.kernel.plugins
@@ -270,7 +270,7 @@ test('superagent3: createHelm 默认停用注册；无 UI、无动作、无会�
     await assert.throws(
       () => host.getPublicDoc('builtin:superagent', 'index'),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'plugin_doc_not_found')
         return true
       },
@@ -311,7 +311,7 @@ test('superagent4: 启用自举——Profile/技能/两常驻会话/公开 doc/�
     assert.equal(existsSync(join(env.dataDir, 'profiles', 'superagent', 'MEMORY.md')), false)
     assert.equal(existsSync(join(env.dataDir, 'profiles', 'watchdog', 'MEMORY.md')), false)
 
-    // 常驻会话：动态分配 + 持久化 + 无角色 Tag + helm 归属 + 管理保护
+    // 常驻会话：动态分配 + 持久化 + 无角色 Tag + helmx 归属 + 管理保护
     const ids = await residentIds(env)
     assert.ok(Number.isInteger(ids.router) && ids.router! > 1)
     assert.ok(Number.isInteger(ids.watchdog) && ids.watchdog! > 1)
@@ -319,11 +319,11 @@ test('superagent4: 启用自举——Profile/技能/两常驻会话/公开 doc/�
     const router = kernel.getConversation(ids.router!)
     assert.equal(router.profileId, 'superagent')
     assert.deepEqual(router.tags, [])
-    assert.equal(kernel.getConversationOwnership(ids.router!), 'helm')
+    assert.equal(kernel.getConversationOwnership(ids.router!), 'helmx')
     await assert.rejects(
       () => env.app.kernel.deleteConversation(ids.router!),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError)
+        assert.ok(err instanceof HelmxError)
         assert.equal(err.code, 'conversation_managed_by_plugin')
         return true
       },
@@ -399,15 +399,15 @@ test('superagent5: 幂等自举——不覆盖用户文件；partial-start 补�
 test('superagent6: 重启复用常驻 ID；停用期间被删则重建；Profile 被改则显式诊断', { timeout: 60_000 }, async (t) => {
   // 6a. 重启复用
   {
-    const dataDir = useTempDir(t, 'helm-superagent-restart-')
+    const dataDir = useTempDir(t, 'helmx-superagent-restart-')
     const firstFaux = makeFauxProvider()
-    const first = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [firstFaux.provider] })
+    const first = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [firstFaux.provider] })
     await first.kernel.plugins.enable('builtin:superagent')
     const ids1 = await residentIdsRaw(dataDir)
     await first.close()
     // 第二次启动：持久启停状态沿用（enabled），ID 复用
     const secondFaux = makeFauxProvider()
-    const second = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [secondFaux.provider] })
+    const second = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [secondFaux.provider] })
     try {
       const summary = second.kernel.plugins.list().find((p) => p.id === 'builtin:superagent')!
       assert.equal(summary.enabled, true, '重启后应沿用持久化启用状态')
@@ -446,7 +446,7 @@ test('superagent6: 重启复用常驻 ID；停用期间被删则重建；Profile
       await assert.rejects(
         () => enableSuperAgent(env),
         (err: unknown) => {
-          assert.ok(err instanceof HelmError)
+          assert.ok(err instanceof HelmxError)
           assert.equal(err.code, 'superagent_resident_conversation_conflict')
           assert.match(err.message, /拒绝占用/)
           return true
@@ -492,7 +492,7 @@ test('superagent7: trigger——静默丢弃/threadKey 直投/其余进中枢/�
     await kernel.dispatchTrigger({ id: 'evt-2', source: 'webhook:ci', text: '构建失败', createdAt: Date.now() })
     await kernel.waitForIdle(ids.router!)
     const detail = await kernel.getConversationDetail(ids.router!, { limit: 10 })
-    const input = detail.entries.find((e) => e.kind === 'helm.input')
+    const input = detail.entries.find((e) => e.kind === 'helmx.input')
     assert.ok(input, '中枢应收到事件输入')
     assert.match(JSON.stringify(input.data), /external_event/)
     assert.match(JSON.stringify(input.data), /webhook:ci/)
@@ -531,10 +531,10 @@ test('superagent7: trigger——静默丢弃/threadKey 直投/其余进中枢/�
     await waitfoWorkerReport(env, ids.router!, 'Worker 收到直投')
     await kernel.waitForIdle(ids.router!)
     const workerDetail = await kernel.getConversationDetail(worker.conversationId, { limit: 10 })
-    const direct = workerDetail.entries.filter((e) => e.kind === 'helm.input').at(-1)
+    const direct = workerDetail.entries.filter((e) => e.kind === 'helmx.input').at(-1)
     assert.match(JSON.stringify(direct?.data), /CI 又失败了/)
     const routerInputs = (await kernel.getConversationDetail(ids.router!, { limit: 50 })).entries.filter(
-      (e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('CI 又失败了'),
+      (e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('CI 又失败了'),
     )
     assert.equal(routerInputs.length, 0, '直投事件不得进中枢')
 
@@ -545,7 +545,7 @@ test('superagent7: trigger——静默丢弃/threadKey 直投/其余进中枢/�
     await kernel.dispatchTrigger({ id: 'evt-4', source: 'webhook:ci', text: 'CI 恢复', threadKey: 'ci-watch', createdAt: Date.now() })
     await kernel.waitForIdle(ids.router!)
     const detail2 = await kernel.getConversationDetail(ids.router!, { limit: 10 })
-    assert.match(JSON.stringify(detail2.entries.filter((e) => e.kind === 'helm.input').at(-1)?.data), /CI 恢复/)
+    assert.match(JSON.stringify(detail2.entries.filter((e) => e.kind === 'helmx.input').at(-1)?.data), /CI 恢复/)
   } finally {
     await env.close()
   }
@@ -620,17 +620,17 @@ test('superagent9: dispatch_worker 非阻塞——立即返回、worker 标签/p
     const workerSummary = kernel.getConversation(dispatched.workerConversationId)
     assert.deepEqual(workerSummary.tags, ['worker'])
     assert.equal(workerSummary.parentConversationId, router)
-    assert.equal(kernel.getConversationOwnership(dispatched.workerConversationId), 'helm')
+    assert.equal(kernel.getConversationOwnership(dispatched.workerConversationId), 'helmx')
     assert.equal(((await readDocRaw(env, 'index')) as { workers: unknown[] }).workers.length, 1)
 
     // 禁止派生中枢/看门狗（自激防护）；Profile 不存在显式拒绝
     await assert.rejects(
       () => kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: 'x', profileId: 'superagent' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && /自激/.test(err.message),
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && /自激/.test(err.message),
     )
     await assert.rejects(
       () => kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: 'x', profileId: 'no-such-profile' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && /不存在/.test(err.message),
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && /不存在/.test(err.message),
     )
 
     // 先等首个 Worker 回合结束，再等其汇报卡在中枢真实落库并结算（faux 队列确定性消耗）。
@@ -665,7 +665,7 @@ test('superagent9: dispatch_worker 非阻塞——立即返回、worker 标签/p
     assert.equal(fulfilled.length, 1, '并发同 threadKey 恰好一个成功')
     assert.equal(rejected.length, 1)
     const reason = rejected[0] as PromiseRejectedResult
-    assert.ok(reason.reason instanceof HelmError)
+    assert.ok(reason.reason instanceof HelmxError)
     assert.equal(reason.reason.code, 'superagent_thread_key_conflict')
     const after = (await readDocRaw(env, 'subscriptions')) as { subscriptions: Array<{ threadKey: string }> }
     assert.equal(after.subscriptions.filter((s) => s.threadKey === 'same-key').length, 1)
@@ -674,7 +674,7 @@ test('superagent9: dispatch_worker 非阻塞——立即返回、worker 标签/p
     const okWorker = (fulfilled[0] as PromiseFulfilledResult<{ workerConversationId: number }>).value.workerConversationId
     await assert.rejects(
       () => kernel.plugins.invokeAction('builtin:superagent', 'subscribe_thread', { threadKey: 'same-key', workerConversationId: dispatched.workerConversationId }),
-      (err: unknown) => err instanceof HelmError && err.code === 'superagent_thread_key_conflict',
+      (err: unknown) => err instanceof HelmxError && err.code === 'superagent_thread_key_conflict',
     )
     const rebind = await kernel.plugins.invokeAction('builtin:superagent', 'subscribe_thread', {
       threadKey: 'same-key',
@@ -700,7 +700,7 @@ test('superagent10: 工具执行会话二次校验——同 Profile 人类直聊
           { prompt: 'x' },
           { conversationId: humanChat.id },
         ),
-      (err: unknown) => err instanceof HelmError && (err.code === 'conversation_scope_violation' || /不是中枢/.test(err.message)),
+      (err: unknown) => err instanceof HelmxError && (err.code === 'conversation_scope_violation' || /不是中枢/.test(err.message)),
     )
     // 中枢真实会话可以（先派一个真 worker 再检视）
     const ids = await residentIds(env)
@@ -775,7 +775,7 @@ test('superagent11: 含 agent/trigger 输入的回合向中枢汇报；纯 human
     await waitFor(async () => {
       const routerDetail = await kernel.getConversationDetail(router, { limit: 50 })
       report = routerDetail.entries.find(
-        (e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes(WORKER_REPORT_MARKER) && JSON.stringify(e.data).includes('对账完成'),
+        (e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes(WORKER_REPORT_MARKER) && JSON.stringify(e.data).includes('对账完成'),
       )
       return report !== undefined
     })
@@ -787,10 +787,10 @@ test('superagent11: 含 agent/trigger 输入的回合向中枢汇报；纯 human
     // 纯 human 回合：只写 RecallGraph，不投中枢汇报卡（等上一轮汇报完全落地后再计数）
     await waitFor(async () => {
       const detail = await kernel.getConversationDetail(router, { limit: 50 })
-      return detail.entries.some((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('对账完成'))
+      return detail.entries.some((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('对账完成'))
     })
     const reportsBefore = (await kernel.getConversationDetail(router, { limit: 50 })).entries.filter(
-      (e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes(WORKER_REPORT_MARKER),
+      (e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes(WORKER_REPORT_MARKER),
     ).length
     const nodesBefore = ((await readDocRaw(env, 'recall-graph')) as { nodes: unknown[] }).nodes.length
     env.faux.setResponses([fauxAssistantMessage('人类介入的补充说明')])
@@ -798,7 +798,7 @@ test('superagent11: 含 agent/trigger 输入的回合向中枢汇报；纯 human
     await waitFor(async () => ((await readDocRaw(env, 'recall-graph')) as { nodes: unknown[] }).nodes.length > nodesBefore)
     const recallAfter = (await readDocRaw(env, 'recall-graph')) as { nodes: unknown[] }
     const reportsAfter = (await kernel.getConversationDetail(router, { limit: 50 })).entries.filter(
-      (e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes(WORKER_REPORT_MARKER),
+      (e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes(WORKER_REPORT_MARKER),
     ).length
     assert.equal(reportsAfter, reportsBefore, '纯 human 回合不得向中枢投递汇报卡')
     assert.ok(recallAfter.nodes.length > nodesBefore, '纯 human 回合仍写 RecallGraph')
@@ -873,7 +873,7 @@ test('superagent12: 三终态覆盖——failed/aborted 同样汇报且 outcome 
     // 汇报落库握手为准，不把响应池清空当作业务完成条件。
     // 两个 worker 的汇报都入了中枢（renderer 卡片；握手已确保先后落库）
     const routerDetail = await kernel.getConversationDetail(ids.router!, { limit: 50 })
-    const reports = routerDetail.entries.filter((e) => e.kind === 'helm.input' && JSON.stringify(e.data).includes('superagent:worker-report'))
+    const reports = routerDetail.entries.filter((e) => e.kind === 'helmx.input' && JSON.stringify(e.data).includes('superagent:worker-report'))
     assert.equal(
       reports.filter((e) => JSON.stringify(e.data).includes(`"workerId":${w1.workerConversationId}`) && JSON.stringify(e.data).includes('"outcome":"failed"')).length,
       1,
@@ -912,7 +912,7 @@ test('superagent13: archive_worker——现读校验、busy 拒绝、标签替�
     await waitFor(() => kernel.getConversation(workerId).status === 'working')
     await assert.rejects(
       () => kernel.plugins.invokeAction('builtin:superagent', 'archive_worker', { workerConversationId: workerId }),
-      (err: unknown) => err instanceof HelmError && err.code === 'superagent_worker_busy',
+      (err: unknown) => err instanceof HelmxError && err.code === 'superagent_worker_busy',
     )
     await kernel.abortConversation(workerId)
     await kernel.waitForIdle(workerId).catch(() => {})
@@ -931,14 +931,14 @@ test('superagent13: archive_worker——现读校验、busy 拒绝、标签替�
     // 已归档会话不在活跃 index：再次归档显式 404（不静默成功）
     await assert.rejects(
       () => kernel.plugins.invokeAction('builtin:superagent', 'archive_worker', { workerConversationId: workerId }),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
     )
 
     // 伪 worker：人类自建 worker 标签会话不得被归档（未登记 index）
     const fake = await kernel.createConversation({ title: '伪 worker', profileId: 'assistant', tags: ['worker'] })
     await assert.rejects(
       () => kernel.plugins.invokeAction('builtin:superagent', 'archive_worker', { workerConversationId: fake.id }),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
     )
     // 归档后的会话再派工同名 threadKey 可复用（订阅已解绑）
     env.faux.setResponses([fauxAssistantMessage('再来一次启动')])
@@ -981,7 +981,7 @@ test('superagent14: liveTasks 阻止停用；空闲 Worker 不算在途；停用
     assert.deepEqual(kernel.plugins.listUi().filter((u) => u.pluginId === 'builtin:superagent'), [])
     await assert.rejects(
       () => kernel.plugins.invokeAction('builtin:superagent', 'archive_worker', { workerConversationId: 1 }),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_disabled',
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_disabled',
     )
   } finally {
     await env.close()
@@ -1090,9 +1090,9 @@ test('superagent16: UI 贡献——侧栏/分组/胶囊挂件/工具卡/时间�
 // ---------------------------------------------------------------------------
 
 test('superagent17: 持久 doc 损坏时启用显式失败（不静默重建）', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-superagent-corrupt-')
+  const dataDir = useTempDir(t, 'helmx-superagent-corrupt-')
   const faux1 = makeFauxProvider()
-  const first = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux1.provider] })
+  const first = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux1.provider] })
   try {
     await first.kernel.plugins.enable('builtin:superagent')
     // 经真实写路径写入坏值（模拟持久损坏）并落盘
@@ -1102,12 +1102,12 @@ test('superagent17: 持久 doc 损坏时启用显式失败（不静默重建）'
     await first.close()
   }
   // 重启：持久启停为 true → 注册期 service.start 读入坏 doc，启动显式失败
-  // （createHelm 如实 reject，不静默重建、不吞错）。
+  // （createHelmx 如实 reject，不静默重建、不吞错）。
   const faux2 = makeFauxProvider()
-  await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux2.provider] }).then(
+  await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux2.provider] }).then(
     () => assert.fail('损坏 doc 下启动应显式失败'),
     (err: unknown) => {
-      assert.ok(err instanceof HelmError, `应为 HelmError，实际 ${String(err)}`)
+      assert.ok(err instanceof HelmxError, `应为 HelmxError，实际 ${String(err)}`)
       assert.equal(err.code, 'superagent_doc_corrupt')
     },
   )
@@ -1154,11 +1154,11 @@ test('superagent 记忆归属: 已初始化文件被删后重启/superagent 重�
     // 外部删除已初始化的记忆文件
     rmSync(memoryPath)
 
-    // 重启整个内核（superagent + memory 均随 createHelm 重新自举）
+    // 重启整个内核（superagent + memory 均随 createHelmx 重新自举）
     const dataDir = env.dataDir
     await env.app.close()
     const faux2 = makeFauxProvider()
-    const app2 = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux2.provider] })
+    const app2 = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux2.provider] })
     try {
       assert.equal(existsSync(memoryPath), false, '重启自举不得补回已删除的记忆文件')
       // memory 检测：在 superagent 会话跑一回合，应发缺失告警（不重建）
@@ -1211,14 +1211,14 @@ test('superagent18: dispatch_worker 提交失败完整回滚（无僵尸 Worker�
     kernel.submitInput = async (conversationId, text, opts) => {
       const summary = kernel.getConversation(conversationId)
       if (summary.tags.includes('worker')) {
-        throw new HelmError('conversation_not_accepting', '测试注入：提交被拒绝', 409)
+        throw new HelmxError('conversation_not_accepting', '测试注入：提交被拒绝', 409)
       }
       return origSubmit(conversationId, text, opts)
     }
 
     await assert.rejects(
       () => kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: '会失败的任务', threadKey: 'locked-key' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'conversation_not_accepting',
+      (err: unknown) => err instanceof HelmxError && err.code === 'conversation_not_accepting',
     )
 
     // 回滚断言 1：index 无残留 worker 条目。

@@ -1,7 +1,7 @@
 import { useId, useMemo, useState } from 'react'
-import type { AskFieldSpec, AskSpec } from '@helm/protocol/browser'
+import type { AskFieldSpec, AskSpec } from '@helmx/protocol/browser'
 import { asksApi } from '../lib/api.js'
-import { HelmIcon, PopoverContent, PopoverRoot, PopoverTrigger, Select, StatusLight } from '@helm/plugin-client'
+import { HelmxIcon, PopoverContent, PopoverRoot, PopoverTrigger, Select, StatusLight } from '@helmx/plugin-client'
 import { useConversations, usePendingAsks, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { collectSubtreeIds } from './ancestry-model.js'
@@ -85,7 +85,7 @@ function AskFieldInput({
           disabled={disabled}
           onClick={() => onChange('true')}
         >
-          <HelmIcon name="check" size={12} />
+          <HelmxIcon name="check" size={12} />
           {t('composer.ask.approve')}
         </button>
         <button
@@ -94,7 +94,7 @@ function AskFieldInput({
           disabled={disabled}
           onClick={() => onChange('false')}
         >
-          <HelmIcon name="x" size={12} />
+          <HelmxIcon name="x" size={12} />
           {t('composer.ask.reject')}
         </button>
       </span>
@@ -115,7 +115,7 @@ function AskFieldInput({
       />
       {secret ? (
         <span className="ask-dock-secret-hint">
-          <HelmIcon name="lock" size={11} />
+          <HelmxIcon name="lock" size={11} />
           {t('composer.ask.secretHint')}
         </span>
       ) : null}
@@ -178,7 +178,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
                 aria-label={t('composer.ask.metaAria')}
                 title={t('composer.ask.metaAria')}
               >
-                <HelmIcon name="info" size={12} />
+                <HelmxIcon name="info" size={12} />
               </button>
             </PopoverTrigger>
             <PopoverContent align="start" className="ask-dock-meta-popover">
@@ -212,7 +212,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
             aria-label={t('composer.ask.openChildDrawer', { id: source.conversationId })}
             onClick={() => setActiveModal({ kind: 'conversation-drawer', conversationId: source.conversationId })}
           >
-            <HelmIcon name="corner-down-right" size={11} />
+            <HelmxIcon name="corner-down-right" size={11} />
             {t('composer.ask.fromSource', { id: source.conversationId })}
           </button>
         ) : null}
@@ -234,7 +234,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
             className="btn btn-ghost btn-sm ask-dock-snapshot-btn"
             onClick={() => setSnapshotOpen((v) => !v)}
           >
-            <HelmIcon name={snapshotOpen ? 'chevron-down' : 'chevron-right'} size={12} />
+            <HelmxIcon name={snapshotOpen ? 'chevron-down' : 'chevron-right'} size={12} />
             {t('composer.ask.terminalSnapshot')}
           </button>
           {snapshotOpen ? (
@@ -265,7 +265,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
       ) : null}
       {error !== null ? (
         <div className="callout callout--error">
-          <HelmIcon name="alert-circle" size={13} />
+          <HelmxIcon name="alert-circle" size={13} />
           <span className="callout-text">{error}</span>
         </div>
       ) : null}
@@ -279,7 +279,7 @@ function AskCard({ ask, source }: { ask: AskSpec; source?: AskSourceInfo }) {
           disabled={submitting !== null || missingRequired.length > 0}
           onClick={() => void submit()}
         >
-          <HelmIcon name={submitting === 'answer' ? 'loader' : 'check'} size={12} />
+          <HelmxIcon name={submitting === 'answer' ? 'loader' : 'check'} size={12} />
           {t('composer.ask.submit')}
         </button>
       </div>

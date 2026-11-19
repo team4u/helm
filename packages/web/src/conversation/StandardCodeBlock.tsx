@@ -4,7 +4,7 @@
  */
 import type { ReactNode } from 'react'
 import { SyntaxCode } from './SyntaxCode.js'
-import { CopyButton } from '@helm/plugin-client'
+import { CopyButton } from '@helmx/plugin-client'
 
 export function StandardCodeBlock({ language, code }: { language: string; code: string }): ReactNode {
   return (

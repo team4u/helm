@@ -7,7 +7,7 @@
 import type { Context } from '@earendil-works/chord/context'
 import { defineTool, type ToolExecutionApi, type ToolRegistration } from '@earendil-works/pi-durable'
 import { bool, obj, opt, str, unsafe } from '@earendil-works/pi-schema'
-import { safeResultText, type ActionManifest } from '@helm/protocol'
+import { safeResultText, type ActionManifest } from '@helmx/protocol'
 
 /** Host capability port for kernel tools. */
 export interface KernelToolHost {

@@ -11,8 +11,8 @@ import type { AssistantMessageEventStream } from '@earendil-works/pi-ai/utils/ev
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
 import type { Models, Provider } from '@earendil-works/pi-ai/models'
 import type { ModelsStore } from '@earendil-works/pi-ai'
-import type { ModelCatalog, ModelProvidersRefreshResult } from '@helm/protocol'
-import { HelmError } from '@helm/protocol'
+import type { ModelCatalog, ModelProvidersRefreshResult } from '@helmx/protocol'
+import { HelmxError } from '@helmx/protocol'
 import type { ConfigService, CredentialService, ProviderService, SecretStash } from '../services/index.js'
 import { listModelCatalog, listModelProviders, buildModels } from './models.js'
 
@@ -26,8 +26,8 @@ const builtinProviderIds = new Set(builtinProviders().map((p) => p.id))
  */
 function assertModelsStoreHealthy(result: { errors: ReadonlyMap<string, Error> }): void {
   for (const [providerId, err] of result.errors) {
-    if (err instanceof HelmError && err.code === 'models_store_corrupted') {
-      throw new HelmError(
+    if (err instanceof HelmxError && err.code === 'models_store_corrupted') {
+      throw new HelmxError(
         'models_store_corrupted',
         `models-store.json is corrupted (discovered while reading ${providerId}): ${err.message}`,
         500,
@@ -43,15 +43,15 @@ function assertModelsStoreHealthy(result: { errors: ReadonlyMap<string, Error> }
 function parseDisabledModelsConfig(raw: unknown): Record<string, string[]> {
   if (raw === undefined || raw === null) return {}
   if (typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new HelmError('config_corrupt', 'config.json.disabledModels must be an object (providerId -> modelId[])', 500)
+    throw new HelmxError('config_corrupt', 'config.json.disabledModels must be an object (providerId -> modelId[])', 500)
   }
   const result: Record<string, string[]> = {}
   for (const [providerId, ids] of Object.entries(raw as Record<string, unknown>)) {
     if (typeof providerId !== 'string' || providerId === '') {
-      throw new HelmError('config_corrupt', `config.json.disabledModels key must be a non-empty provider ID: ${String(providerId)}`, 500)
+      throw new HelmxError('config_corrupt', `config.json.disabledModels key must be a non-empty provider ID: ${String(providerId)}`, 500)
     }
     if (!Array.isArray(ids) || !ids.every((id) => typeof id === 'string' && id !== '')) {
-      throw new HelmError('config_corrupt', `config.json.disabledModels['${providerId}'] must be an array of non-empty strings`, 500)
+      throw new HelmxError('config_corrupt', `config.json.disabledModels['${providerId}'] must be an array of non-empty strings`, 500)
     }
     result[providerId] = [...(ids as string[])]
   }
@@ -68,15 +68,15 @@ function parseDisabledModelsConfig(raw: unknown): Record<string, string[]> {
 function parseModelThinkingLevelsConfig(raw: unknown): Record<string, string> {
   if (raw === undefined || raw === null) return {}
   if (typeof raw !== 'object' || Array.isArray(raw)) {
-    throw new HelmError('config_corrupt', 'config.json.modelThinkingLevels must be an object (model reference -> thinking level)', 500)
+    throw new HelmxError('config_corrupt', 'config.json.modelThinkingLevels must be an object (model reference -> thinking level)', 500)
   }
   const result: Record<string, string> = {}
   for (const [ref, level] of Object.entries(raw as Record<string, unknown>)) {
     if (typeof ref !== 'string' || !/^[^/\s]+\/[^\s]+$/.test(ref)) {
-      throw new HelmError('config_corrupt', `config.json.modelThinkingLevels key must be a 'provider/model' reference: ${ref}`, 500)
+      throw new HelmxError('config_corrupt', `config.json.modelThinkingLevels key must be a 'provider/model' reference: ${ref}`, 500)
     }
     if (typeof level !== 'string' || level.trim() === '') {
-      throw new HelmError('config_corrupt', `config.json.modelThinkingLevels['${ref}'] must be a non-empty thinking level`, 500)
+      throw new HelmxError('config_corrupt', `config.json.modelThinkingLevels['${ref}'] must be a non-empty thinking level`, 500)
     }
     result[ref] = level
   }
@@ -204,7 +204,7 @@ export class ModelRegistry {
       const configured = raw['model']
       if (configured !== undefined && configured !== '') {
         if (typeof configured !== 'string' || !/^[^/\s]+\/[^\s]+$/.test(configured)) {
-          throw new HelmError('config_corrupt', 'config.json.model must be a string in provider/model format', 500)
+          throw new HelmxError('config_corrupt', 'config.json.model must be a string in provider/model format', 500)
         }
         this.defaultModel = configured
       }
@@ -221,7 +221,7 @@ export class ModelRegistry {
       const configuredCompaction = raw['compactionModel']
       if (configuredCompaction !== undefined && configuredCompaction !== '') {
         if (typeof configuredCompaction !== 'string' || !/^[^/\s]+\/[^\s]+$/.test(configuredCompaction)) {
-          throw new HelmError('config_corrupt', 'config.json.compactionModel must be a string in provider/model format', 500)
+          throw new HelmxError('config_corrupt', 'config.json.compactionModel must be a string in provider/model format', 500)
         }
         this.defaultCompactionModel = configuredCompaction
       }
@@ -243,7 +243,7 @@ export class ModelRegistry {
 
   /** Reasoning effort enum validation callback (host-injected so this module avoids depending on spawn's THINKING_LEVELS). */
   private configuredThinkingLevelValidated = async (_level: string): Promise<void> => {
-    throw new HelmError('config_corrupt', 'Internal error: thinkingLevel validator was not injected', 500)
+    throw new HelmxError('config_corrupt', 'Internal error: thinkingLevel validator was not injected', 500)
   }
 
   /** Inject reasoning effort enum validator (call right after construction, before `loadDefaultsFromConfig`). */
@@ -342,16 +342,16 @@ export class ModelRegistry {
     validateThinkingLevel: (level: string) => void,
   ): Record<string, string> {
     if (levels === null || typeof levels !== 'object' || Array.isArray(levels)) {
-      throw new HelmError('validation_error', 'modelThinkingLevels must be an object mapping model references to thinking levels', 400)
+      throw new HelmxError('validation_error', 'modelThinkingLevels must be an object mapping model references to thinking levels', 400)
     }
     const validated: Record<string, string> = {}
     for (const [model, rawLevel] of Object.entries(levels)) {
       if (!/^[^/\s]+\/[^\s]+$/.test(model)) {
-        throw new HelmError('validation_error', `modelThinkingLevels key must be a 'provider/model' reference: ${model}`, 400)
+        throw new HelmxError('validation_error', `modelThinkingLevels key must be a 'provider/model' reference: ${model}`, 400)
       }
       this.parseModelRefOrThrow(model)
       if (typeof rawLevel !== 'string' || rawLevel.trim() === '') {
-        throw new HelmError('validation_error', `modelThinkingLevels['${model}'] must be a non-empty thinking level`, 400)
+        throw new HelmxError('validation_error', `modelThinkingLevels['${model}'] must be a non-empty thinking level`, 400)
       }
       const level = rawLevel.trim()
       validateThinkingLevel(level)
@@ -365,7 +365,7 @@ export class ModelRegistry {
     validateThinkingLevel: (level: string) => void,
   ): { model: string; level: string } {
     if (!/^[^/\s]+\/[^\s]+$/.test(update.model)) {
-      throw new HelmError('validation_error', `modelThinking key must be a 'provider/model' reference: ${update.model}`, 400)
+      throw new HelmxError('validation_error', `modelThinking key must be a 'provider/model' reference: ${update.model}`, 400)
     }
     this.parseModelRefOrThrow(update.model)
     const level = update.level.trim()
@@ -377,7 +377,7 @@ export class ModelRegistry {
   parseModelRefOrThrow(ref: string): { provider: string; modelId: string } {
     const slash = ref.indexOf('/')
     if (slash <= 0 || slash >= ref.length - 1) {
-      throw new HelmError('validation_error', `Model reference must be in 'provider/model' format: ${ref}`)
+      throw new HelmxError('validation_error', `Model reference must be in 'provider/model' format: ${ref}`)
     }
     return { provider: ref.slice(0, slash), modelId: ref.slice(slash + 1) }
   }
@@ -400,7 +400,7 @@ export class ModelRegistry {
   ): Promise<void> {
     const trimmedModel = model.trim()
     if (trimmedModel === '') {
-      throw new HelmError('validation_error', 'Per-model thinking default requires a model reference', 400)
+      throw new HelmxError('validation_error', 'Per-model thinking default requires a model reference', 400)
     }
     const ref = this.parseModelRefOrThrow(trimmedModel)
     this.assertModelEnabled(ref.provider, ref.modelId)
@@ -427,9 +427,9 @@ export class ModelRegistry {
   /** Reject explicitly when a model is disabled (`409 model_disabled`), reused across explicit selection paths. */
   assertModelEnabled(providerId: string, modelId: string): void {
     if (this.isModelDisabled(providerId, modelId)) {
-      throw new HelmError(
+      throw new HelmxError(
         'model_disabled',
-        `Model ${providerId}/${modelId} is disabled; re-enable it in Settings -> Models or via 'helm models filter' before selecting it`,
+        `Model ${providerId}/${modelId} is disabled; re-enable it in Settings -> Models or via 'helmx models filter' before selecting it`,
         409,
         { provider: providerId, modelId },
       )
@@ -444,14 +444,14 @@ export class ModelRegistry {
   async setDisabledModels(provider: string | undefined, modelIds: string[]): Promise<ModelCatalog> {
     if (provider === undefined || provider === '') {
       if (modelIds.length > 0) {
-        throw new HelmError('validation_error', 'Clearing disabled models without specifying a provider requires an empty disabledModels array', 400)
+        throw new HelmxError('validation_error', 'Clearing disabled models without specifying a provider requires an empty disabledModels array', 400)
       }
     }
     const unique: string[] = []
     for (const id of modelIds) {
       // `modelId` may contain `/` (aggregate gateways like OpenRouter/Magpie name models `'vendor/model'`; the slash belongs to the model ID).
       if (typeof id !== 'string' || id === '') {
-        throw new HelmError('validation_error', `Model ID must be a non-empty string: ${String(id)}`, 400)
+        throw new HelmxError('validation_error', `Model ID must be a non-empty string: ${String(id)}`, 400)
       }
       if (!unique.includes(id)) unique.push(id)
     }
@@ -497,7 +497,7 @@ export class ModelRegistry {
     }
     const collision = providerConfigs.find((config) => this.runtimeProviders.has(config.id))
     if (collision) {
-      throw new HelmError('runtime_provider_conflict', `Gateway '${collision.id}' conflicts with a plugin-registered provider`, 409)
+      throw new HelmxError('runtime_provider_conflict', `Gateway '${collision.id}' conflicts with a plugin-registered provider`, 409)
     }
     const models = buildModels({
       providers: providerConfigs,
@@ -527,20 +527,20 @@ export class ModelRegistry {
    */
   async registerRuntimeProvider(provider: Provider, pluginId?: string): Promise<() => Promise<void>> {
     if (this.externalModels) {
-      throw new HelmError(
+      throw new HelmxError(
         'runtime_provider_unsupported',
         'Runtime provider registration is unsupported when Models is externally injected (caller owns model set)',
         400,
       )
     }
     if (typeof provider?.id !== 'string' || provider.id === '') {
-      throw new HelmError('validation_error', `Runtime provider ID must be a non-empty string: ${String(provider?.id)}`, 400)
+      throw new HelmxError('validation_error', `Runtime provider ID must be a non-empty string: ${String(provider?.id)}`, 400)
     }
     // Capture this registration's wrapped instance so stale disposers never delete a later same-named registration.
     const registered = await this.enqueueModelsChange(async () => {
       const conflict = await this.findRuntimeProviderConflict(provider.id)
       if (conflict !== undefined) {
-        throw new HelmError('runtime_provider_conflict', conflict, 409)
+        throw new HelmxError('runtime_provider_conflict', conflict, 409)
       }
       const registered = this.wrapRuntimeProvider(provider)
       this.runtimeProviders.set(provider.id, registered)
@@ -592,7 +592,7 @@ export class ModelRegistry {
       if (this.runtimeProviders.get(provider.id) !== provider) return
       const owner = this.runtimeProviderOwners.get(provider.id)
       if ((this.runtimeProviderUsage.get(provider.id) ?? 0) > 0) {
-        throw new HelmError('plugin_has_live_tasks', `Provider '${provider.id}' still has requests in flight`, 409, { providers: [provider.id] })
+        throw new HelmxError('plugin_has_live_tasks', `Provider '${provider.id}' still has requests in flight`, 409, { providers: [provider.id] })
       }
       // No `await` between usage check and retiring mark (synchronous inside the serial chain): ensures any new
       // stream attempt during `rebuild`'s await window (before `modelsCurrent` swaps) fails explicitly, guaranteeing
@@ -631,9 +631,9 @@ export class ModelRegistry {
     allowNetwork?: boolean
     force?: boolean
   }): Promise<ModelProvidersRefreshResult> {
-    if (isClosed()) throw new HelmError('runtime_closing', 'Kernel is closing; cannot refresh model catalog', 409)
+    if (isClosed()) throw new HelmxError('runtime_closing', 'Kernel is closing; cannot refresh model catalog', 409)
     if (this.externalModels) {
-      throw new HelmError(
+      throw new HelmxError(
         'runtime_provider_unsupported',
         'Dynamic catalog refresh is unsupported when Models is externally injected (caller owns model set)',
         400,
@@ -652,8 +652,8 @@ export class ModelRegistry {
     try {
       for (const id of options?.providers ?? []) {
         const provider = instanceAtStart.getProvider(id)
-        if (!provider) throw new HelmError('model_provider_not_found', `Provider '${id}' is not registered`, 404)
-        if (!provider.refreshModels) throw new HelmError('model_provider_static', `Provider '${id}' uses a static model catalog and does not support dynamic refresh`, 400)
+        if (!provider) throw new HelmxError('model_provider_not_found', `Provider '${id}' is not registered`, 404)
+        if (!provider.refreshModels) throw new HelmxError('model_provider_static', `Provider '${id}' uses a static model catalog and does not support dynamic refresh`, 400)
       }
       result = await instanceAtStart.refresh({
         signal: controller.signal,
@@ -701,7 +701,7 @@ export class ModelRegistry {
       if (owner === pluginId && (this.runtimeProviderUsage.get(id) ?? 0) > 0) busy.push(id)
     }
     if (busy.length > 0) {
-      throw new HelmError(
+      throw new HelmxError(
         'plugin_has_live_tasks',
         `Plugin '${pluginId}' still has in-flight model requests on runtime providers: ${busy.join(', ')}`,
         409,
@@ -715,7 +715,7 @@ export class ModelRegistry {
     for (const id of ids) {
       // Fail fast during unregistration window so new requests don't slip through after ownership deletion.
       if (this.retiringRuntimeProviders.has(id)) {
-        throw new HelmError(
+        throw new HelmxError(
           'runtime_provider_retiring',
           `Provider '${id}' is currently retiring (plugin disabling); rejecting new model request`,
           409,

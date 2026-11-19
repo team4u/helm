@@ -2,7 +2,7 @@
  * 归属权实时投射、受管自举资产与 dispatch_worker 跨平台派工集成验证（共享主实例 + 用户既有资产独立实例）。
  */
 import { fauxAssistantMessage } from '@earendil-works/pi-ai/providers/faux'
-import { HelmError, type HelmEventFrame } from '@helm/protocol'
+import { HelmxError, type HelmxEventFrame } from '@helmx/protocol'
 import assert from 'node:assert/strict'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -15,7 +15,7 @@ const ROOT_CONVERSATION_ID = 1 as const
 let env: HubTestEnv
 
 before(async () => {
-  env = await openHubTestEnv({ prefix: 'helm-ownership-' })
+  env = await openHubTestEnv({ prefix: 'helmx-ownership-' })
 }, { timeout: 60_000 })
 
 after(async () => {
@@ -27,7 +27,7 @@ async function residentIds(target: HubTestEnv): Promise<{ router?: number; watch
   const db = new DatabaseSync(join(target.dataDir, 'state.sqlite'), { readOnly: true })
   try {
     const row = db
-      .prepare("SELECT value FROM helm_plugin_docs WHERE plugin_id = '__global' AND name = 'builtin:superagent:index'")
+      .prepare("SELECT value FROM helmx_plugin_docs WHERE plugin_id = '__global' AND name = 'builtin:superagent:index'")
       .get() as { value: string } | undefined
     assert.ok(row)
     const doc = JSON.parse(row.value) as { routerConversationId?: number; watchdogConversationId?: number }
@@ -45,19 +45,19 @@ test('ownedBy 实时投射与事件广播、superagent 新自举资产标记及 
   const human = await kernel.createConversation({ title: 'human conversation', profileId: 'assistant' })
   assert.equal(human.ownedBy, 'human')
 
-  const frames: HelmEventFrame[] = []
+  const frames: HelmxEventFrame[] = []
   const off = kernel.events.subscribe((frame) => frames.push(frame))
   try {
     frames.length = 0
     kernel.markConversationOwnership(human.id, 'human')
     assert.equal(frames.filter((f) => f.event.type === 'conversation.upsert').length, 0)
 
-    kernel.markConversationOwnership(human.id, 'helm')
+    kernel.markConversationOwnership(human.id, 'helmx')
     const upsert = frames.find(
       (f) => f.event.type === 'conversation.upsert' && (f.event as { conversation?: { id?: number } }).conversation?.id === human.id,
     )
-    assert.equal((upsert?.event as { conversation?: { ownedBy?: string } })?.conversation?.ownedBy, 'helm')
-    assert.equal(kernel.getConversation(human.id).ownedBy, 'helm')
+    assert.equal((upsert?.event as { conversation?: { ownedBy?: string } })?.conversation?.ownedBy, 'helmx')
+    assert.equal(kernel.getConversation(human.id).ownedBy, 'helmx')
 
     frames.length = 0
     kernel.markConversationOwnership(human.id, 'human')
@@ -69,15 +69,15 @@ test('ownedBy 实时投射与事件广播、superagent 新自举资产标记及 
     off()
   }
 
-  // 2. 启用 builtin:superagent：常驻 router/watchdog 为 helm，新自举 Profile/Skill 携带受管标记
+  // 2. 启用 builtin:superagent：常驻 router/watchdog 为 helmx，新自举 Profile/Skill 携带受管标记
   await kernel.plugins.enable('builtin:superagent')
   const ids = await residentIds(env)
   assert.ok(ids.router && ids.watchdog)
-  assert.equal(kernel.getConversation(ids.router).ownedBy, 'helm')
-  assert.equal(kernel.getConversation(ids.watchdog).ownedBy, 'helm')
+  assert.equal(kernel.getConversation(ids.router).ownedBy, 'helmx')
+  assert.equal(kernel.getConversation(ids.watchdog).ownedBy, 'helmx')
   const listed = new Map(kernel.listConversations().map((s) => [s.id, s.ownedBy]))
-  assert.equal(listed.get(ids.router), 'helm')
-  assert.equal(listed.get(ids.watchdog), 'helm')
+  assert.equal(listed.get(ids.router), 'helmx')
+  assert.equal(listed.get(ids.watchdog), 'helmx')
   assert.equal(listed.get(ROOT_CONVERSATION_ID), 'human')
 
   const superagentJson = JSON.parse(
@@ -100,7 +100,7 @@ test('ownedBy 实时投射与事件广播、superagent 新自举资产标记及 
   assert.match(readFileSync(join(env.dataDir, 'skills', 'watchdog-playbooks', 'SKILL.md'), 'utf8'), /^managedByPlugin: builtin:superagent$/m)
   assert.equal((await kernel.skills.list()).find((s) => s.id === 'watchdog-playbooks')?.managedByPlugin, 'builtin:superagent')
 
-  // 3. dispatch_worker 归属权（helm）、显式 nodeId 与跨平台 cwd（POSIX / 盘符反斜杠与正斜杠 / UNC / 远端节点）
+  // 3. dispatch_worker 归属权（helmx）、显式 nodeId 与跨平台 cwd（POSIX / 盘符反斜杠与正斜杠 / UNC / 远端节点）
   env.faux.setResponses(Array.from({ length: 12 }, () => fauxAssistantMessage('receives')))
   for (const c of [
     { input: { prompt: 'ownership verify task' }, expectNode: 'local' },
@@ -114,7 +114,7 @@ test('ownedBy 实时投射与事件广播、superagent 新自举资产标记及 
       workerConversationId: number
     }
     const summary = kernel.getConversation(dispatched.workerConversationId)
-    assert.equal(summary.ownedBy, 'helm')
+    assert.equal(summary.ownedBy, 'helmx')
     if (c.expectNode !== undefined) assert.equal(summary.nodeId, c.expectNode)
     if (c.expectCwd !== undefined) assert.equal(summary.cwd, c.expectCwd)
     await kernel.waitForIdle(dispatched.workerConversationId)
@@ -124,19 +124,19 @@ test('ownedBy 实时投射与事件广播、superagent 新自举资产标记及 
   for (const badCwd of ['repo/app', 'C:repo']) {
     await assert.rejects(
       () => kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: 'x', cwd: badCwd }),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && /跨平台绝对路径/.test(err.message),
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && /跨平台绝对路径/.test(err.message),
     )
   }
   for (const badNodeId of ['a b', 'a/b']) {
     await assert.rejects(
       () => kernel.plugins.invokeAction('builtin:superagent', 'dispatch_worker', { prompt: 'x', nodeId: badNodeId }),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && /nodeId/.test(err.message),
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && /nodeId/.test(err.message),
     )
   }
 })
 
 test('既有自定义 Profile/Skill 逐字节保持且仅补齐缺失文件（partial-start 幂等，零迁移回填）', { timeout: 60_000 }, async () => {
-  const custom = await openHubTestEnv({ prefix: 'helm-ownership-custom-' })
+  const custom = await openHubTestEnv({ prefix: 'helmx-ownership-custom-' })
   try {
     const profileJsonRaw = JSON.stringify({ id: 'superagent', name: 'I router hub', model: 'faux/faux-1' }, null, 2) + '\n'
     const systemMdRaw = '# I router hub hint\n'

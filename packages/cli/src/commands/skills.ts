@@ -1,5 +1,5 @@
 /** Skills commands: skills list / read. */
-import type { SkillSummary } from '@helm/protocol'
+import type { SkillSummary } from '@helmx/protocol'
 import { CliError } from '../errors.js'
 import { flagValue, parseFlags } from '../args.js'
 import type { CommandContext, CommandSpec } from './shared.js'

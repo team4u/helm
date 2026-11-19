@@ -11,15 +11,15 @@
  * `canonicalPath`/`realpath` so symlink writes hit real files and align mutex keys; new files write at lexical
  * absolute paths; read-modify-write windows share per-node canonical path mutexes via `env/file-mutation-queue`
  * with plugin APIs. On success, `edit` computes real line-level diffs inside the lock prior to writing
- * (sole implementation in `runtime/tool-edit-diff.ts`; matches `@helm/protocol` `EDIT_TOOL_RESULT_SCHEMA`).
+ * (sole implementation in `runtime/tool-edit-diff.ts`; matches `@helmx/protocol` `EDIT_TOOL_RESULT_SCHEMA`).
  */
 import type { JsonValue } from '@earendil-works/chord/json'
 import { defineTool, type ToolRegistration } from '@earendil-works/pi-durable'
 import { bool, obj, opt, str } from '@earendil-works/pi-schema'
-import { EDIT_TOOL_RESULT_SCHEMA, isAbsoluteTargetPath, type EditToolResult } from '@helm/protocol'
+import { EDIT_TOOL_RESULT_SCHEMA, isAbsoluteTargetPath, type EditToolResult } from '@helmx/protocol'
 import { computeEditDiff } from '../tool-edit-diff.js'
 import { targetPlatformForNode } from '../target-platform.js'
-import { throwIfToolAborted, type HelmToolDeps } from '../tool-deps.js'
+import { throwIfToolAborted, type HelmxToolDeps } from '../tool-deps.js'
 import { cwdScopeViolationText } from './cwd-scope.js'
 import { resolveTargetPath } from './target-path.js'
 import { resolveToolTarget } from './tool-target.js'
@@ -40,7 +40,7 @@ const readParameters = obj({
  * absolute paths and `../` traversals are permitted (matching `bash`). Supports regular files only up to
  * 128 KiB; resolves symlinks remotely via `canonicalPath` before `fileInfo` (`lstat` semantics).
  */
-export function createReadTool(deps: HelmToolDeps): ToolRegistration<typeof readParameters> {
+export function createReadTool(deps: HelmxToolDeps): ToolRegistration<typeof readParameters> {
   return defineTool({
     name: 'read',
     // Pure read-only with deterministic callId spill slots: safe to replay after interruption.
@@ -158,7 +158,7 @@ const editTextNotUnique = (abs: string, count: number): string =>
 const editOkText = (abs: string, nodeId: string): string => `edit_ok: ${abs} (node ${nodeId}, replaced 1 occurrence)`
 
 /** `write` tool: writes UTF-8 text files on conversation `(nodeId, cwd)` (shares path/permission boundary with `bash`). */
-export function createWriteTool(deps: HelmToolDeps): ToolRegistration<typeof writeParameters> {
+export function createWriteTool(deps: HelmxToolDeps): ToolRegistration<typeof writeParameters> {
   return defineTool({
     name: 'write',
     description:
@@ -285,11 +285,11 @@ function countOccurrences(haystack: string, needle: string): number {
  * `edit` tool: exact text replacement. `oldText` must match uniquely once in the target file (fails loudly
  * when missing or ambiguous, never fuzzy-matching or skipping); `newText` is substituted literally (ignoring
  * `$&` replacement patterns so behavior matches diff calculation). Shares path/permission boundary with `write`
- * and `bash`. Structured output conforms to `@helm/protocol` `EditToolResult` and mirrors to `details` (persisted
+ * and `bash`. Structured output conforms to `@helmx/protocol` `EditToolResult` and mirrors to `details` (persisted
  * for Web diff rendering while `structuredOutput` feeds embedded callers). Diff runs inside the canonical mutex
  * lock prior to writing (if `computeEditDiff` throws, returns `edit_failed` without modifying the file).
  */
-export function createEditTool(deps: HelmToolDeps): ToolRegistration<typeof editParameters> {
+export function createEditTool(deps: HelmxToolDeps): ToolRegistration<typeof editParameters> {
   return defineTool({
     name: 'edit',
     description:

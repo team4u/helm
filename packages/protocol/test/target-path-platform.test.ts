@@ -15,7 +15,7 @@
  */
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { normalizeTargetPath, targetPlatformOf } from '@helm/protocol'
+import { normalizeTargetPath, targetPlatformOf } from '@helmx/protocol'
 
 describe('normalizeTargetPath win32 target: native Windows shape lexical normalization', () => {
   it('drive-absolute (including mixed separators and dot segments) normalizes to the backslash canonical form', { timeout: 60_000 }, () => {

@@ -2,9 +2,9 @@
  * ProviderService: manages providers.json (custom model gateway manifest).
  * Iron rule: this file must never contain secret fields; API keys are stored exclusively in
  * credentials.json via CredentialService. Structural validation happens at the boundary, and secret fields are explicitly stripped/rejected.
- * ProviderConfig shape conforms to @helm/protocol.
+ * ProviderConfig shape conforms to @helmx/protocol.
  */
-import { isJsonObject, type ProviderConfig } from '@helm/protocol'
+import { isJsonObject, type ProviderConfig } from '@helmx/protocol'
 
 export type { ProviderConfig }
 import { join } from 'node:path'

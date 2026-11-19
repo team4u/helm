@@ -21,7 +21,7 @@ import { createModels } from '@earendil-works/pi-ai/models'
 import { fauxAssistantMessage, fauxProvider } from '@earendil-works/pi-ai/providers/faux'
 import type { Provider } from '@earendil-works/pi-ai/models'
 import type { TranscriptContext } from '@earendil-works/pi-ai'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -32,7 +32,7 @@ import { KernelRuntime } from '../src/runtime/index.js'
 let rootDir: string
 
 before(() => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-kernel-text-port-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-kernel-text-port-'))
 })
 
 after(() => {
@@ -190,7 +190,7 @@ describe('completeConversationText (generic kernel model port)', () => {
       await assert.rejects(
         env.kernel.completeConversationText({ conversationId: 1, systemPrompt: 's', text: 't' }),
         (e: unknown) => {
-          assert.ok(e instanceof HelmError)
+          assert.ok(e instanceof HelmxError)
           assert.equal(e.code, 'model_completion_unavailable')
           assert.ok(e.message.includes('error'))
           return true
@@ -208,7 +208,7 @@ describe('completeConversationText (generic kernel model port)', () => {
       await assert.rejects(
         env.kernel.completeConversationText({ conversationId: 1, systemPrompt: 's', text: 't' }),
         (e: unknown) => {
-          assert.ok(e instanceof HelmError)
+          assert.ok(e instanceof HelmxError)
           assert.equal(e.code, 'model_completion_unavailable')
           return true
         },
@@ -224,7 +224,7 @@ describe('completeConversationText (generic kernel model port)', () => {
       await assert.rejects(
         env.kernel.completeConversationText({ conversationId: 999_999, systemPrompt: 's', text: 't' }),
         (e: unknown) => {
-          assert.ok(e instanceof HelmError)
+          assert.ok(e instanceof HelmxError)
           assert.equal(e.code, 'not_found')
           return true
         },
@@ -255,7 +255,7 @@ describe('completeConversationText (generic kernel model port)', () => {
       await assert.rejects(
         kernel.completeConversationText({ conversationId: 1, systemPrompt: 's', text: 't' }),
         (e: unknown) => {
-          assert.ok(e instanceof HelmError)
+          assert.ok(e instanceof HelmxError)
           assert.equal(e.code, 'model_not_configured')
           return true
         },

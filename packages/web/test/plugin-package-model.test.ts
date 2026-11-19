@@ -9,7 +9,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { PluginDoctorReport, PluginPackageSource } from '@helm/protocol'
+import type { PluginDoctorReport, PluginPackageSource } from '@helmx/protocol'
 import {
   buildDoctorCheckItems,
   buildDoctorConclusion,
@@ -33,7 +33,7 @@ import { createWebTranslator } from '../src/i18n/catalog.js'
 
 test('detectPluginSourceKind：npm 说明符识别（scoped / 范围 / 精确版本）', { timeout: 60_000 }, () => {
   assert.deepEqual(detectPluginSourceKind('npm:@scope/pkg@1.0.0'), { kind: 'npm', label: 'npm package' })
-  assert.deepEqual(detectPluginSourceKind('npm:helm-plugin-foo@^1.2.0'), { kind: 'npm', label: 'npm package' })
+  assert.deepEqual(detectPluginSourceKind('npm:helmx-plugin-foo@^1.2.0'), { kind: 'npm', label: 'npm package' })
   assert.deepEqual(detectPluginSourceKind('  npm:plain-pkg  '), { kind: 'npm', label: 'npm package' })
   assert.equal(isNpmSource('npm:pkg'), true)
   assert.equal(isNpmSource('npm:'), false, 'npm: 后无内容不识别')
@@ -42,7 +42,7 @@ test('detectPluginSourceKind：npm 说明符识别（scoped / 范围 / 精确版
 
 test('detectPluginSourceKind：git 来源识别（git repo/ref 与 HTTPS Git URL）', { timeout: 60_000 }, () => {
   assert.deepEqual(detectPluginSourceKind('git:https://github.com/user/repo.git@dev'), { kind: 'git', label: 'Git repository' })
-  assert.deepEqual(detectPluginSourceKind('https://github.com/user/helm-plugin-foo.git'), { kind: 'git', label: 'Git repository' })
+  assert.deepEqual(detectPluginSourceKind('https://github.com/user/helmx-plugin-foo.git'), { kind: 'git', label: 'Git repository' })
   assert.deepEqual(detectPluginSourceKind('https://github.com/user/repo'), { kind: 'git', label: 'Git repository' })
   assert.deepEqual(detectPluginSourceKind('https://github.com/user/repo.git#v2.1.0'), { kind: 'git', label: 'Git repository' })
   assert.equal(isGitSource('git:user/repo@main'), true)
@@ -165,7 +165,7 @@ test('pluginPackageErrorText：普通错误与非 Error 值如实回显', { time
 // ---------------------------------------------------------------------------
 
 test('extractDoctorReport：从 ApiClientError.details.report 提取真实 Hub 422 形状报告', { timeout: 60_000 }, () => {
-  // 真实 Hub：HelmError('plugin_package_doctor_failed', …, 422, { source, staging, report })
+  // 真实 Hub：HelmxError('plugin_package_doctor_failed', …, 422, { source, staging, report })
   // 经 HTTP 错误信封 { error: { code, message, details } } 到达 ApiClientError.details.report
   const err = new ApiClientError(
     'plugin_package_doctor_failed',

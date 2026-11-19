@@ -16,7 +16,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
-import { useTempDir, sanitizedHostEnv } from '@helm/test-kit/node';
+import { useTempDir, sanitizedHostEnv } from '@helmx/test-kit/node';
 import { unpackPayloadTarball } from '../../src/launcher/tarball.js';
 import { stageHubRelease } from '../../src/launcher/staging.js';
 import {
@@ -61,7 +61,7 @@ function fileMember(name: string, content = 'x'): Buffer[] {
 }
 
 test('a well-formed package/ archive unpacks to the destination root with the prefix stripped', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-untar-');
+  const root = useTempDir(t, 'helmx-launcher-untar-');
   const payloadDir = path.join(root, 'payload');
   await writeFakePayload({ dir: payloadDir, pkgName: PKG, version: '1.0.0' });
   const tgz = await fixtureTarballPacker()(payloadDir);
@@ -76,7 +76,7 @@ test('a well-formed package/ archive unpacks to the destination root with the pr
 });
 
 test('unpack rejects links, escapes, foreign roots, and backslashes with explicit errors', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-untarevil-');
+  const root = useTempDir(t, 'helmx-launcher-untarevil-');
   const dest = path.join(root, 'dest');
   const write = async (name: string, members: Buffer[]): Promise<string> => {
     const file = path.join(root, name);
@@ -134,7 +134,7 @@ test('unpack rejects links, escapes, foreign roots, and backslashes with explici
 });
 
 test('unpack rejects empty archives, directory-only archives, and missing package.json', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-untarempty-');
+  const root = useTempDir(t, 'helmx-launcher-untarempty-');
   const dest = path.join(root, 'dest');
   await fsp.mkdir(dest, { recursive: true });
 
@@ -154,7 +154,7 @@ test('unpack rejects empty archives, directory-only archives, and missing packag
 });
 
 test('unpack refuses corrupt archives instead of partial extraction', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-untarcorrupt-');
+  const root = useTempDir(t, 'helmx-launcher-untarcorrupt-');
   const dest = path.join(root, 'dest');
   await fsp.mkdir(dest, { recursive: true });
 
@@ -177,11 +177,11 @@ test('unpack refuses corrupt archives instead of partial extraction', { timeout:
 });
 
 test('golden: registry payload embedding file: tgz dependencies stages with a real npm install', { timeout: 120_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-goldennested-');
+  const root = useTempDir(t, 'helmx-launcher-goldennested-');
   const tarballPath = await prepareNestedDepPayload(root, '1.0.0', PKG);
   const registry = await createFakeRegistry(PKG, '1.0.0');
   await registry.serve('1.0.0', tarballPath);
-  const { io } = captureIo(sanitizedHostEnv({ HELM_PAYLOAD_PACKAGE: PKG }));
+  const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
 
   const staged = await stageHubRelease({
     io,
@@ -203,9 +203,9 @@ test('golden: registry payload embedding file: tgz dependencies stages with a re
 });
 
 test('golden: local --tarball payload embedding file: tgz dependencies installs and self-checks', { timeout: 120_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-launcher-goldennestedtgz-');
+  const root = useTempDir(t, 'helmx-launcher-goldennestedtgz-');
   const tarballPath = await prepareNestedDepPayload(root, '2.0.0', PKG);
-  const { io } = captureIo(sanitizedHostEnv({ HELM_PAYLOAD_PACKAGE: PKG }));
+  const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
 
   const staged = await stageHubRelease({
     io,

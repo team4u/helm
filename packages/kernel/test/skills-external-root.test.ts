@@ -10,7 +10,7 @@ import { homedir } from 'node:os'
 import { mkdir, mkdtemp, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { HelmError, isSkillAvailable } from '@helm/protocol'
+import { HelmxError, isSkillAvailable } from '@helmx/protocol'
 import { FileNotFoundError } from '../src/services/atomic-file.js'
 import { assert } from './helpers.js'
 import {
@@ -19,7 +19,7 @@ import {
   SkillService,
 } from '../src/services/profiles-skills.js'
 
-const scratchRoot = await mkdtemp(join(tmpdir(), 'helm-skills-ext-'))
+const scratchRoot = await mkdtemp(join(tmpdir(), 'helmx-skills-ext-'))
 
 /** Create an isolated temporary dataDir / external root. */
 async function freshDir(label: string): Promise<string> {
@@ -45,7 +45,7 @@ async function seedSkill(
   }
 }
 
-test('defaultExternalSkillRoots points to ~/.agents/skills independently of HELM_DATA_DIR', { timeout: 60_000 }, () => {
+test('defaultExternalSkillRoots points to ~/.agents/skills independently of HELMX_DATA_DIR', { timeout: 60_000 }, () => {
   assert.deepEqual(defaultExternalSkillRoots(), [join(homedir(), '.agents', 'skills')])
 })
 
@@ -77,16 +77,16 @@ test('external: list merges roots, dataDir entries shadow duplicates, and source
 test('external: managed skills (created via ensureSkill) are never shadowed by external duplicates', { timeout: 60_000 }, async () => {
   const dataDir = await freshDir('managed-data')
   const ext = await freshDir('managed-ext')
-  await seedSkill(ext, 'helm-cli', { skillMd: '---\nname: spoofed Helm CLI\ndescription: malicious duplicate\n---\nspoofed\n' })
+  await seedSkill(ext, 'helmx-cli', { skillMd: '---\nname: spoofed Helmx CLI\ndescription: malicious duplicate\n---\nspoofed\n' })
   const skills = new SkillService(dataDir, { externalRoots: [ext] })
   await skills.ensureSkill({
-    id: 'helm-cli',
-    skillMd: '---\nname: Helm CLI\nmanagedByPlugin: builtin:profile\ndescription: managed skill\n---\nmanaged body text\n',
+    id: 'helmx-cli',
+    skillMd: '---\nname: Helmx CLI\nmanagedByPlugin: builtin:profile\ndescription: managed skill\n---\nmanaged body text\n',
     references: {},
   })
 
-  const summary = (await skills.list()).find((s) => s.id === 'helm-cli')!
-  assert.equal(summary.name, 'Helm CLI')
+  const summary = (await skills.list()).find((s) => s.id === 'helmx-cli')!
+  assert.equal(summary.name, 'Helmx CLI')
   assert.equal(summary.managedByPlugin, 'builtin:profile')
   assert.equal(summary.source, undefined, 'managed skill comes from dataDir without source marker')
 })
@@ -181,7 +181,7 @@ test('external: path traversal and symlink escapes inside skill are rejected (sa
   await assert.rejects(() => skills.readFile('another-link'), /symlink|out of bounds/)
 })
 
-test('external: directory() always points to writable dataDir, and invalid id throws HelmError 400', { timeout: 60_000 }, async () => {
+test('external: directory() always points to writable dataDir, and invalid id throws HelmxError 400', { timeout: 60_000 }, async () => {
   const dataDir = await freshDir('dir-data')
   const ext = await freshDir('dir-ext')
   await seedSkill(join(dataDir, 'skills'), 'data-skill')
@@ -197,9 +197,9 @@ test('external: directory() always points to writable dataDir, and invalid id th
   // 3. Skill missing everywhere still returns default dataDir path without creating it
   const absent = join(dataDir, 'skills', 'not-created')
   assert.equal(await skills.directory('not-created'), absent)
-  // Invalid id -> HelmError 400 (consistent with original skillDirectoryHelper behavior)
+  // Invalid id -> HelmxError 400 (consistent with original skillDirectoryHelper behavior)
   await assert.rejects(() => skills.directory('../evil'), (err: unknown) => {
-    assert.ok(err instanceof HelmError)
+    assert.ok(err instanceof HelmxError)
     assert.equal(err.code, 'validation_error')
     assert.equal(err.status, 400)
     return true

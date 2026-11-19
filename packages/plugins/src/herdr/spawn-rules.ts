@@ -2,7 +2,7 @@
  * Spawn request and Profile boundary validation: agentType parsing (herdr:<kind>[@nodeId] and
  * Profile.runtime.kind=herdr dual entries), the nodeId priority chain, the cwd resolution chain, and strict
  * validation of env and startup parameters.
- * All invalid inputs throw HelmError explicitly here (validation_error / not_found / unsupported_runtime),
+ * All invalid inputs throw HelmxError explicitly here (validation_error / not_found / unsupported_runtime),
  * never silently ignoring fields or guessing private CLI flags.
  *
  * nodeId priority chain (high -> low; an explicit 'local' overrides with "local" semantics and folds into
@@ -13,7 +13,7 @@
  * 4. the parent conversation's bound node (injected by the Executor as parentNodeId; defaults to local).
  */
 
-import { HelmError, isAbsoluteTargetPath, isValidEnvName, normalizeTargetPath, type Profile, type TargetPlatform } from '@helm/protocol'
+import { HelmxError, isAbsoluteTargetPath, isValidEnvName, normalizeTargetPath, type Profile, type TargetPlatform } from '@helmx/protocol'
 import { isValidNodeId } from './transport.js'
 import { OUTPUT_FILE_PATTERN } from './transport-output.js'
 
@@ -43,7 +43,7 @@ function assertNodeId(nodeId: string, source: { profileId?: string; agentType?: 
     const where = source.agentType !== undefined
       ? `the nodeId '${nodeId}' of agentType '${source.agentType}'`
       : `the nodeId '${nodeId}' of Profile '${source.profileId}'`
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `${where} is invalid (single safe token: starts alphanumeric, may contain . _ -, length 1..128; empty string rejected)`,
       400,
@@ -78,7 +78,7 @@ export async function resolveSpawnRouting(
   }
   const kind = runtime.agent
   if (!KIND_PATTERN.test(kind)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `Profile '${agentType}' runtime.agent '${kind}' is invalid (expected a lowercase alphanumeric-plus-hyphen CLI kind)`,
       400,
@@ -94,14 +94,14 @@ export async function resolveSpawnRouting(
   }
   const args = runtime.args ?? []
   if (!args.every((a) => typeof a === 'string')) {
-    throw new HelmError('validation_error', `Profile '${agentType}' runtime.args must all be strings`, 400, {
+    throw new HelmxError('validation_error', `Profile '${agentType}' runtime.args must all be strings`, 400, {
       profileId: agentType,
     })
   }
   // workspace resolution: runtime.workspace > Profile.cwd (the latter is also the session default cwd).
   const workspace = runtime.workspace ?? profile.cwd
   if (workspace !== undefined && !isAbsolutePath(workspace)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `Profile '${agentType}' working directory must be absolute (runtime.workspace / cwd; got '${workspace}')`,
       400,
@@ -111,7 +111,7 @@ export async function resolveSpawnRouting(
   const profileEnv = runtime.env ?? {}
   for (const [key, value] of Object.entries(profileEnv)) {
     if (!isValidEnvName(key) || typeof value !== 'string') {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `Profile '${agentType}' runtime.env has an invalid entry '${key}' (names must be legal env variable names and values strings)`,
         400,
@@ -135,7 +135,7 @@ function parseHerdrPrefix(agentType: string): SpawnRouting {
   const kind = at >= 0 ? body.slice(0, at) : body
   const nodeIdRaw = at >= 0 ? body.slice(at + 1) : undefined
   if (!KIND_PATTERN.test(kind)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `agentType '${agentType}' has invalid kind '${kind}' (expected e.g. herdr:agy, herdr:claude@node-a)`,
       400,
@@ -163,12 +163,12 @@ function isAbsolutePath(p: string): boolean {
 /**
  * Converge by the target node's platform (a composition of protocol primitives, zero self-rolled regex):
  * an unknown platform (no trusted remote report) passes through unchanged; an unmappable POSIX root on a win32
- * target is rejected explicitly. Same semantics as the kernel's runtime/target-cwd.ts (@helm/plugins must not
- * import @helm/kernel's private dirs cross-boundary; the convergence primitives all come from @helm/protocol).
+ * target is rejected explicitly. Same semantics as the kernel's runtime/target-cwd.ts (@helmx/plugins must not
+ * import @helmx/kernel's private dirs cross-boundary; the convergence primitives all come from @helmx/protocol).
  */
 function normalizeCwdForPlatform(cwd: string, platform: TargetPlatform | undefined, entry: string): string {
   if (!isAbsoluteTargetPath(cwd)) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `${entry}: cwd must be absolute (POSIX leading /, Windows drive C:\\ or UNC \\\\server\\share; drive-relative and relative paths rejected): got '${cwd}'`,
       400,
@@ -178,7 +178,7 @@ function normalizeCwdForPlatform(cwd: string, platform: TargetPlatform | undefin
   if (platform === undefined) return cwd
   const result = normalizeTargetPath(cwd, platform)
   if (!result.ok) {
-    throw new HelmError(result.code, `${entry}: ${result.reason}`, 400, { cwd })
+    throw new HelmxError(result.code, `${entry}: ${result.reason}`, 400, { cwd })
   }
   return result.path
 }
@@ -201,7 +201,7 @@ export function resolveCwd(
   let cwd: string
   if (requestCwd !== undefined) {
     if (!isAbsolutePath(requestCwd)) {
-      throw new HelmError('validation_error', `spawn cwd must be an absolute path: '${requestCwd}'`, 400, { cwd: requestCwd })
+      throw new HelmxError('validation_error', `spawn cwd must be an absolute path: '${requestCwd}'`, 400, { cwd: requestCwd })
     }
     cwd = requestCwd
   } else if (routing?.workspace !== undefined) {
@@ -220,7 +220,7 @@ export function resolveCwd(
  */
 export function assertNoUnsupportedOverrides(model: string | undefined, effort: string | undefined): void {
   if (model !== undefined && model !== '') {
-    throw new HelmError(
+    throw new HelmxError(
       'unsupported_runtime',
       `the herdr terminal execution line does not support an explicit model='${model}' (declare CLI private arguments via Profile runtime.args; no implicit mapping)`,
       400,
@@ -228,7 +228,7 @@ export function assertNoUnsupportedOverrides(model: string | undefined, effort: 
     )
   }
   if (effort !== undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'unsupported_runtime',
       `the herdr terminal execution line does not support an explicit effort='${effort}' (declare CLI private arguments via Profile runtime.args; no implicit mapping)`,
       400,
@@ -237,11 +237,11 @@ export function assertNoUnsupportedOverrides(model: string | undefined, effort: 
   }
 }
 
-/** Agent name: helm-wf-<shorthash>; Herdr caps names at 32 chars. */
+/** Agent name: helmx-wf-<shorthash>; Herdr caps names at 32 chars. */
 export function buildAgentName(unique: string): string {
   const hash = HashShort.of(unique)
-  const name = `helm-wf-${hash}`
-  if (name.length > 32) throw new HelmError('validation_error', `agent name too long: ${name}`, 400, { name })
+  const name = `helmx-wf-${hash}`
+  if (name.length > 32) throw new HelmxError('validation_error', `agent name too long: ${name}`, 400, { name })
   return name
 }
 
@@ -261,7 +261,7 @@ export const HashShort = {
 export function buildOutputFileName(safeId: string, ext: 'json' | 'md'): string {
   const name = `wf-out-${safeId}.${ext}`
   if (!OUTPUT_FILE_PATTERN.test(name)) {
-    throw new HelmError('validation_error', `invalid handoff file name: ${name}`, 400, { name })
+    throw new HelmxError('validation_error', `invalid handoff file name: ${name}`, 400, { name })
   }
   return name
 }
@@ -270,7 +270,7 @@ export function buildOutputFileName(safeId: string, ext: 'json' | 'md'): string 
 export function normalizeStartupTimeoutMs(value: unknown): number {
   const n = value === undefined ? 30_000 : value
   if (typeof n !== 'number' || !Number.isInteger(n) || n < 3001 || n > 300_000) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `startupTimeoutMs must be an integer in 3001..300000 (got ${String(n)})`,
       400,
@@ -297,26 +297,26 @@ export function redactSchemaText(schema: Record<string, unknown>, redact: (t: st
 }
 
 /**
- * Managed environment variables (HELM_*): authoritatively constructed by the kernel's managed/stash; a Profile
+ * Managed environment variables (HELMX_*): authoritatively constructed by the kernel's managed/stash; a Profile
  * must not override them (the same kernel convention as buildToolEnv's "managed variables pin-override last").
- * HELM_HUB_URL's exceptional semantics live in buildSpawnPaneEnv: a remote pane only allows an explicitly
+ * HELMX_HUB_URL's exceptional semantics live in buildSpawnPaneEnv: a remote pane only allows an explicitly
  * configured valid reachable address, or the node channel's reported genuinely reachable hubUrl for that node.
- * HELM_EXECUTION_SCOPE is the execution-context scope anchor (kernel executionScopeHash synthesis,
+ * HELMX_EXECUTION_SCOPE is the execution-context scope anchor (kernel executionScopeHash synthesis,
  */
 export const MANAGED_ENV_KEYS = Object.freeze([
-  'HELM_ENV',
-  'HELM_CONVERSATION_ID',
-  'HELM_CWD',
-  'HELM_DATA_DIR',
-  'HELM_EXECUTION_SCOPE',
-  'HELM_TOKEN',
+  'HELMX_ENV',
+  'HELMX_CONVERSATION_ID',
+  'HELMX_CWD',
+  'HELMX_DATA_DIR',
+  'HELMX_EXECUTION_SCOPE',
+  'HELMX_TOKEN',
 ])
 
 /**
  * Pane env construction (shared entry for local and remote):
- * - managed HELM_* pin-overrides Profile injections (preventing hijack of call-home/identity variables);
+ * - managed HELMX_* pin-overrides Profile injections (preventing hijack of call-home/identity variables);
  * - managed/stash values override Profile last, keeping the task at the same priority as local tools;
- * - remote strips HELM_HUB_URL/HELM_TOKEN pointing at the local Hub, unless the Profile explicitly
+ * - remote strips HELMX_HUB_URL/HELMX_TOKEN pointing at the local Hub, unless the Profile explicitly
  *   configures a valid reachable http(s) address, or the node channel provides the node's genuinely
  *   reachable hubUrl (priority: Profile explicit > channel hubUrl > strip).
  */
@@ -329,8 +329,8 @@ export function buildSpawnPaneEnv(
   const managed = { ...managedEnv }
   const env: Record<string, string> = {}
 
-  // Explicit remotely reachable HELM_HUB_URL: the legal source of the remote call-home (Profile explicit first, then the node channel).
-  const explicitUrl = profileEnv['HELM_HUB_URL']
+  // Explicit remotely reachable HELMX_HUB_URL: the legal source of the remote call-home (Profile explicit first, then the node channel).
+  const explicitUrl = profileEnv['HELMX_HUB_URL']
   const channelUrl = options.nodeHubUrl
   const explicitReachable = explicitUrl !== undefined && isValidRemoteHubUrl(explicitUrl)
   // That address comes from the node's own connection config; local BYOM or tunnels may legally use loopback.
@@ -338,31 +338,31 @@ export function buildSpawnPaneEnv(
   const channelReachable = channelUrl !== undefined && isHttpUrl(channelUrl)
   if (options.remote) {
     if (explicitUrl !== undefined && !isHttpUrl(explicitUrl)) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
-        `Profile runtime.env.HELM_HUB_URL must be an http(s) URL (got '${explicitUrl}'); refusing to inject an invalid call-home address into a remote pane`,
+        `Profile runtime.env.HELMX_HUB_URL must be an http(s) URL (got '${explicitUrl}'); refusing to inject an invalid call-home address into a remote pane`,
         400,
         { hubUrl: explicitUrl },
       )
     }
     if (explicitReachable) {
-      env['HELM_HUB_URL'] = explicitUrl
-      delete managed['HELM_HUB_URL']
+      env['HELMX_HUB_URL'] = explicitUrl
+      delete managed['HELMX_HUB_URL']
     } else if (channelReachable) {
-      env['HELM_HUB_URL'] = channelUrl
-      delete managed['HELM_HUB_URL']
+      env['HELMX_HUB_URL'] = channelUrl
+      delete managed['HELMX_HUB_URL']
     } else {
-      delete managed['HELM_HUB_URL']
-      delete managed['HELM_TOKEN']
-      stripped.push('HELM_HUB_URL', 'HELM_TOKEN')
+      delete managed['HELMX_HUB_URL']
+      delete managed['HELMX_TOKEN']
+      stripped.push('HELMX_HUB_URL', 'HELMX_TOKEN')
     }
   }
 
-  // The remaining managed HELM_* pin-override last (kernel convention: managed/stash are authoritative); managed keys
-  // (incl. HELM_HUB_URL) strip Profile injections matched case-insensitively -- Windows env names are
-  // case-insensitive, aliases like helm_execution_scope / Helm_Cwd must not escape and hijack later.
+  // The remaining managed HELMX_* pin-override last (kernel convention: managed/stash are authoritative); managed keys
+  // (incl. HELMX_HUB_URL) strip Profile injections matched case-insensitively -- Windows env names are
+  // case-insensitive, aliases like helmx_execution_scope / Helmx_Cwd must not escape and hijack later.
   const managedUpper = new Set(
-    [...MANAGED_ENV_KEYS, 'HELM_HUB_URL'].map((key) => key.toUpperCase()),
+    [...MANAGED_ENV_KEYS, 'HELMX_HUB_URL'].map((key) => key.toUpperCase()),
   )
   for (const [key, value] of Object.entries(profileEnv)) {
     if (managedUpper.has(key.toUpperCase())) continue

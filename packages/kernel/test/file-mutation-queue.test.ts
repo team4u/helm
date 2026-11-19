@@ -34,7 +34,7 @@ import {
 } from '../src/services/index.js'
 import { withProcessFileLock } from '../src/services/file-lock.js'
 import { createWriteTool, createEditTool } from '../src/runtime/tools.js'
-import type { HelmToolDeps } from '../src/runtime/tool-deps.js'
+import type { HelmxToolDeps } from '../src/runtime/tool-deps.js'
 import type { EnvFabric } from '../src/env/index.js'
 import { createEnvFabric } from '../src/env/index.js'
 import {
@@ -46,7 +46,7 @@ import {
 let rootDir: string
 
 before(async () => {
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-file-queue-'))
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-file-queue-'))
 })
 
 after(async () => {
@@ -147,7 +147,7 @@ function makeRecordingFabric(env: ReturnType<typeof makeRecordingEnv>['env']): E
   }
 }
 
-async function makeDeps(dir: string, options: { envFabric?: EnvFabric; nodeIdOf?: (id: number) => string } = {}): Promise<HelmToolDeps> {
+async function makeDeps(dir: string, options: { envFabric?: EnvFabric; nodeIdOf?: (id: number) => string } = {}): Promise<HelmxToolDeps> {
   await ensureDataDir(dir)
   const stash = new SecretStash()
   const artifacts = new ArtifactService(dir, new InMemoryArtifactRepository(), stash)
@@ -781,7 +781,7 @@ describe('error semantics and reentrant nesting', { timeout: 60_000 }, () => {
   })
 
   test('unreadable lock path preserves underlying IO error rather than reporting false timeout or deleting lock', { timeout: 60_000 }, async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'helm-file-lock-error-'))
+    const dir = await mkdtemp(join(tmpdir(), 'helmx-file-lock-error-'))
     const target = join(dir, 'config.json')
     const lock = `${target}.lock`
     await mkdir(lock)

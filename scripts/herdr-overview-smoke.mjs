@@ -2,7 +2,7 @@
  * Standalone real-Herdr overview acceptance; no model calls, not part of the default unit tests.
  * Run: pnpm build && timeout 50s node scripts/herdr-overview-smoke.mjs
  * Runs only inside a Herdr environment; creates its own temp named session, and every control command uses that session's socket.
- * HELM_OVERVIEW_APP can point at another checkout's build entry. Logs are kept in a temp directory.
+ * HELMX_OVERVIEW_APP can point at another checkout's build entry. Logs are kept in a temp directory.
  */
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -13,12 +13,12 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { setTimeout as backoff } from 'node:timers/promises';
 
 assert.equal(process.env.HERDR_ENV, '1', 'Live acceptance must run inside Herdr');
-const appPath = process.env.HELM_OVERVIEW_APP ?? resolve(dirname(fileURLToPath(import.meta.url)), '../packages/hub/dist/app.js');
+const appPath = process.env.HELMX_OVERVIEW_APP ?? resolve(dirname(fileURLToPath(import.meta.url)), '../packages/hub/dist/app.js');
 const hubDist = dirname(appPath);
 const repository = resolve(hubDist, '../../..');
-const root = await mkdtemp(join(tmpdir(), 'helm-overview-live-'));
+const root = await mkdtemp(join(tmpdir(), 'helmx-overview-live-'));
 const xdg = join(root, 'xdg');
-const session = `helm-overview-${process.pid}`;
+const session = `helmx-overview-${process.pid}`;
 const socketPath = join(xdg, 'herdr/sessions', session, 'herdr.sock');
 const firstCwd = join(root, 'first');
 const secondCwd = join(root, 'second');
@@ -98,7 +98,7 @@ function cleanup() {
     for (const [label, close, ms] of [
       ['token', async () => { token?.dispose(); }, 1_000],
       ['Hub', async () => { await hub?.close(); }, 2_000],
-      ['Helm', async () => { await app?.close(); }, 3_000],
+      ['Helmx', async () => { await app?.close(); }, 3_000],
     ]) {
       try { await bounded(close(), ms, label); } catch (error) { cleanupErrors.push(String(error)); }
     }
@@ -155,8 +155,8 @@ try {
     removeOutput: (...args) => base.removeOutput(...args),
     runGate: (...args) => base.runGate(...args),
   };
-  const { createHelm } = await import(pathToFileURL(appPath));
-  app = await createHelm({ dataDir: join(root, 'helm-data'), cwd: firstCwd, herdrTransport: transport });
+  const { createHelmx } = await import(pathToFileURL(appPath));
+  app = await createHelmx({ dataDir: join(root, 'helmx-data'), cwd: firstCwd, herdrTransport: transport });
   await app.kernel.plugins.setConfig('builtin:herdr', { socketPath, startupTimeoutMs: 30_000 });
   await app.kernel.plugins.enable('builtin:herdr');
   const row = overview().panes.find(pane => pane.paneId === firstPane.pane_id);
@@ -173,7 +173,7 @@ try {
   const httpDoc = await response.json();
   check('authenticated HTTP exposes the real shell overview', httpDoc.value.panes.some(pane => pane.paneId === firstPane.pane_id && pane.agentStatus === 'unknown'));
   const cliDoc = JSON.parse(await command(process.execPath, [join(repository, 'packages/cli/dist/index.js'), 'plugins', 'doc', 'builtin:herdr', 'overview', '--json'], {
-    ...isolatedEnv, HELM_DATA_DIR: join(root, 'cli'), HELM_HUB_URL: hub.url, HELM_TOKEN: token.token,
+    ...isolatedEnv, HELMX_DATA_DIR: join(root, 'cli'), HELMX_HUB_URL: hub.url, HELMX_TOKEN: token.token,
   }));
   check('compiled CLI exposes the same public overview', cliDoc.value.panes.some(pane => pane.paneId === firstPane.pane_id && pane.agentStatus === 'unknown' && pane.ownedBy === 'human'));
   const createdEvent = nextOverview(doc => doc.panes.some(pane => pane.effectiveCwd === secondCwd || pane.cwd === secondCwd || pane.foregroundCwd === secondCwd));

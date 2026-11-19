@@ -1,5 +1,5 @@
 /**
- * Dedicated tests for helm-hub production static hosting (packages/web/dist).
+ * Dedicated tests for helmx-hub production static hosting (packages/web/dist).
  *
  * Covers: path / and index.html, hashed /assets/* files (Content-Type and immutable cache),
  * SPA client-side routing fallback (extensionless paths return index.html), 404 for missing
@@ -21,7 +21,7 @@ import { createHubHandler, startHub, type HubHandlerOptions } from '../src/http/
 import { createHubHandler as createHandlerLegacy } from '../src/http/index.js'
 import type { KernelRuntimeLike, EventHub } from '../src/http/index.js'
 import { AuthService } from '../src/services/index.js'
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 
 // ---------------------------------------------------------------------------
 // Test fixture (minimal kernel shape + real AuthService)
@@ -104,10 +104,10 @@ let handler: (req: Request) => Promise<Response>
 let token: string | undefined
 
 before(async () => {
-  dataDir = await mkdtemp(join(tmpdir(), 'helm-static-'))
+  dataDir = await mkdtemp(join(tmpdir(), 'helmx-static-'))
   webDist = join(dataDir, 'web-dist')
   await mkdir(join(webDist, 'assets'), { recursive: true })
-  await writeFile(join(webDist, 'index.html'), '<!doctype html><html><body>helm web</body></html>')
+  await writeFile(join(webDist, 'index.html'), '<!doctype html><html><body>helmx web</body></html>')
   await writeFile(join(webDist, 'assets', 'app-B1b2C3.js'), 'console.log("app")')
   await writeFile(join(webDist, 'assets', 'style-D4e5F6.css'), 'body{margin:0}')
   await writeFile(join(webDist, 'favicon.ico'), Buffer.from([0, 0, 1, 0]))
@@ -130,7 +130,7 @@ test('path / returns index.html (text/html + no-cache)', { timeout: 60_000 }, as
   assert.equal(res.status, 200)
   assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8')
   assert.equal(res.headers.get('cache-control'), 'no-cache')
-  assert.ok(res.text.includes('helm web'))
+  assert.ok(res.text.includes('helmx web'))
 })
 
 test('HEAD / strips body in Response layer: identical status code and headers (includes content-length)', { timeout: 60_000 }, async () => {
@@ -169,7 +169,7 @@ test('SPA client route fallback: extensionless paths return index.html (200 text
     const res = await call(handler, 'GET', path)
     assert.equal(res.status, 200, `path ${path} should fall back to index.html`)
     assert.equal(res.headers.get('content-type'), 'text/html; charset=utf-8')
-    assert.ok(res.text.includes('helm web'), `path ${path} should return index.html content`)
+    assert.ok(res.text.includes('helmx web'), `path ${path} should return index.html content`)
   }
 })
 
@@ -228,7 +228,7 @@ test('root path is a file (not directory): explicitly specifying webDistDir repo
 })
 
 test('real IO failure (ELOOP) returns explicit 500, never disguised as 404 (applies even as root)', { timeout: 60_000 }, async () => {
-  const root = await mkdtemp(join(tmpdir(), 'helm-static-eloop-'))
+  const root = await mkdtemp(join(tmpdir(), 'helmx-static-eloop-'))
   try {
     await mkdir(join(root, 'assets'), { recursive: true })
     await writeFile(join(root, 'index.html'), 'x')
@@ -327,7 +327,7 @@ test('startHub(port:0) with explicit webDistDir: real HTTP static delivery + HEA
 
     const spa = await fetch(`${hub.url}/conversations/42`)
     assert.equal(spa.status, 200)
-    assert.ok((await spa.text()).includes('helm web'))
+    assert.ok((await spa.text()).includes('helmx web'))
   } finally {
     await hub.close()
   }
@@ -349,7 +349,7 @@ test('startHub(port:0) with webDistDir: false: static hosting disabled, non-/api
 test('startHub(port:0) with explicit nonexistent directory: startup fails explicitly (never silently disabled)', { timeout: 60_000 }, async () => {
   await assert.rejects(
     startHub({ kernel: makeKernel(dataDir), port: 0, webDistDir: join(dataDir, 'no-such-dist') }),
-    (err: unknown) => err instanceof HelmError && err.code === 'web_dist_invalid',
+    (err: unknown) => err instanceof HelmxError && err.code === 'web_dist_invalid',
   )
 })
 

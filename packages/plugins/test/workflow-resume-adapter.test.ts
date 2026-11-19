@@ -30,7 +30,7 @@ import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import type { AgentSpawnRequest } from '@helm/protocol'
+import type { AgentSpawnRequest } from '@helmx/protocol'
 import { parseWorkflowSpawnMeta } from '../src/contracts.js'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { WorkflowService, type WorkflowServiceHost, type WorkflowStateStore } from '../src/workflow/engine/service.js'

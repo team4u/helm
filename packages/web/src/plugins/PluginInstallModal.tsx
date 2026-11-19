@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { DEFAULT_HELM_LOCALE, type PluginDoctorReport } from '@helm/protocol/browser'
+import { DEFAULT_HELMX_LOCALE, type PluginDoctorReport } from '@helmx/protocol/browser'
 import { pluginsApi } from '../lib/api.js'
 import { createWebTranslator } from '../i18n/catalog.js'
 import { useOptionalLocale } from '../lib/store-context.js'
-import { HelmIcon, Dialog, DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helm/plugin-client'
+import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogDescription, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helmx/plugin-client'
 import {
   buildDoctorCheckItems,
   detectPluginSourceKind,
@@ -35,7 +35,7 @@ export function PluginInstallModal({
   inline = false,
 }: PluginInstallModalProps): React.JSX.Element {
   const storeLocale = useOptionalLocale()
-  const locale = storeLocale ?? DEFAULT_HELM_LOCALE
+  const locale = storeLocale ?? DEFAULT_HELMX_LOCALE
   const t = useMemo(() => createWebTranslator(locale), [locale])
   const [source, setSource] = useState('')
   const [enableAfterInstall, setEnableAfterInstall] = useState(false)
@@ -102,7 +102,7 @@ export function PluginInstallModal({
                 title={t('common.close')}
                 disabled={installing}
               >
-                <HelmIcon name="x" size={14} />
+                <HelmxIcon name="x" size={14} />
               </button>
             </DialogClose>
           </div>
@@ -158,7 +158,7 @@ export function PluginInstallModal({
             </div>
 
             <div className="callout callout-warn plugin-install-security" role="note">
-              <HelmIcon name="shield-alert" size={13} />
+              <HelmxIcon name="shield-alert" size={13} />
               <span className="callout-text">
                 {t('plugins.install.securityWarning')}
               </span>
@@ -166,7 +166,7 @@ export function PluginInstallModal({
 
             {errorText && (
               <div className="callout callout-error" role="alert">
-                <HelmIcon name="alert-circle" size={13} />
+                <HelmxIcon name="alert-circle" size={13} />
                 <span className="callout-text selectable">{errorText}</span>
               </div>
             )}
@@ -182,9 +182,9 @@ export function PluginInstallModal({
                     >
                       <span className="plugin-doctor-check-mark">
                         {check.error === undefined ? (
-                          <HelmIcon name="check" size={11} />
+                          <HelmxIcon name="check" size={11} />
                         ) : (
-                          <HelmIcon name="x" size={11} />
+                          <HelmxIcon name="x" size={11} />
                         )}
                       </span>
                       <span className="plugin-doctor-check-body">
@@ -215,12 +215,12 @@ export function PluginInstallModal({
             >
               {installing ? (
                 <>
-                  <HelmIcon name="loader" size={12} />
+                  <HelmxIcon name="loader" size={12} />
                   <span>{t('plugins.install.installing')}</span>
                 </>
               ) : (
                 <>
-                  <HelmIcon name="download" size={12} />
+                  <HelmxIcon name="download" size={12} />
                   <span>{t('plugins.install.submit')}</span>
                 </>
               )}

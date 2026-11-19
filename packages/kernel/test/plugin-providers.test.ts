@@ -8,7 +8,7 @@
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { HelmError, type PluginDefinition } from '@helm/protocol';
+import { HelmxError, type PluginDefinition } from '@helmx/protocol';
 import type { Provider } from '@earendil-works/pi-ai';
 import {
   PluginHost,
@@ -16,7 +16,7 @@ import {
   type PluginProviderPort,
 } from '../src/plugins/index.js';
 import { createPluginHostBackendFixture } from './helpers/plugin-host-backend.js';
-import { createPluginBuildProvider } from '@helm/plugin-build';
+import { createPluginBuildProvider } from '@helmx/plugin-build';
 import { MemoryDocStore, cleanupDir, deferred, makeConversationSummary, makeTempDir } from './helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -40,12 +40,12 @@ function makeHostApi(): PluginHostBackend {
     registerAskSeqResolver: () => () => {},
     onEvent: () => () => {},
     abortConversation: async () => {},
-    getConversationOwnership(): 'helm' | 'bot' | 'human' {
+    getConversationOwnership(): 'helmx' | 'bot' | 'human' {
       return 'human'
     },
     spawnAgent: async () => ({}),
     runGate: async () => ({ ok: true, output: '' }),
-    execEnv: async () => { throw new HelmError('unsupported', 'this fixture does not execute node commands', 501) },
+    execEnv: async () => { throw new HelmxError('unsupported', 'this fixture does not execute node commands', 501) },
     withFileMutationQueue(): Promise<never> { throw new Error('this fixture does not support file mutation queue') },
     emitEvent: () => {},
   };
@@ -89,13 +89,13 @@ class FakeProviderRegistry implements PluginProviderPort {
 
   async register(provider: Provider, pluginId: string): Promise<() => Promise<void>> {
     if (provider.id === this.failRegisterOn) {
-      throw new HelmError('provider_register_conflict', `provider ${provider.id} rejected on mount`, 409);
+      throw new HelmxError('provider_register_conflict', `provider ${provider.id} rejected on mount`, 409);
     }
     this.calls.push({ op: 'register', providerId: provider.id, pluginId });
     this.mounted.set(provider.id, pluginId);
     return async () => {
       if (provider.id === this.failUnregisterOn) {
-        throw new HelmError('provider_unregister_rejected', `provider ${provider.id} rejected on unmount (active stream)`, 409);
+        throw new HelmxError('provider_unregister_rejected', `provider ${provider.id} rejected on unmount (active stream)`, 409);
       }
       this.calls.push({ op: 'unregister', providerId: provider.id, pluginId });
       this.mounted.delete(provider.id);
@@ -105,18 +105,18 @@ class FakeProviderRegistry implements PluginProviderPort {
   assertIdle(pluginId: string): void {
     this.calls.push({ op: 'assertIdle', pluginId });
     if (this.busyOwners.has(pluginId)) {
-      throw new HelmError('provider_stream_in_flight', `plugin ${pluginId} providers still have active streams/refreshes`, 409);
+      throw new HelmxError('provider_stream_in_flight', `plugin ${pluginId} providers still have active streams/refreshes`, 409);
     }
   }
 }
 
 /** Helper factory for inline `definePlugin` test fixtures preserving execution order. */
-function definePluginWith(id: string, fn: (ctx: import('@helm/protocol').HelmPluginContext) => void | Promise<void>): PluginDefinition {
+function definePluginWith(id: string, fn: (ctx: import('@helmx/protocol').HelmxPluginContext) => void | Promise<void>): PluginDefinition {
   return { id, name: id, definePlugin: fn };
 }
 
 async function makeHost(plugins?: PluginProviderPort): Promise<{ host: PluginHost; dir: string }> {
-  const dir = await makeTempDir('helm-plugin-providers-');
+  const dir = await makeTempDir('helmx-plugin-providers-');
   const host = new PluginHost({ buildProvider: createPluginBuildProvider(),
     dataDir: dir,
     host: makeHostApi(),
@@ -147,17 +147,17 @@ test('provider declarations missing required shape are rejected explicitly', { t
       });
     // Missing name
     await assert.rejects(() => host.register(bad({ name: undefined })), (err: unknown) => {
-      assert.ok(err instanceof HelmError && err.code === 'invalid_provider_spec', `name validation failed: ${String(err)}`);
+      assert.ok(err instanceof HelmxError && err.code === 'invalid_provider_spec', `name validation failed: ${String(err)}`);
       return true;
     });
     // auth missing apiKey/oauth
     await assert.rejects(() => host.register(bad({ auth: {} })), (err: unknown) => {
-      assert.ok(err instanceof HelmError && err.code === 'invalid_provider_spec', `auth validation failed: ${String(err)}`);
+      assert.ok(err instanceof HelmxError && err.code === 'invalid_provider_spec', `auth validation failed: ${String(err)}`);
       return true;
     });
     // Missing streamSimple
     await assert.rejects(() => host.register(bad({ streamSimple: undefined })), (err: unknown) => {
-      assert.ok(err instanceof HelmError && err.code === 'invalid_provider_spec', `streamSimple validation failed: ${String(err)}`);
+      assert.ok(err instanceof HelmxError && err.code === 'invalid_provider_spec', `streamSimple validation failed: ${String(err)}`);
       return true;
     });
     // Duplicate id
@@ -171,7 +171,7 @@ test('provider declarations missing required shape are rejected explicitly', { t
           }),
         ),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError && err.code === 'duplicate_provider', `duplicate validation failed: ${String(err)}`);
+        assert.ok(err instanceof HelmxError && err.code === 'duplicate_provider', `duplicate validation failed: ${String(err)}`);
         return true;
       },
     );
@@ -273,7 +273,7 @@ test('default-disabled plugin succeeds register even without providers port, and
     );
     // enable (mount phase): explicit 501, never silently skipped
     await assert.rejects(() => host.enable('test:noport'), (err: unknown) => {
-      assert.ok(err instanceof HelmError, `expected HelmError, got: ${String(err)}`);
+      assert.ok(err instanceof HelmxError, `expected HelmxError, got: ${String(err)}`);
       assert.equal(err.code, 'provider_port_unavailable');
       assert.equal(err.status, 501);
       return true;
@@ -367,7 +367,7 @@ test('service.start failure releases all already-mounted providers in reverse or
           }),
         ),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError, String(err));
+        assert.ok(err instanceof HelmxError, String(err));
         // Preserves existing service-start failure error code after reverse rollback of providers
         assert.equal(err.code, 'plugin_service_start_failed');
         return true;
@@ -399,7 +399,7 @@ test('second provider mount failure releases the first provider', { timeout: 60_
           }),
         ),
       (err: unknown) => {
-        assert.ok(err instanceof HelmError, String(err));
+        assert.ok(err instanceof HelmxError, String(err));
         // Port rejection (provider_register_conflict) diagnostic must be preserved
         assert.equal(err.code, 'provider_register_conflict');
         return true;
@@ -430,7 +430,7 @@ test('expired ctx (old epoch) can no longer declare providers', { timeout: 60_00
     await host.disable('test:stale');
     // Invoking provider on stale ctx after disable throws synchronously (assertOpen)
     assert.throws(() => stolen!(makeProvider('ghost')), (err: unknown) => {
-      assert.ok(err instanceof HelmError && err.code === 'plugin_context_closed', String(err));
+      assert.ok(err instanceof HelmxError && err.code === 'plugin_context_closed', String(err));
       return true;
     });
     assert.equal(registry.mounted.size, 0);
@@ -438,7 +438,7 @@ test('expired ctx (old epoch) can no longer declare providers', { timeout: 60_00
     // Disabling again expires the stale handle once more (new epoch)
     await host.disable('test:stale');
     assert.throws(() => stolen!(makeProvider('ghost2')), (err: unknown) => {
-      assert.ok(err instanceof HelmError && err.code === 'plugin_context_closed', String(err));
+      assert.ok(err instanceof HelmxError && err.code === 'plugin_context_closed', String(err));
       return true;
     });
     assert.equal(registry.mounted.size, 0);
@@ -471,7 +471,7 @@ test('in-flight provider stream preflight rejects disable cleanly without leavin
     // Simulate active stream so assertIdle rejects
     registry.busyOwners.add('test:busy');
     await assert.rejects(() => host.disable('test:busy'), (err: unknown) => {
-      assert.ok(err instanceof HelmError, String(err));
+      assert.ok(err instanceof HelmxError, String(err));
       assert.equal(err.code, 'provider_stream_in_flight', 'original port diagnostic must pass through');
       return true;
     });
@@ -527,7 +527,7 @@ test('provider unmount failure aggregates diagnostics explicitly instead of swal
     );
     registry.failUnregisterOn = 'sticky';
     await assert.rejects(() => host.disable('test:unreg-fail'), (err: unknown) => {
-      assert.ok(err instanceof HelmError, String(err));
+      assert.ok(err instanceof HelmxError, String(err));
       assert.equal(err.code, 'plugin_provider_unregister_failed');
       // Teardown aggregates under providerErrors; failing provider must be present in diagnostics
       const details = err.details as { providerErrors?: Array<{ providerId: string }>; unregisterErrors?: Array<{ providerId: string }> };

@@ -1,6 +1,6 @@
 import * as React from 'react'
 import * as TooltipPrimitive from '@radix-ui/react-tooltip'
-import { useOverlayChildStyle } from '@helm/plugin-client'
+import { useOverlayChildStyle } from '@helmx/plugin-client'
 
 export interface TooltipProviderProps extends TooltipPrimitive.TooltipProviderProps {}
 
@@ -56,7 +56,7 @@ export const TooltipContent = React.forwardRef<
       side={side}
       sideOffset={sideOffset}
       align={align}
-      className={`helm-tooltip-content ${className}`.trim()}
+      className={`helmx-tooltip-content ${className}`.trim()}
       style={layeredStyle}
       {...props}
     >
@@ -76,7 +76,7 @@ export const TooltipArrow = React.forwardRef<
     ref={ref}
     width={width}
     height={height}
-    className={`helm-tooltip-arrow ${className}`.trim()}
+    className={`helmx-tooltip-arrow ${className}`.trim()}
     {...props}
   />
 ))

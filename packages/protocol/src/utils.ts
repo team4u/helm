@@ -2,7 +2,7 @@
  * Cross-package dependency-free micro utilities (single source of truth).
  *
  * Why here: these predicates/escapers were previously duplicated (with drift) across
- * `@helm/kernel` and `@helm/plugins`; protocol is the only common upstream of both,
+ * `@helmx/kernel` and `@helmx/plugins`; protocol is the only common upstream of both,
  * and every helper here is a pure function with zero runtime dependencies, which keeps
  * the protocol package's "zero heavy runtime dependencies" rule intact.
  *
@@ -15,7 +15,7 @@
  *   rejects whitespace/uppercase/path separators); the lenient superagent copy is tightened.
  */
 
-import { HelmError } from './error.js'
+import { HelmxError } from './error.js'
 
 /** Minimal XML escaping for text and double-quoted attribute positions (`& < > "`; `'` needs no escape inside double quotes). */
 export function escapeXml(text: string): string {
@@ -59,7 +59,7 @@ export function isValidProfileId(id: string): boolean {
 /** Assert a Profile ID per {@link isValidProfileId}; throws `400 validation_error`. Existence is the caller's concern. */
 export function assertProfileId(id: string): void {
   if (!isValidProfileId(id)) {
-    throw new HelmError('validation_error', `illegal profile id: ${id} (only allows a-z 0-9 and hyphen)`, 400, {
+    throw new HelmxError('validation_error', `illegal profile id: ${id} (only allows a-z 0-9 and hyphen)`, 400, {
       profileId: id,
     })
   }

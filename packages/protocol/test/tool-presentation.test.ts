@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import {
   EDIT_TOOL_RESULT_SCHEMA,
-  HelmError,
+  HelmxError,
   TOOL_DIFF_MAX_ROWS,
   TOOL_DIFF_MAX_ROW_CHARS,
   assertSchemaCompilable,
@@ -93,11 +93,11 @@ test('schema validator rejects $async and malformed JSON Schema declarations wit
   for (const bad of badSchemas) {
     assert.throws(
       () => assertSchemaCompilable(bad as never),
-      (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_schema' && err.status === 500,
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_schema' && err.status === 500,
     )
     assert.throws(
       () => validateOrThrow(bad as never, {}, 'bad schema'),
-      (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_schema' && err.status === 500,
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_schema' && err.status === 500,
     )
   }
 })

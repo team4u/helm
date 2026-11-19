@@ -4,7 +4,7 @@
  *   脏工作区/未合入保护 + 进程占用检查 + `git worktree remove` / `git branch -d|-D`（分支删除失败先固化 removed 可重试）；
  * - `assertPathUnusedByProcesses`：删除前进程占用快照检查（`force` 不可绕过，只诊断拒绝不自动杀进程）。
  */
-import { HelmError, type NodePathUsage } from '@helm/protocol'
+import { HelmxError, type NodePathUsage } from '@helmx/protocol'
 import { setTimeout as delay } from 'node:timers/promises'
 import {
   canonicalPathOnNode,
@@ -22,7 +22,7 @@ import { validateWorktreeSelector, type ManagedWorktreeRecord, type WorktreeStor
 import { ownerMismatchError } from './worktree-inspect.js'
 import type { CleanupInput, CleanupResult, WorktreeAllocatorDeps } from './worktree.js'
 
-const MANAGED_BRANCH_PREFIXES = ['helm/spawn-', 'helm/wf-'] as const
+const MANAGED_BRANCH_PREFIXES = ['helmx/spawn-', 'helmx/wf-'] as const
 
 /**
  * 持久持有锁占用拦截（force 不可绕过）：目标记录自身或同节点路径重叠的
@@ -47,7 +47,7 @@ function assertWorktreeNotHeld(
           )
   if (held === undefined || held.hold === undefined) return
   const safeLabel = redact(held.hold.label)
-  throw new HelmError(
+  throw new HelmxError(
     'worktree_in_use',
     `worktree '${record.path}'（节点 ${record.nodeId}）正被持久持有锁占用（${safeLabel}），拒绝清理（force 不可绕过）`,
     409,
@@ -73,7 +73,7 @@ async function assertPathUnusedByProcesses(
 ): Promise<void> {
   const probe = deps.inspectPathUsage
   if (probe === undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'worktree_process_check_failed',
       `worktree '${record.path}'（节点 ${record.nodeId}）未装配进程占用探测端口，无法证明无进程占用，清理中止（force 也不可绕过）`,
       502,
@@ -92,12 +92,12 @@ async function assertPathUnusedByProcesses(
       usage = await probe(record.nodeId, record.path, signal)
     }
   } catch (error) {
-    const cause = error instanceof HelmError
+    const cause = error instanceof HelmxError
       ? `${error.code}: ${error.message}`
       : error instanceof Error
         ? error.message
         : String(error)
-    throw new HelmError(
+    throw new HelmxError(
       'worktree_process_check_failed',
       `无法完成 worktree '${record.path}'（节点 ${record.nodeId}）的进程占用扫描（${redact(cause)}），不能证明 0 占用，清理中止（force 也不可绕过）`,
       502,
@@ -106,7 +106,7 @@ async function assertPathUnusedByProcesses(
   }
   if (usage.matchedTotal > 0 || usage.processes.length > 0) {
     const shown = usage.processes.map((p) => `${p.pid}${p.name !== undefined ? `(${p.name})` : ''}`)
-    throw new HelmError(
+    throw new HelmxError(
       'worktree_process_in_use',
       `worktree '${record.path}'（节点 ${record.nodeId}）被 ${usage.matchedTotal} 个进程的工作目录或打开文件引用（${shown.join('、')}${usage.matchedTotal > shown.length ? ` 等 ${usage.matchedTotal} 个` : ''}${usage.processesTruncated ? '；清单截断' : ''}）；这是删除前快照，不会自动终止任何进程，请先在目标节点处理后再清理（force 也不可绕过）`,
       409,
@@ -128,7 +128,7 @@ async function assertPathUnusedByProcesses(
     )
   }
   if (usage.complete !== true) {
-    throw new HelmError(
+    throw new HelmxError(
       'worktree_process_check_failed',
       `worktree '${record.path}'（节点 ${record.nodeId}）的进程占用扫描不完整（${usage.diagnostics.map((d) => redact(d)).join('；') || '原因未知'}），不能证明 0 占用，清理中止（force 也不可绕过）`,
       502,
@@ -161,7 +161,7 @@ export async function cleanupWorktree(
       input.mergedInto.includes(':') ||
       input.mergedInto.startsWith('-')
     ) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         'mergedInto 必须是不含空白与范围操作符（.. ~ ^ :）且不以 - 开头的非空分支/提交名',
         400,
@@ -172,9 +172,9 @@ export async function cleanupWorktree(
 
   const record = store.resolveRecord(input, 'cleanup')
   if (!MANAGED_BRANCH_PREFIXES.some((prefix) => record.branch.startsWith(prefix))) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
-      `受管 worktree '${record.path}' 的分支 '${record.branch}' 不在 helm 受管前缀（helm/spawn- | helm/wf-）内，拒绝清理`,
+      `受管 worktree '${record.path}' 的分支 '${record.branch}' 不在 helmx 受管前缀（helmx/spawn- | helmx/wf-）内，拒绝清理`,
       400,
       { path: record.path, branch: record.branch },
     )
@@ -184,7 +184,7 @@ export async function cleanupWorktree(
     let branchDeleted = record.branchDeleted === true
     if (input.deleteBranch === true && !branchDeleted) {
       if (record.repoRoot === '') {
-        throw new HelmError(
+        throw new HelmxError(
           'branch_delete_failed',
           `记录 ${record.id} 缺少主仓路径，无法重试删除分支 ${record.branch}（请人工核对）`,
           502,
@@ -224,7 +224,7 @@ export async function cleanupWorktree(
             branchDeleted: false,
             branchDeleteError: (del.failureOutput ?? '').slice(0, 2000),
           }))
-          throw new HelmError(
+          throw new HelmxError(
             'branch_delete_failed',
             `重试删除分支 ${record.branch} 失败（登记保持 removed，可再次重试）：\n${(del.failureOutput ?? '').trim()}`,
             502,
@@ -245,13 +245,13 @@ export async function cleanupWorktree(
       return checkWorking(id)
     } catch (err) {
       // 会话已删除（not_found）不可能在运行，允许清理其遗留孤儿 worktree；其他读取错误继续 fail-closed 上抛
-      if (err instanceof HelmError && err.code === 'not_found') return false
+      if (err instanceof HelmxError && err.code === 'not_found') return false
       throw err
     }
   }
 
   if (isConvActive(record.conversationId)) {
-    throw new HelmError(
+    throw new HelmxError(
       'worktree_in_use',
       `worktree '${record.path}' 关联的子代理仍在运行中，拒绝清理`,
       409,
@@ -259,7 +259,7 @@ export async function cleanupWorktree(
     )
   }
   if (checkPathInUse(record.nodeId, record.path)) {
-    throw new HelmError(
+    throw new HelmxError(
       'worktree_in_use',
       `worktree '${record.path}'（节点 ${record.nodeId}）仍被引用，拒绝清理`,
       409,
@@ -268,7 +268,7 @@ export async function cleanupWorktree(
   }
 
   if (!(await dirExistsOnNode(deps, record.nodeId, record.path))) {
-    throw new HelmError(
+    throw new HelmxError(
       'worktree_missing',
       `受管 worktree '${record.path}'（节点 ${record.nodeId}）目录已不存在（节点真实 fs 探测证实）；登记保留，请人工核对后处理（不自动 prune）`,
       409,
@@ -289,7 +289,7 @@ export async function cleanupWorktree(
   await withRepoLock(record.nodeId, authority.canonicalCommonDir, async () => {
     const fresh = store.findById(record.id)
     if (fresh === undefined) {
-      throw new HelmError('not_found', `受管 worktree 记录 ${record.id} 不存在（文档状态不一致）`, 404, { id: record.id })
+      throw new HelmxError('not_found', `受管 worktree 记录 ${record.id} 不存在（文档状态不一致）`, 404, { id: record.id })
     }
     if (fresh.status === 'removed') {
       outcome = { removed: false, branchDeleted: fresh.branchDeleted === true }
@@ -297,7 +297,7 @@ export async function cleanupWorktree(
     }
     assertWorktreeNotHeld(store, redact, fresh)
     if (isConvActive(fresh.conversationId)) {
-      throw new HelmError(
+      throw new HelmxError(
         'worktree_in_use',
         `worktree '${fresh.path}' 关联的子代理仍在运行中，拒绝清理`,
         409,
@@ -305,7 +305,7 @@ export async function cleanupWorktree(
       )
     }
     if (checkPathInUse(fresh.nodeId, fresh.path)) {
-      throw new HelmError(
+      throw new HelmxError(
         'worktree_in_use',
         `worktree '${fresh.path}'（节点 ${fresh.nodeId}）仍被引用，拒绝清理`,
         409,
@@ -329,7 +329,7 @@ export async function cleanupWorktree(
       throw ownerMismatchError(fresh, 'main_worktree', '指向主工作树（主工作树绝不清除）', { mainPath: redact(mainEntry.path) })
     }
     if (match.locked) {
-      throw new HelmError(
+      throw new HelmxError(
         'worktree_locked',
         `worktree '${fresh.path}'（节点 ${fresh.nodeId}）已被 git worktree lock 锁定${match.lockedReason !== undefined ? `（${redact(match.lockedReason)}）` : ''}，拒绝清理（请先解锁）`,
         409,
@@ -386,7 +386,7 @@ export async function cleanupWorktree(
         input.signal,
       )
       if (!status.ok) {
-        throw new HelmError(
+        throw new HelmxError(
           'worktree_check_failed',
           `无法确认 worktree '${fresh.path}' 的工作区状态（git status 失败；绝不当作干净或目录缺失，清理中止）：\n${status.output.trim()}`,
           502,
@@ -409,7 +409,7 @@ export async function cleanupWorktree(
       )
       unmergedCommits = await countUnmergedCommits(deps, fresh.nodeId, locked.mainPath, referenceHead, fresh.branch, input.signal)
       if (dirtyFiles.length > 0 || unmergedCommits > 0) {
-        throw new HelmError(
+        throw new HelmxError(
           'worktree_dirty',
           `worktree '${fresh.path}' (branch: ${fresh.branch}) 含未提交修改、未跟踪/被忽略文件或未合入提交（相对参考提交 ${referenceHead}）；请先检视/合入，或显式传 force: true 强制清理`,
           409,
@@ -428,7 +428,7 @@ export async function cleanupWorktree(
       input.signal,
     )
     if (!remove.ok) {
-      throw new HelmError(
+      throw new HelmxError(
         'worktree_remove_failed',
         `移除 worktree '${fresh.path}'（节点 ${fresh.nodeId}）失败：\n${remove.output.trim()}`,
         502,
@@ -455,7 +455,7 @@ export async function cleanupWorktree(
           branchDeleted: false,
           branchDeleteError: (del.failureOutput ?? '').slice(0, 2000),
         }))
-        throw new HelmError(
+        throw new HelmxError(
           'branch_delete_failed',
           `worktree '${fresh.path}' 已移除，但删除分支 ${fresh.branch} 失败（登记已置 removed，可重试 cleanup 传 deleteBranch:true）：\n${(del.failureOutput ?? '').trim()}`,
           502,
@@ -473,7 +473,7 @@ export async function cleanupWorktree(
 
   const result = outcome
   if (result === undefined) {
-    throw new HelmError('worktree_check_failed', '清理未产生结果（内部状态不一致）', 500, { worktreeId: record.id })
+    throw new HelmxError('worktree_check_failed', '清理未产生结果（内部状态不一致）', 500, { worktreeId: record.id })
   }
   return {
     removed: result.removed,

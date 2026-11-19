@@ -3,13 +3,13 @@
  * task titles, total duration and the second-layer dynamic subline (zero
  * React/DOM dependencies).
  */
-import { DEFAULT_HELM_LOCALE, resolveLocalizedText, type HelmLocale } from '@helm/plugin-client'
+import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale } from '@helmx/plugin-client'
 import type {
   AskSpec,
   ConversationEntry,
   ConversationLive,
   ConversationSummary,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import {
   extractCleanPreviewLine,
@@ -53,7 +53,7 @@ function isTrueBackgroundRun(run: SubagentRunView): boolean {
   return !(run.syncForeground === true && run.detachedAt === undefined)
 }
 
-export function runFailureFallbackLabel(run: SubagentRunView, locale: HelmLocale = DEFAULT_HELM_LOCALE): string {
+export function runFailureFallbackLabel(run: SubagentRunView, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return runFailureFallbackCopy(isTrueBackgroundRun(run), locale)
 }
 
@@ -62,7 +62,7 @@ export function subagentBadge(
   toolStatus: 'running' | 'done' | 'error' | 'unknown',
   run?: SubagentRunView,
   options?: { isBackgroundHandle?: boolean; handleStatus?: string },
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): SubagentBadge {
   const trueBackground = run !== undefined && isTrueBackgroundRun(run)
   const label = (key: SubagentBadgeLabelKey): string => subagentBadgeLabel(key, locale)
@@ -124,7 +124,7 @@ function lastMeaningfulLine(text: string): string | undefined {
 }
 
 function inputEntryText(entry: ConversationEntry): string | undefined {
-  if (entry.kind !== 'helm.input') return undefined
+  if (entry.kind !== 'helmx.input') return undefined
   if (entry.data === null || typeof entry.data !== 'object' || Array.isArray(entry.data)) return undefined
   const text = (entry.data as Record<string, unknown>)['text']
   return typeof text === 'string' && text.trim() !== '' ? text : undefined
@@ -134,7 +134,7 @@ export function latestTurnStartedAt(entries: ReadonlyArray<ConversationEntry> | 
   if (entries === undefined) return undefined
   for (let i = entries.length - 1; i >= 0; i--) {
     const entry = entries[i]!
-    if (entry.kind !== 'helm.input') continue
+    if (entry.kind !== 'helmx.input') continue
     if (typeof entry.createdAt === 'number' && Number.isFinite(entry.createdAt) && entry.createdAt > 0) {
       return entry.createdAt
     }
@@ -147,7 +147,7 @@ export function latestTurnStartedAt(entries: ReadonlyArray<ConversationEntry> | 
   return undefined
 }
 
-/** Card heading task title: user title > non-placeholder backgroundRun.name > tool label / prompt > first background run node label / prompt > first helm.input. */
+/** Card heading task title: user title > non-placeholder backgroundRun.name > tool label / prompt > first background run node label / prompt > first helmx.input. */
 export function resolveSubagentTaskTitle(
   summary: ConversationSummary | undefined,
   childConversationId: number,
@@ -330,7 +330,7 @@ function errorTextFromToolSummary(toolSummary: SubagentParentToolSummary | undef
   return undefined
 }
 
-function backgroundRunError(backgroundRun: WorkflowRunSummary, locale: HelmLocale): string | undefined {
+function backgroundRunError(backgroundRun: WorkflowRunSummary, locale: HelmxLocale): string | undefined {
   const fallback = runFailureFallbackLabel(backgroundRun, locale)
   if (backgroundRun.error !== undefined && backgroundRun.error.trim() !== '') {
     return firstLineOf(backgroundRun.error, 100)
@@ -361,7 +361,7 @@ function backgroundRunResultPreview(backgroundRun: WorkflowRunSummary | undefine
 
 function lastErrorLine(entries: ReadonlyArray<ConversationEntry> | undefined): string | undefined {
   if (entries === undefined) return undefined
-  const latestInputIndex = entries.findLastIndex((entry) => entry.kind === 'helm.input')
+  const latestInputIndex = entries.findLastIndex((entry) => entry.kind === 'helmx.input')
   const lines = buildSubagentStreamLines(latestInputIndex >= 0 ? entries.slice(latestInputIndex) : entries)
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]!
@@ -378,7 +378,7 @@ function lastErrorLine(entries: ReadonlyArray<ConversationEntry> | undefined): s
 
 function lastAssistantText(entries: ReadonlyArray<ConversationEntry> | undefined): string | undefined {
   if (entries === undefined) return undefined
-  const latestInputIndex = entries.findLastIndex((entry) => entry.kind === 'helm.input')
+  const latestInputIndex = entries.findLastIndex((entry) => entry.kind === 'helmx.input')
   const lines = buildSubagentStreamLines(latestInputIndex >= 0 ? entries.slice(latestInputIndex) : entries)
   for (let i = lines.length - 1; i >= 0; i--) {
     const line = lines[i]!
@@ -403,7 +403,7 @@ export function resolveSubagentHeaderSnippet(
     toolSummary?: SubagentParentToolSummary
     detailError?: string
   },
-  locale: HelmLocale = DEFAULT_HELM_LOCALE,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
 ): SubagentHeaderSnippet | undefined {
   if (input.detailError !== undefined) {
     return { kind: 'error', tag: resolveLocalizedText(SNIPPET_LOAD_FAILED, locale), text: firstLineOf(input.detailError, 100) }

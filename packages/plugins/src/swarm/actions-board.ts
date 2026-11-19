@@ -1,4 +1,4 @@
-import { HelmError, type HelmPluginContext } from '@helm/protocol'
+import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import {
   SWARM_PLUGIN_ID,
   assertBoardPostKind,
@@ -20,7 +20,7 @@ import {
 } from './board-router.js'
 import { inspectManagedWorktree, toWorktreeHandoffSnapshot } from './worktree-bridge.js'
 
-export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCoordinator) {
+export function createBoardHandlers(ctx: HelmxPluginContext, coordinator: SwarmCoordinator) {
   const { groups } = coordinator
 
   const boardPost = async (
@@ -38,11 +38,11 @@ export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
     idempotencyKey?: string,
   ): Promise<{ post: BoardPost }> => {
     if (typeof input.body !== 'string' || input.body.trim() === '') {
-      throw new HelmError('validation_error', 'board_post.body 必须是非空文本', 400, {})
+      throw new HelmxError('validation_error', 'board_post.body 必须是非空文本', 400, {})
     }
     const kind = assertBoardPostKind(input.kind)
     if (kind === 'stall') {
-      throw new HelmError('validation_error', "kind='stall' 为系统保留静默告警类型，禁止手动发布", 400, {})
+      throw new HelmxError('validation_error', "kind='stall' 为系统保留静默告警类型，禁止手动发布", 400, {})
     }
 
     let group: CollabGroupRecord | undefined
@@ -52,7 +52,7 @@ export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
     if (conversationId !== undefined) {
       const participant = groups.findGroupByParticipant(conversationId)
       if (participant === undefined) {
-        throw new HelmError(
+        throw new HelmxError(
           'conversation_scope_violation',
           `当前会话 #${conversationId} 未关联任何活跃协作组`,
           403,
@@ -60,7 +60,7 @@ export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
         )
       }
       if (input.groupId !== undefined && assertGroupId(input.groupId) !== participant.group.id) {
-        throw new HelmError(
+        throw new HelmxError(
           'conversation_scope_violation',
           `会话 #${conversationId} 属于协作组 '${participant.group.id}'，无权写入 '${input.groupId}'`,
           403,
@@ -79,7 +79,7 @@ export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
         group = groups.getGroup(assertGroupId(input.groupId))
       }
       if (group === undefined) {
-        throw new HelmError('swarm_group_not_found', '未找到活跃协作组；人工调用请显式指定 groupId', 404, {
+        throw new HelmxError('swarm_group_not_found', '未找到活跃协作组；人工调用请显式指定 groupId', 404, {
           pluginId: SWARM_PLUGIN_ID,
         })
       }
@@ -94,7 +94,7 @@ export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
     }
 
     if (group.status !== 'active') {
-      throw new HelmError('swarm_group_closed', `协作组 '${group.id}' 已结单，无法追加黑板消息`, 409, {
+      throw new HelmxError('swarm_group_closed', `协作组 '${group.id}' 已结单，无法追加黑板消息`, 409, {
         pluginId: SWARM_PLUGIN_ID,
         groupId: group.id,
       })
@@ -103,18 +103,18 @@ export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
     const channel = resolvePostChannel(group, input.channel)
     const { normalizedTo, resolvedTargets } = resolveBoardTargets(group, caller, input.to)
     if (input.wake !== undefined && typeof input.wake !== 'boolean') {
-      throw new HelmError('validation_error', 'wake 必须是布尔值', 400, {})
+      throw new HelmxError('validation_error', 'wake 必须是布尔值', 400, {})
     }
     const wake = input.wake ?? resolveDefaultWake(kind, normalizedTo)
 
     const refs: number[] = []
     if (input.refs !== undefined) {
       if (!Array.isArray(input.refs)) {
-        throw new HelmError('validation_error', 'refs 必须是正整数数组', 400, {})
+        throw new HelmxError('validation_error', 'refs 必须是正整数数组', 400, {})
       }
       for (const ref of input.refs) {
         if (!isPosIntId(ref) || ref > group.headSeq) {
-          throw new HelmError(
+          throw new HelmxError(
             'validation_error',
             `refs 含不存在的黑板序号 #${String(ref)}（当前 headSeq=${group.headSeq}）`,
             400,
@@ -155,7 +155,7 @@ export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
       const validId = assertGroupId(explicitGroupId)
       const group = groups.getGroup(validId)
       if (group === undefined) {
-        throw new HelmError('swarm_group_not_found', `协作组 '${validId}' 不存在`, 404, {
+        throw new HelmxError('swarm_group_not_found', `协作组 '${validId}' 不存在`, 404, {
           pluginId: SWARM_PLUGIN_ID,
           groupId: validId,
         })
@@ -165,7 +165,7 @@ export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
           group.coordinatorConversationId === conversationId ||
           group.members.some((m) => m.conversationId === conversationId)
         if (!isParticipant) {
-          throw new HelmError(
+          throw new HelmxError(
             'conversation_scope_violation',
             `会话 #${conversationId} 不属于协作组 '${group.id}'`,
             403,
@@ -180,7 +180,7 @@ export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
       const found = groups.findLatestGroupForConversation(conversationId)
       if (found !== undefined) return found
     }
-    throw new HelmError('swarm_group_not_found', '未找到关联协作组；请显式传入 groupId', 404, {
+    throw new HelmxError('swarm_group_not_found', '未找到关联协作组；请显式传入 groupId', 404, {
       pluginId: SWARM_PLUGIN_ID,
     })
   }
@@ -200,7 +200,7 @@ export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
 
     if (input.seqs !== undefined) {
       if (!Array.isArray(input.seqs) || !input.seqs.every((s) => isPosIntId(s))) {
-        throw new HelmError('validation_error', 'seqs 必须是正整数数组', 400, {})
+        throw new HelmxError('validation_error', 'seqs 必须是正整数数组', 400, {})
       }
       const wanted = new Set(input.seqs)
       const posts = allPosts.filter((p) => wanted.has(p.seq))
@@ -211,7 +211,7 @@ export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
     if (input.channel !== undefined && input.channel.trim() !== '') {
       const chName = input.channel.trim()
       if (!group.channels.some((c) => c.name === chName)) {
-        throw new HelmError('swarm_unknown_channel', `未知频道 '${chName}'`, 404, {
+        throw new HelmxError('swarm_unknown_channel', `未知频道 '${chName}'`, 404, {
           pluginId: SWARM_PLUGIN_ID,
           groupId: group.id,
           channel: chName,
@@ -222,12 +222,12 @@ export function createBoardHandlers(ctx: HelmPluginContext, coordinator: SwarmCo
 
     const limit = input.limit === undefined ? 50 : input.limit
     if (typeof limit !== 'number' || !Number.isInteger(limit) || limit <= 0 || limit > 200) {
-      throw new HelmError('validation_error', `limit 必须是 1..200 整数（收到：${String(input.limit)}）`, 400, {})
+      throw new HelmxError('validation_error', `limit 必须是 1..200 整数（收到：${String(input.limit)}）`, 400, {})
     }
 
     if (input.sinceSeq !== undefined) {
       if (typeof input.sinceSeq !== 'number' || !Number.isInteger(input.sinceSeq) || input.sinceSeq < 0) {
-        throw new HelmError('validation_error', `sinceSeq 必须是非负整数（收到：${String(input.sinceSeq)}）`, 400, {})
+        throw new HelmxError('validation_error', `sinceSeq 必须是非负整数（收到：${String(input.sinceSeq)}）`, 400, {})
       }
       const after = filtered.filter((p) => p.seq > input.sinceSeq!)
       return { groupId: group.id, headSeq: group.headSeq, posts: after.slice(0, limit) }

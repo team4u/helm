@@ -11,7 +11,7 @@ import { useSplitTarget, useStoreActions } from '../lib/store-context.js'
 import { useStableCallback } from '../lib/use-stable-callback.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { conversationsApi } from '../lib/api.js'
-import type { ConversationSummary } from '@helm/protocol/browser'
+import type { ConversationSummary } from '@helmx/protocol/browser'
 import type { EditRequestTarget } from './timeline-model.js'
 
 export interface TimelineEntryActions {

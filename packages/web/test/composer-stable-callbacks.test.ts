@@ -24,9 +24,9 @@ Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 
 const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
-import type { ArtifactMetadata, ConversationSummary } from '@helm/protocol'
+import type { ArtifactMetadata, ConversationSummary } from '@helmx/protocol'
 import { conversationsApi } from '../src/lib/api.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import type { ToastNotice } from '../src/lib/types.js'
 
 const { Composer } = await import('../src/conversation/Composer.js')
@@ -39,7 +39,7 @@ const conv = (id: number): ConversationSummary => ({
 const convA = conv(1)
 const convB = conv(2)
 
-function makeStore(opts?: { detail?: boolean }): { store: HelmExternalStore; notices: () => ToastNotice[] } {
+function makeStore(opts?: { detail?: boolean }): { store: HelmxExternalStore; notices: () => ToastNotice[] } {
   const store = makeTestStore({
     conversations: [convA, convB],
     // Empty entries + idle: the empty conversation shows the starting-environment bar (SessionEnvBar)
@@ -61,7 +61,7 @@ interface Harness {
   unmount: () => void
 }
 
-function mountComposer(store: HelmExternalStore, onSendingChange?: (sending: boolean) => void): Harness {
+function mountComposer(store: HelmxExternalStore, onSendingChange?: (sending: boolean) => void): Harness {
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)

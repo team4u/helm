@@ -1,5 +1,5 @@
 /**
- * `HelmPluginConfigStore`: persistent configuration bridge for `PluginHost` (dedicated runtime helper).
+ * `HelmxPluginConfigStore`: persistent configuration bridge for `PluginHost` (dedicated runtime helper).
  *
  * - Non-secret fields -> `config.json` `plugins.<pluginId>` (`ConfigService` atomic write,
  *   updating only this plugin's key while preserving other plugins and top-level keys);
@@ -15,10 +15,10 @@
  */
 
 import {
-  HelmError,
+  HelmxError,
   isJsonObject,
   type PluginConfigFieldSchema,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import type { PluginConfigStore } from '../plugins/plugin-host.js'
 import type { ConfigService } from '../services/config.js'
 import type { CredentialService } from '../services/credentials.js'
@@ -29,15 +29,15 @@ const TYPE_OF: Record<PluginConfigFieldSchema['type'], 'string' | 'number' | 'bo
   boolean: 'boolean',
 }
 
-function invalid(pluginId: string, message: string): HelmError {
-  return new HelmError('validation_error', `Plugin '${pluginId}' config validation failed: ${message}`, 400, {
+function invalid(pluginId: string, message: string): HelmxError {
+  return new HelmxError('validation_error', `Plugin '${pluginId}' config validation failed: ${message}`, 400, {
     pluginId,
   })
 }
 
 /** Corrupted nested field encountered during write: reject cleanly instead of overwriting existing data with `{}`. */
-function corrupt(field: string, detail: string): HelmError {
-  return new HelmError('config_corrupt', `config.json field '${field}' has invalid structure (${detail}); write rejected`, 500)
+function corrupt(field: string, detail: string): HelmxError {
+  return new HelmxError('config_corrupt', `config.json field '${field}' has invalid structure (${detail}); write rejected`, 500)
 }
 
 interface Mirror {
@@ -49,7 +49,7 @@ interface Mirror {
   enabled: Map<string, boolean>
 }
 
-export class HelmPluginConfigStore implements PluginConfigStore {
+export class HelmxPluginConfigStore implements PluginConfigStore {
   private readonly configService: ConfigService
   private readonly credentialService: CredentialService
   private readonly mirror: Mirror = { plain: new Map(), secrets: new Map(), enabled: new Map() }
@@ -70,7 +70,7 @@ export class HelmPluginConfigStore implements PluginConfigStore {
     const plugins = cfg['plugins']
     if (plugins !== undefined) {
       if (!isJsonObject(plugins)) {
-        throw new HelmError('config_corrupt', 'config.json field "plugins" has invalid structure (expected object)', 500)
+        throw new HelmxError('config_corrupt', 'config.json field "plugins" has invalid structure (expected object)', 500)
       }
       for (const [id, value] of Object.entries(plugins)) {
         if (isJsonObject(value)) this.mirror.plain.set(id, { ...value })
@@ -79,7 +79,7 @@ export class HelmPluginConfigStore implements PluginConfigStore {
     const pluginEnabled = cfg['pluginEnabled']
     if (pluginEnabled !== undefined) {
       if (!isJsonObject(pluginEnabled)) {
-        throw new HelmError(
+        throw new HelmxError(
           'config_corrupt',
           'config.json field "pluginEnabled" has invalid structure (expected pluginId -> boolean object)',
           500,
@@ -87,7 +87,7 @@ export class HelmPluginConfigStore implements PluginConfigStore {
       }
       for (const [id, value] of Object.entries(pluginEnabled)) {
         if (typeof value !== 'boolean') {
-          throw new HelmError(
+          throw new HelmxError(
             'config_corrupt',
             `config.json pluginEnabled.${id} must be a boolean (got ${typeof value})`,
             500,
@@ -225,7 +225,7 @@ export class HelmPluginConfigStore implements PluginConfigStore {
    */
   async setEnabled(pluginId: string, enabled: boolean): Promise<void> {
     if (typeof enabled !== 'boolean') {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `Plugin '${pluginId}' enabled state must be a boolean (got ${typeof enabled})`,
         400,

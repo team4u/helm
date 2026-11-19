@@ -10,10 +10,10 @@
  *   remote POSIX behavior intact (remote POSIX nodes are never misclassified as Windows).
  *
  * Avoids duplicating path regexes: delegates syntax checks, formatting, and deterministic win32 view conversion
- * (`/mnt/<drive>`, `/<drive>`, `//server/share`) to `@helm/protocol` primitives `normalizeTargetPath` / `targetPlatformOf`.
+ * (`/mnt/<drive>`, `/<drive>`, `//server/share`) to `@helmx/protocol` primitives `normalizeTargetPath` / `targetPlatformOf`.
  * All execution entries (`runShell`, `resolveExecTarget`, `read`/`write`/`edit`) route through here with zero ad-hoc rules.
  */
-import { normalizeTargetPath, targetPlatformOf, type TargetPlatform } from '@helm/protocol'
+import { normalizeTargetPath, targetPlatformOf, type TargetPlatform } from '@helmx/protocol'
 
 /** Minimal platform lookup port (implemented by EnvFabric from Hub/node platform facts; stubbed in tests). */
 interface NodePlatformSource {

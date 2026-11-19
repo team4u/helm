@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { PluginConfigFieldSchema, Profile } from '@helm/protocol'
+import type { PluginConfigFieldSchema, Profile } from '@helmx/protocol'
 import {
   buildPluginConfigPayload,
   configFieldInitialValue,

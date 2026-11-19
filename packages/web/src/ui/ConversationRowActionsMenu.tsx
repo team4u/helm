@@ -15,8 +15,8 @@
  */
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ConversationSummary } from '@helm/protocol/browser'
-import { HelmIcon } from '@helm/plugin-client'
+import type { ConversationSummary } from '@helmx/protocol/browser'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useGroupedUi, useStoreActions } from '../lib/store-context.js'
 import { PluginMicroAction } from './PluginMicroAction.js'
@@ -105,7 +105,7 @@ export function ConversationRowActionsMenu({
           aria-label={t('conv.row.menuAria', { id: conversation.id, label: menuLabel })}
           onClick={(e) => e.stopPropagation()}
         >
-          <HelmIcon name="more" size={13} />
+          <HelmxIcon name="more" size={13} />
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuPortal>
@@ -123,7 +123,7 @@ export function ConversationRowActionsMenu({
               }}
             >
               <span className="pane-more-item-label">
-                <HelmIcon
+                <HelmxIcon
                   name={archiving ? 'loader' : hostArchiveAction === 'archive' ? 'archive' : 'rotate-ccw'}
                   size={13}
                   className={archiving ? 'spin-slow' : undefined}

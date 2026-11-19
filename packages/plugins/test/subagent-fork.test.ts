@@ -1,6 +1,6 @@
 /**
  * builtin:workflow（subagent fork + Git Worktree）与 builtin:herdr（assertNoFork）端到端测试：
- * - 真实 Git 仓库 + createHelm + WorktreeAllocator：
+ * - 真实 Git 仓库 + createHelmx + WorktreeAllocator：
  *   1. subagent({ fork: true, isolation: 'worktree', gate }) 省略 agentType 时继承非默认
  *      Profile 与父已完成上下文，在隔离工作树修改文件并通过 gate（源仓库无污染），
  *      随后可用返回 footer 中的 conversationId 经 subagent({ resume }) 在同一工作树续接；
@@ -22,9 +22,9 @@ import {
   fauxToolCall,
   type FauxResponseFactory,
 } from '@earendil-works/pi-ai/providers/faux'
-import { createPluginBuildProvider } from '@helm/plugin-build'
-import { HelmError, type AgentGateResult, type Profile } from '@helm/protocol'
-import { createHelm } from '../../hub/src/app.js'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
+import { HelmxError, type AgentGateResult, type Profile } from '@helmx/protocol'
+import { createHelmx } from '../../hub/src/app.js'
 import { AskCoordinator } from '../src/herdr/asks.js'
 import type { HerdrEvent, HerdrNodeChannel, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import { HerdrExecutor, type ExecutorHost } from '../src/herdr/executor.js'
@@ -38,20 +38,20 @@ import {
   type GitTemplate,
 } from './helpers/plugin-test-env.js'
 
-let savedHelmModel: string | undefined
+let savedHelmxModel: string | undefined
 let rootDir: string
 let gitTemplate: GitTemplate
 
 before(() => {
-  savedHelmModel = process.env['HELM_MODEL']
-  delete process.env['HELM_MODEL']
-  rootDir = mkdtempSync(join(tmpdir(), 'helm-plugin-subagent-fork-'))
-  gitTemplate = createGitTemplate('helm-plugin-subagent-fork-git-')
+  savedHelmxModel = process.env['HELMX_MODEL']
+  delete process.env['HELMX_MODEL']
+  rootDir = mkdtempSync(join(tmpdir(), 'helmx-plugin-subagent-fork-'))
+  gitTemplate = createGitTemplate('helmx-plugin-subagent-fork-git-')
 })
 
 after(() => {
-  if (savedHelmModel === undefined) delete process.env['HELM_MODEL']
-  else process.env['HELM_MODEL'] = savedHelmModel
+  if (savedHelmxModel === undefined) delete process.env['HELMX_MODEL']
+  else process.env['HELMX_MODEL'] = savedHelmxModel
   gitTemplate.cleanup()
   rmSync(rootDir, { recursive: true, force: true })
 })
@@ -113,7 +113,7 @@ function findToolResultByCallId(
   throw new Error(`未找到 toolCallId=${toolCallId} 的工具结果`)
 }
 
-describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { timeout: 60_000 }, () => {
+describe('subagent fork 与 Git Worktree 集成（createHelmx 端到端）', { timeout: 60_000 }, () => {
   it('fork + isolation: worktree + gate 继承非默认 Profile 上下文，可用 conversationId 续接；fork+resume 报错', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 'wt-fork-resume')
     const dataDir = join(dir, 'data')
@@ -215,7 +215,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
     }
     faux.setResponses(Array.from({ length: 24 }, () => step))
 
-    const app = await createHelm({
+    const app = await createHelmx({
       buildProvider: createPluginBuildProvider(),
       dataDir,
       cwd: repo,
@@ -346,7 +346,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
     }
     faux.setResponses(Array.from({ length: 12 }, () => step))
 
-    const app = await createHelm({
+    const app = await createHelmx({
       buildProvider: createPluginBuildProvider(),
       dataDir,
       cwd: repo,
@@ -443,7 +443,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
     }
     faux.setResponses(Array.from({ length: 20 }, () => step))
 
-    const app = await createHelm({
+    const app = await createHelmx({
       buildProvider: createPluginBuildProvider(),
       dataDir,
       cwd: dir,
@@ -489,7 +489,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
         async () => {
           const d = await app.kernel.getConversationDetail(1, { limit: 200 })
           for (const e of d.entries) {
-            if (e.kind !== 'helm.input') continue
+            if (e.kind !== 'helmx.input') continue
             const data = e.data as { id?: unknown; origin?: unknown; meta?: { kind?: unknown; backgroundRunId?: unknown } } | undefined
             if (data?.meta?.backgroundRunId === runId) {
               reportInput = data
@@ -500,7 +500,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
         },
         { timeoutMs: 20_000, intervalMs: 20, message: '等待超时: 后台 fork steer 汇报到达父会话' },
       )
-      assert.equal(reportInput?.id, `helm:subagent-report:${runId}`)
+      assert.equal(reportInput?.id, `helmx:subagent-report:${runId}`)
       assert.equal(reportInput?.origin, 'agent')
       assert.equal(reportInput?.meta?.kind, 'subagent_report')
 
@@ -552,7 +552,7 @@ describe('subagent fork 与 Git Worktree 集成（createHelm 端到端）', { ti
     }
     faux.setResponses(Array.from({ length: 10 }, () => step))
 
-    const app = await createHelm({
+    const app = await createHelmx({
       buildProvider: createPluginBuildProvider(),
       dataDir,
       cwd: repo,
@@ -630,10 +630,10 @@ describe('HerdrExecutor.assertNoFork 防御性拒绝', { timeout: 60_000 }, () =
       isOnline: () => true,
       getNodeHubUrl: () => 'http://127.0.0.1:3202',
       ipcCall: () => {
-        throw new HelmError('unsupported', 'stub', 501)
+        throw new HelmxError('unsupported', 'stub', 501)
       },
       envFor: () => {
-        throw new HelmError('unsupported', 'stub', 501)
+        throw new HelmxError('unsupported', 'stub', 501)
       },
     }
     let doc: ManagedDoc = { ...EMPTY_MANAGED_DOC, panes: [...EMPTY_MANAGED_DOC.panes] }
@@ -652,16 +652,16 @@ describe('HerdrExecutor.assertNoFork 防御性拒绝', { timeout: 60_000 }, () =
       notify: () => undefined,
       startupTimeoutMs: () => 5_000,
       createAsk: (() => {
-        throw new HelmError('unsupported', 'stub', 501)
+        throw new HelmxError('unsupported', 'stub', 501)
       }) as never,
       cancelAsk: (() => {
-        throw new HelmError('unsupported', 'stub', 501)
+        throw new HelmxError('unsupported', 'stub', 501)
       }) as never,
     }
     const executor = new HerdrExecutor(
       {
         profiles: { get: async (id) => profiles.get(id) },
-        buildSpawnEnv: (_conversationId, cwd) => ({ HELM_CWD: cwd }),
+        buildSpawnEnv: (_conversationId, cwd) => ({ HELMX_CWD: cwd }),
         redact: (t) => t,
         runLocalGate: async () => ({ ok: true, output: '' }),
         nodeChannel,

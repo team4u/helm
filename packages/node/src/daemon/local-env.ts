@@ -1,14 +1,14 @@
 /**
- * Thin `@helm/node` adapter over `@earendil-works/pi-durable/env/node` (`NodeExecutionEnv`).
+ * Thin `@helmx/node` adapter over `@earendil-works/pi-durable/env/node` (`NodeExecutionEnv`).
  *
  * Delegates file I/O, streaming line/binary/directory readers, `StreamDecoder`, `LineScanner`,
  * error types, command execution, spill files, and timeout/signal handling to `NodeExecutionEnv`,
- * while preserving `@helm/node`-specific guarantees:
+ * while preserving `@helmx/node`-specific guarantees:
  * - `AbortSignal`-based API surface (bridged to `@earendil-works/chord/context`);
  * - deterministic target-platform path resolution via `resolveTargetPath`;
- * - host shell probing via `@helm/env-io` (`resolveHostShellConfig`), preventing Windows hosts
+ * - host shell probing via `@helmx/env-io` (`resolveHostShellConfig`), preventing Windows hosts
  *   from implicitly falling back into WSL;
- * - stripping managed identity/scope variables (`HELM_TOKEN`, `HELM_EXECUTION_SCOPE`) and
+ * - stripping managed identity/scope variables (`HELMX_TOKEN`, `HELMX_EXECUTION_SCOPE`) and
  *   case-safe Windows env-key normalization (`getShellEnv`).
  */
 
@@ -47,8 +47,8 @@ import {
   setEnvEntry,
   type ResolvedShellConfig,
   type ShellProbeIo,
-} from '@helm/env-io';
-import { targetPlatformOf, type TargetPlatform } from '@helm/protocol';
+} from '@helmx/env-io';
+import { targetPlatformOf, type TargetPlatform } from '@helmx/protocol';
 import { resolveTargetPath } from './local-env/target-path.js';
 
 export type Result<T> = SdkResult<T, FileError | ExecutionError>;
@@ -121,13 +121,13 @@ export async function getShellConfig(
 
 /**
  * Managed identity/scope variables stripped when inheriting host `process.env` into child
- * commands (`HELM_TOKEN` is the node's own credential; `HELM_EXECUTION_SCOPE` is per-invocation).
+ * commands (`HELMX_TOKEN` is the node's own credential; `HELMX_EXECUTION_SCOPE` is per-invocation).
  * Explicit `baseEnv` (`shellEnv`) and caller `extraEnv` still override deliberately.
  */
-const MANAGED_INHERIT_STRIP_UPPER = new Set(['HELM_TOKEN', 'HELM_EXECUTION_SCOPE']);
+const MANAGED_INHERIT_STRIP_UPPER = new Set(['HELMX_TOKEN', 'HELMX_EXECUTION_SCOPE']);
 
 /** Returns true for managed identity/scope env keys (case-insensitive). */
-export function isManagedHelmEnvKey(key: string): boolean {
+export function isManagedHelmxEnvKey(key: string): boolean {
   return MANAGED_INHERIT_STRIP_UPPER.has(key.toUpperCase());
 }
 
@@ -141,7 +141,7 @@ export function getShellEnv(
   const merged: Record<string, string> = {};
   if (inheritEnv) {
     for (const [key, value] of Object.entries(process.env)) {
-      if (value === undefined || isManagedHelmEnvKey(key)) continue;
+      if (value === undefined || isManagedHelmxEnvKey(key)) continue;
       setEnvEntry(merged, key, value, platform);
     }
     for (const [key, value] of Object.entries(baseEnv ?? {})) {

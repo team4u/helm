@@ -6,7 +6,7 @@
 
 import net from 'node:net';
 import type { Duplex } from 'node:stream';
-import type { RpcEnvError, RpcResult } from '@helm/protocol';
+import type { RpcEnvError, RpcResult } from '@helmx/protocol';
 import { drainingRejection, invalidInput, isRecord, rpcFail } from './env-rpc-shared.js';
 
 const TUNNEL_OPEN_DEFAULT_MS = 15_000;

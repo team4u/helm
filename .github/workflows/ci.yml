@@ -45,7 +45,7 @@ jobs:
       - name: Check test hygiene
         run: pnpm check:hygiene
 
-      # Tests depend on workspace package dist artifacts (packages such as @helm/kernel
+      # Tests depend on workspace package dist artifacts (packages such as @helmx/kernel
       # have exports pointing at ./dist; TLS fixture / CLI end-to-end tests really import
       # or execute them).
       - name: Build packages

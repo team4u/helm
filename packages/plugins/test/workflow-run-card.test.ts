@@ -11,7 +11,7 @@
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationSummary, PluginClientContext as PluginClientContextType, WorkbenchPanelProps } from '@helm/protocol'
+import type { ConversationSummary, PluginClientContext as PluginClientContextType, WorkbenchPanelProps } from '@helmx/protocol'
 import type { WorkflowNodeState, WorkflowRunSummary } from '../src/contracts.js'
 import {
   React,
@@ -334,7 +334,7 @@ test('listResumableFailedRuns：按会话、状态、接管、run.resumable 与�
     run({ id: 'wf_uncertain', conversationId: 1, kind: 'workflow', status: 'failed', error: 'workflow_action_uncertain: x' }),
     run({ id: 'wf_limit', conversationId: 1, kind: 'subagent', status: 'failed', error: '[crash_recovery_limit] exceeded', nodes: [node({ id: 's3', status: 'failed', conversationId: 12 })] }),
     run({ id: 'wf_secret', conversationId: 1, kind: 'subagent', status: 'failed', error: 'secret_grant_expired_on_restart', nodes: [node({ id: 's4', status: 'failed', executionId: 'pane-4' })] }),
-    run({ id: 'wf_val_err', conversationId: 1, kind: 'workflow', status: 'failed', error: 'HelmError [validation_error] bad arg' }),
+    run({ id: 'wf_val_err', conversationId: 1, kind: 'workflow', status: 'failed', error: 'HelmxError [validation_error] bad arg' }),
     run({ id: 'wf_syntax', conversationId: 1, kind: 'workflow', status: 'failed', error: 'Workflow script has a syntax error: Unexpected token' }),
     run({ id: 'wf_sub_nohandle', conversationId: 1, kind: 'subagent', status: 'failed', nodes: [node({ id: 's5', status: 'failed' })] }),
   ]
@@ -613,7 +613,7 @@ const HELLO_RUN = run({
       conversationId: 12,
       phaseTitle: '实现',
       cached: true,
-      worktree: { path: '/root/code/helm/.worktrees/wf-hello', branch: 'helm/wf-hello' },
+      worktree: { path: '/root/code/helm/.worktrees/wf-hello', branch: 'helmx/wf-hello' },
       tokens: 3456,
       durationMs: 42_000,
       output: '实现完成，测试通过',
@@ -671,14 +671,14 @@ test('SSR：run 主徽章同源有效状态——run 已完成但子任务仍在
     doc,
     [conv11, conv21],
   )
-  assert.match(toolHtml, /helm-status-light-working[\s\S]*?status-dot-working[\s\S]*?Running/, '时间线单行主状态灯同源不得假完成')
+  assert.match(toolHtml, /helmx-status-light-working[\s\S]*?status-dot-working[\s\S]*?Running/, '时间线单行主状态灯同源不得假完成')
   assert.ok(!toolHtml.includes('>Completed<'), '时间线单行不得假完成')
 
   const html = await renderWorkflowWorkbench(doc, [conv11, conv21])
   assert.match(html, /aria-label="Self: Completed; subtree aggregate: Running"/, '自身终态经灯的可访问名称交代清楚')
   assert.ok(!/class="badge[^"]*"[^>]*>Completed</.test(html), '不得以孤立的「Completed」徽章假完成')
   assert.ok(html.includes('Run self status'), '展开详情 kv 保留自身终态事实')
-  assert.match(html, /helm-status-light-working[\s\S]*?Running/, '主状态灯应为同源有效状态（子任务仍在执行）')
+  assert.match(html, /helmx-status-light-working[\s\S]*?Running/, '主状态灯应为同源有效状态（子任务仍在执行）')
   assert.ok(html.includes('Subtree 0/2'), '子树计数如实展示未完成（深层后台子任务计入）')
 })
 
@@ -750,7 +750,7 @@ test('SSR：多阶段工作流渲染阶段胶囊、日志、产出预览与徽�
   assert.ok(html.includes('实现完成，测试通过'))
   assert.match(html, /badge-warn[^>]*>\s*<!--\s*-->\s*Cached|badge-warn[^>]*>Cached/)
   assert.ok(html.includes('subagent-worktree-badge'))
-  assert.ok(html.includes('helm/wf-hello'))
+  assert.ok(html.includes('helmx/wf-hello'))
   assert.ok(html.includes('Isolated worktree: /root/code/helm/.worktrees/wf-hello'))
   assert.ok(html.includes('Action'))
   assert.ok(html.includes('Final output'))
@@ -796,7 +796,7 @@ test('canDetachForegroundRun：仅运行中前台同步 + 发起会话 + human�
   const fg = run({ id: 'wf_fg', status: 'running', syncForeground: true, conversationId: 1 })
   assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1, ownedBy: 'human' }), true)
   assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1 }), true)
-  assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1, ownedBy: 'helm' }), false)
+  assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1, ownedBy: 'helmx' }), false)
   assert.equal(m.canDetachForegroundRun(fg, { conversationId: 1, ownedBy: 'bot' }), false)
   assert.equal(m.canDetachForegroundRun(fg, { conversationId: 2 }), false)
   assert.equal(m.canDetachForegroundRun(fg, undefined), false)
@@ -820,7 +820,7 @@ test('SSR：前台同步 run 仅在查看会话即发起会话且 human 归属�
   )
   assert.ok(humanViewer.includes('Move to background'))
 
-  for (const ownedBy of ['helm', 'bot'] as const) {
+  for (const ownedBy of ['helmx', 'bot'] as const) {
     const automationViewer = await renderWorkflowWorkbench(
       { runs: [run({ id: 'wf_fg_a', status: 'running', syncForeground: true, parentToolCallId: 'call-fg-a', nodes: [node({ id: 'a', status: 'running' })] })] },
       [{ ...summary(1, 'working'), ownedBy }],

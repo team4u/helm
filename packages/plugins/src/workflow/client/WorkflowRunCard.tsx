@@ -9,7 +9,7 @@
  */
 import { useId, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { ToolViewProps } from '@helm/protocol'
+import type { ToolViewProps } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
 import {
   MarkdownText,
@@ -26,7 +26,7 @@ import {
   usePluginLocale,
   useToolActivity,
   type LocalizedText,
-} from '@helm/plugin-client'
+} from '@helmx/plugin-client'
 import { ToolCallDetailsInline } from './ToolCallDetailsInline.tsx'
 import { WorkflowNodeCard } from './WorkflowNodeCards.tsx'
 import { useElapsedNowMs, useInspectedRunResult, usePluginSessionDoc } from './hooks.ts'

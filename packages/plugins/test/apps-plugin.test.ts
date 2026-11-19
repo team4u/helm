@@ -17,7 +17,7 @@
  *   非法 category 400、宿主端口未接线 501；
  * - 停用 builtin:apps 后动作/UI 立即消失（可停用铁律）。
  */
-import { CLIENT_SHARED_GLOBALS, compilePluginClientModule, createPluginBuildProvider } from '@helm/plugin-build'
+import { CLIENT_SHARED_GLOBALS, compilePluginClientModule, createPluginBuildProvider } from '@helmx/plugin-build'
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -27,7 +27,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 import {
-  HelmError,
+  HelmxError,
   type ConversationSummary,
   type PluginDefinition,
   type PluginDoctorReport,
@@ -37,7 +37,7 @@ import {
   type PluginUiContribution,
   type PluginUpdateResult,
   type ScreenSpec,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
 import {
@@ -81,7 +81,7 @@ function fakePackageManager(initial: Partial<FakePackageManagerState> = {}) {
     summaries: new Map(),
     ui: [],
     doctorImpl: async () => {
-      throw new HelmError('not_implemented', '测试未配置 doctor 行为', 500)
+      throw new HelmxError('not_implemented', '测试未配置 doctor 行为', 500)
     },
     calls: [],
     screensOnInstall: true,
@@ -132,7 +132,7 @@ function fakePackageManager(initial: Partial<FakePackageManagerState> = {}) {
     async update(pluginId: string): Promise<PluginUpdateResult> {
       state.calls.push(`update:${pluginId}`)
       const prev = state.summaries.get(pluginId)
-      if (prev === undefined) throw new HelmError('unknown_plugin_package', `插件 ${pluginId} 没有受管安装记录`, 404, { pluginId })
+      if (prev === undefined) throw new HelmxError('unknown_plugin_package', `插件 ${pluginId} 没有受管安装记录`, 404, { pluginId })
       const now = Date.now()
       return {
         record: {
@@ -152,7 +152,7 @@ function fakePackageManager(initial: Partial<FakePackageManagerState> = {}) {
     async remove(pluginId: string): Promise<PluginRemoveResult> {
       state.calls.push(`remove:${pluginId}`)
       const record = state.installed.get(pluginId)
-      if (record === undefined) throw new HelmError('unknown_plugin_package', `插件 ${pluginId} 没有受管安装记录`, 404, { pluginId })
+      if (record === undefined) throw new HelmxError('unknown_plugin_package', `插件 ${pluginId} 没有受管安装记录`, 404, { pluginId })
       state.installed.delete(pluginId)
       state.summaries.delete(pluginId)
       state.ui = state.ui.filter((c) => c.pluginId !== pluginId)
@@ -195,7 +195,7 @@ function makeBackend(conversations: Map<number, ConversationSummary>, pluginsPor
     listConversations: () => [...conversations.values()],
     getConversation: (id: number) => {
       const found = conversations.get(id)
-      if (!found) throw new HelmError('not_found', `会话不存在: ${id}`, 404, { conversationId: id })
+      if (!found) throw new HelmxError('not_found', `会话不存在: ${id}`, 404, { conversationId: id })
       return found
     },
     skills: {
@@ -237,7 +237,7 @@ async function setup(options: {
   pluginsPort?: unknown
   docs?: PluginDocStore
 } = {}) {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-apps-plugin-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-apps-plugin-'))
   const conversations =
     options.conversations ?? new Map<number, ConversationSummary>([[1, makeConversation(1)]])
   const backend = makeBackend(conversations, options.pluginsPort)
@@ -265,7 +265,7 @@ function seedCatalogStore(docs: PluginDocStore, apps: AppsCatalogDoc['apps']): v
 let scratchRoot: string
 
 test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
-  scratchRoot = mkdtempSync(join(tmpdir(), 'helm-apps-tests-'))
+  scratchRoot = mkdtempSync(join(tmpdir(), 'helmx-apps-tests-'))
   t.after(() => rmSync(scratchRoot, { recursive: true, force: true }))
 
   await t.test('catalog 初始值：空 apps 表并进入公共文档', async () => {
@@ -294,7 +294,7 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
       if (actionId === 'list') continue
       await assert.rejects(
         () => host.invokeAction(APPS_PLUGIN_ID, actionId, input),
-        (err: unknown) => err instanceof HelmError && err.code === 'not_supported' && err.status === 501,
+        (err: unknown) => err instanceof HelmxError && err.code === 'not_supported' && err.status === 501,
         `${actionId} 应显式 501`,
       )
     }
@@ -398,7 +398,7 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
     // 远端节点 + 相对路径 -> 显式拒绝
     await assert.rejects(
       () => host.invokeAction(APPS_PLUGIN_ID, 'validate', { dir: 'apps/demo' }, { conversationId: 2 }),
-      (err: unknown) => err instanceof HelmError && err.code === 'app_source_must_be_on_hub' && err.status === 400,
+      (err: unknown) => err instanceof HelmxError && err.code === 'app_source_must_be_on_hub' && err.status === 400,
     )
     // 远端节点 + 绝对路径：允许（是 Hub 本机路径的显式声明）
     const r3 = (await host.invokeAction(APPS_PLUGIN_ID, 'validate', { dir: '/ws/app' }, { conversationId: 2 })) as { dir: string }
@@ -463,7 +463,7 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
     const { host, docs } = await setup({ pluginsPort: port })
     await assert.rejects(
       () => host.invokeAction(APPS_PLUGIN_ID, 'publish', { dir: '/ws/no-screen-app' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'app_validate_failed' && err.status === 422 && /ctx\.ui\.screen/.test(err.message),
+      (err: unknown) => err instanceof HelmxError && err.code === 'app_validate_failed' && err.status === 422 && /ctx\.ui\.screen/.test(err.message),
     )
     const catalog = readCatalog(host)
     assert.equal(catalog?.apps['no-screen-app'], undefined, '失败不登记 catalog')
@@ -483,7 +483,7 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
     await assert.rejects(
       () => host.invokeAction(APPS_PLUGIN_ID, 'publish', { dir: '/ws/broken-app' }),
       (err: unknown) =>
-        err instanceof HelmError && err.code === 'app_validate_failed' && err.status === 422 &&
+        err instanceof HelmxError && err.code === 'app_validate_failed' && err.status === 422 &&
         /TS syntax error/.test(err.message),
     )
     assert.deepEqual(state.calls.filter((c) => !c.startsWith('doctor:')), [], '预检失败不得触发 install/update')
@@ -634,7 +634,7 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
     const badHost = await setup({ pluginsPort: bad.port })
     await assert.rejects(
       badHost.host.invokeAction(APPS_PLUGIN_ID, 'list', {}),
-      (err: unknown) => err instanceof HelmError && err.code === 'invalid_plugin_output' && err.status === 500,
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_plugin_output' && err.status === 500,
     )
     await badHost.host.dispose()
   })
@@ -662,19 +662,19 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
 
     await assert.rejects(
       () => host.invokeAction(APPS_PLUGIN_ID, 'update_meta', { pluginId: 'ghost-app', pinned: true }),
-      (err: unknown) => err instanceof HelmError && err.code === 'app_not_published' && err.status === 404,
+      (err: unknown) => err instanceof HelmxError && err.code === 'app_not_published' && err.status === 404,
     )
     await assert.rejects(
       () => host.invokeAction(APPS_PLUGIN_ID, 'update_meta', { pluginId: 'todo-app', category: 'nope' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
     )
     await assert.rejects(
       () => host.invokeAction(APPS_PLUGIN_ID, 'update_meta', { pluginId: APPS_PLUGIN_ID, pinned: true }),
-      (err: unknown) => err instanceof HelmError && err.code === 'app_target_is_self' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'app_target_is_self' && err.status === 409,
     )
     await assert.rejects(
       () => host.invokeAction(APPS_PLUGIN_ID, 'remove', { pluginId: 'builtin:profile' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'app_target_is_builtin' && err.status === 409,
+      (err: unknown) => err instanceof HelmxError && err.code === 'app_target_is_builtin' && err.status === 409,
     )
     await host.dispose()
   })
@@ -709,11 +709,11 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
     const { host } = await setup({ pluginsPort: port })
     await assert.rejects(
       () => host.invokeAction(APPS_PLUGIN_ID, 'publish', { dir: '/ws/x', category: 'bad' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
     )
     await assert.rejects(
       () => host.invokeAction(APPS_PLUGIN_ID, 'validate', { dir: '/ws/\0x' }),
-      (err: unknown) => err instanceof HelmError && err.code === 'validation_error' && err.status === 400,
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
     )
     await host.dispose()
   })
@@ -726,7 +726,7 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
     assert.equal(host.listUi().some((c) => c.pluginId === APPS_PLUGIN_ID), false)
     await assert.rejects(
       () => host.invokeAction(APPS_PLUGIN_ID, 'list', {}),
-      (err: unknown) => err instanceof HelmError,
+      (err: unknown) => err instanceof HelmxError,
     )
     await host.dispose()
   })
@@ -747,7 +747,7 @@ test('builtin:apps 插件行为', { timeout: 60_000 }, async (t) => {
           skillCalls.push({ id: asset.id, managedBy: m?.[1] })
           assert.ok(asset.skillMd.includes("clientRoot: './client'"), 'app-builder SKILL.md 应强调 clientRoot: ./client')
           for (const sym of ['Screen', 'ScreenSection', 'DataTable', 'KvGrid', 'usePluginContext', 'usePluginDoc', 'usePluginSessionDoc', 'usePlugins']) {
-            assert.ok(asset.skillMd.includes(sym), `app-builder SKILL.md 应涵盖 @helm/plugin-client 共享符号 ${sym}`)
+            assert.ok(asset.skillMd.includes(sym), `app-builder SKILL.md 应涵盖 @helmx/plugin-client 共享符号 ${sym}`)
           }
           const tpl = asset.references['fullstack-template.md'] ?? ''
           assert.ok(tpl.includes("clientRoot: './client'"), 'fullstack-template.md 应包含 clientRoot: ./client')
@@ -848,11 +848,11 @@ test('apps client：双语 LocalizedText 插件摘要与 ScreenSpec.label 的模
     CLIENT_SHARED_GLOBALS['react-dom/client']!,
     CLIENT_SHARED_GLOBALS['react/jsx-runtime']!,
     CLIENT_SHARED_GLOBALS['lucide-react']!,
-    CLIENT_SHARED_GLOBALS['@helm/plugin-client']!,
+    CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!,
   ]
   const prevGlobals = new Map(sharedKeys.map((k) => [k, g[k]]))
 
-  const buildDir = mkdtempSync(join(tmpdir(), 'helm-apps-client-render-'))
+  const buildDir = mkdtempSync(join(tmpdir(), 'helmx-apps-client-render-'))
   t.after(() => {
     for (const key of sharedKeys) {
       const prev = prevGlobals.get(key)
@@ -869,7 +869,7 @@ test('apps client：双语 LocalizedText 插件摘要与 ScreenSpec.label 的模
   g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
   g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
   g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
-  g[CLIENT_SHARED_GLOBALS['@helm/plugin-client']!] = SDK
+  g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = SDK
 
   const appsClientDir = resolve(dirname(fileURLToPath(import.meta.url)), '../src/apps/client')
   const bundle = await compilePluginClientModule(APPS_PLUGIN_ID, appsClientDir, 'index.tsx', buildDir)

@@ -20,10 +20,10 @@ An `agentType` such as `herdr:agy` is routed through the owning external plugin 
 
 ## Background control
 
-Use the workflow steer action or `helm workflows steer <runId> --text <guidance>` only for a running background subagent that belongs to the current task tree. The operation is guarded by ownership and the current execution watermark. A successful delivery means the guidance was sent, not that it has already been executed.
+Use the workflow steer action or `helmx workflows steer <runId> --text <guidance>` only for a running background subagent that belongs to the current task tree. The operation is guarded by ownership and the current execution watermark. A successful delivery means the guidance was sent, not that it has already been executed.
 
 ## Worktree cleanup
 
 After inspecting or merging a child worktree, call the model tool `cleanup_worktree({ worktreeId: execution.worktree.id })` with the real execution metadata. This is a conversation tool, not a DSL function.
 
-The equivalent CLI is `helm worktrees cleanup --worktree-id <id> --json`. Cleanup refuses dirty, unmerged, occupied, locked, or uncertain worktrees by default. `force` only addresses the dirty/unmerged protection and never bypasses the other safety checks.
+The equivalent CLI is `helmx worktrees cleanup --worktree-id <id> --json`. Cleanup refuses dirty, unmerged, occupied, locked, or uncertain worktrees by default. `force` only addresses the dirty/unmerged protection and never bypasses the other safety checks.

@@ -4,7 +4,7 @@
  *
  * Principle: better to over-run than to miss. A non-test change inside a package -> that
  * package + the tests of every (transitively) depending package (reverse closure over the
- * @helm/* workspace edges in each packages/<pkg>/package.json's
+ * @helmx/* workspace edges in each packages/<pkg>/package.json's
  * dependencies/devDependencies); a test-only change -> that package alone (no other
  * package's code changed). Lockfile, root tsconfig, or test infrastructure (run-tests /
  * test-suites) changes affect everything -> all tiers.
@@ -55,7 +55,7 @@ export const TEST_SUFFIXES = ['.test.ts', '.test.tsx'];
  * @typedef {{ name: string, dir: string, workspaceDeps: string[] }} WorkspacePackage
  */
 
-/** Read every package under packages/ and its @helm/* workspace dependency edges. */
+/** Read every package under packages/ and its @helmx/* workspace dependency edges. */
 export function loadWorkspacePackages(repoRoot) {
   const packagesDir = path.join(repoRoot, 'packages');
   let entries;
@@ -77,7 +77,7 @@ export function loadWorkspacePackages(repoRoot) {
       ...Object.keys(pkg.dependencies ?? {}),
       ...Object.keys(pkg.devDependencies ?? {}),
     ]);
-    const workspaceDeps = [...deps].filter((d) => d.startsWith('@helm/'));
+    const workspaceDeps = [...deps].filter((d) => d.startsWith('@helmx/'));
     pkgs.push({ name: pkg.name ?? e.name, dir: e.name, workspaceDeps });
   }
   pkgs.sort((a, b) => a.dir.localeCompare(b.dir));

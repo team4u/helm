@@ -7,18 +7,18 @@ import type {
   ConversationLive,
   ConversationSummary,
   CredentialSummary,
-  HelmLocale,
+  HelmxLocale,
   NodeInfo,
   PluginSummary,
   ProviderConfig,
   SkillSummary,
-} from '@helm/protocol/browser'
+} from '@helmx/protocol/browser'
 import type { ModelDescriptor } from './api.js'
 import type {
   AuthSlice,
   CatalogSlice,
-  HelmExternalStore,
-  HelmStoreActions,
+  HelmxExternalStore,
+  HelmxStoreActions,
   LocationTargetsSlice,
   NavSlice,
   PluginHostPortSlice,
@@ -28,86 +28,86 @@ import type {
   ResolvedAskEntry,
   StoreDomainKey,
   WorkbenchSlice,
-} from './helm-store.js'
+} from './helmx-store.js'
 import type { SessionDocKey } from './session-docs.js'
 import type {
   ActiveModal,
   FocusedPanel,
   GroupedUiSpecs,
-  HelmStoreValue,
+  HelmxStoreValue,
   ResolvedTarget,
   ThemeMode,
   ToastNotice,
 } from './types.js'
 import type { WorkspaceLocationState } from './url-hash-model.js'
 
-export const HelmExternalStoreContext = createContext<HelmExternalStore | null>(null)
+export const HelmxExternalStoreContext = createContext<HelmxExternalStore | null>(null)
 
-const UNSET = Symbol('helm-store-unset')
+const UNSET = Symbol('helmx-store-unset')
 const NOOP_UNSUBSCRIBE = () => {}
 
-function subscribeLiveById(store: HelmExternalStore, id: number, listener: () => void): () => void {
+function subscribeLiveById(store: HelmxExternalStore, id: number, listener: () => void): () => void {
   return store.subscribeConversationLive(id, listener)
 }
-function readLiveById(store: HelmExternalStore, id: number): ConversationLive | undefined {
+function readLiveById(store: HelmxExternalStore, id: number): ConversationLive | undefined {
   return store.getConversationLive(id)
 }
 
-function subscribeDetailById(store: HelmExternalStore, id: number, listener: () => void): () => void {
+function subscribeDetailById(store: HelmxExternalStore, id: number, listener: () => void): () => void {
   return store.subscribeConversationDetail(id, listener)
 }
-function readDetailById(store: HelmExternalStore, id: number): ConversationDetail | undefined {
+function readDetailById(store: HelmxExternalStore, id: number): ConversationDetail | undefined {
   return store.getConversationDetail(id)
 }
 
-function subscribeSummaryById(store: HelmExternalStore, id: number, listener: () => void): () => void {
+function subscribeSummaryById(store: HelmxExternalStore, id: number, listener: () => void): () => void {
   return store.subscribeConversationSummary(id, listener)
 }
-function readSummaryById(store: HelmExternalStore, id: number): ConversationSummary | undefined {
+function readSummaryById(store: HelmxExternalStore, id: number): ConversationSummary | undefined {
   return store.getConversationSummary(id)
 }
 
-function subscribeArtifactsById(store: HelmExternalStore, id: number, listener: () => void): () => void {
+function subscribeArtifactsById(store: HelmxExternalStore, id: number, listener: () => void): () => void {
   return store.subscribeConversationArtifacts(id, listener)
 }
-function readArtifactsById(store: HelmExternalStore, id: number): ArtifactMetadata[] | undefined {
+function readArtifactsById(store: HelmxExternalStore, id: number): ArtifactMetadata[] | undefined {
   return store.getConversationArtifacts(id)
 }
 
-function subscribeResolvedAsksById(store: HelmExternalStore, id: number, listener: () => void): () => void {
+function subscribeResolvedAsksById(store: HelmxExternalStore, id: number, listener: () => void): () => void {
   return store.subscribeResolvedAsks(id, listener)
 }
-function readResolvedAsksById(store: HelmExternalStore, id: number): ResolvedAskEntry[] | undefined {
+function readResolvedAsksById(store: HelmxExternalStore, id: number): ResolvedAskEntry[] | undefined {
   return store.getResolvedAsks(id)
 }
 
-function subscribeHighlightById(store: HelmExternalStore, id: number, listener: () => void): () => void {
+function subscribeHighlightById(store: HelmxExternalStore, id: number, listener: () => void): () => void {
   return store.subscribeHighlightForConversation(id, listener)
 }
-function readHighlightById(store: HelmExternalStore, id: number): { conversationId: number; entryId: string } | null {
+function readHighlightById(store: HelmxExternalStore, id: number): { conversationId: number; entryId: string } | null {
   return store.getHighlightedEntryForConversation(id)
 }
 
-function subscribeLoadErrorKey(store: HelmExternalStore, key: string, listener: () => void): () => void {
+function subscribeLoadErrorKey(store: HelmxExternalStore, key: string, listener: () => void): () => void {
   return store.subscribeLoadError(key, listener)
 }
-function readLoadErrorKey(store: HelmExternalStore, key: string): string | undefined {
+function readLoadErrorKey(store: HelmxExternalStore, key: string): string | undefined {
   return store.getLoadError(key)
 }
 
-function subscribePluginDocKey(store: HelmExternalStore, docKey: string, listener: () => void): () => void {
+function subscribePluginDocKey(store: HelmxExternalStore, docKey: string, listener: () => void): () => void {
   return store.subscribePluginDoc(docKey, listener)
 }
-function readPluginDocKey(store: HelmExternalStore, docKey: string): unknown {
+function readPluginDocKey(store: HelmxExternalStore, docKey: string): unknown {
   return store.getPluginDoc(docKey)
 }
 
 function useDomainSlice<T>(
   domain: StoreDomainKey,
-  fromExternal: (store: HelmExternalStore) => T,
+  fromExternal: (store: HelmxExternalStore) => T,
   fallback?: () => T,
 ): T {
-  const external = useContext(HelmExternalStoreContext)
+  const external = useContext(HelmxExternalStoreContext)
   const subscribe = useCallback(
     (listener: () => void) => (external !== null ? external.subscribeDomain(domain, listener) : NOOP_UNSUBSCRIBE),
     [external, domain],
@@ -116,16 +116,16 @@ function useDomainSlice<T>(
   const value = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
   if (value !== UNSET) return value
   if (fallback !== undefined) return fallback()
-  throw new Error('useHelmStore must be called inside <HelmStoreProvider>')
+  throw new Error('useHelmxStore must be called inside <HelmxStoreProvider>')
 }
 
 function useKeyedSlice<K, T>(
-  subscribeForKey: (store: HelmExternalStore, key: K, listener: () => void) => () => void,
-  fromExternal: (store: HelmExternalStore, key: K) => T,
+  subscribeForKey: (store: HelmxExternalStore, key: K, listener: () => void) => () => void,
+  fromExternal: (store: HelmxExternalStore, key: K) => T,
   key: K | undefined,
   emptyValue: T,
 ): T {
-  const external = useContext(HelmExternalStoreContext)
+  const external = useContext(HelmxExternalStoreContext)
   const subscribe = useCallback(
     (listener: () => void) =>
       external !== null && key !== undefined ? subscribeForKey(external, key, listener) : NOOP_UNSUBSCRIBE,
@@ -135,31 +135,31 @@ function useKeyedSlice<K, T>(
     external !== null ? (key !== undefined ? fromExternal(external, key) : emptyValue) : UNSET
   const value = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
   if (value !== UNSET) return value
-  throw new Error('useHelmStore must be called inside <HelmStoreProvider>')
+  throw new Error('useHelmxStore must be called inside <HelmxStoreProvider>')
 }
 
 /**
  * Full store snapshot hook (coarse consumers; subscribes to all domains, so
  * production components should prefer sliced hooks below).
  */
-export function useHelmStore(): HelmStoreValue {
+export function useHelmxStore(): HelmxStoreValue {
   return useDomainSlice('all', (s) => s.getSnapshot())
 }
 
-/** Stable store action bundle (never triggers re-renders inside <HelmStoreProvider>). */
-export function useStoreActions(): HelmStoreActions {
-  const external = useContext(HelmExternalStoreContext)
+/** Stable store action bundle (never triggers re-renders inside <HelmxStoreProvider>). */
+export function useStoreActions(): HelmxStoreActions {
+  const external = useContext(HelmxExternalStoreContext)
   if (external !== null) return external.actions
-  throw new Error('useStoreActions must be called inside <HelmStoreProvider>')
+  throw new Error('useStoreActions must be called inside <HelmxStoreProvider>')
 }
 
-export function useOptionalStoreActions(): HelmStoreActions | null {
-  return useContext(HelmExternalStoreContext)?.actions ?? null
+export function useOptionalStoreActions(): HelmxStoreActions | null {
+  return useContext(HelmxExternalStoreContext)?.actions ?? null
 }
 
 /** Direct imperative reference to external store (for event handlers that read without subscribing). */
-export function useHelmExternalStore(): HelmExternalStore | null {
-  return useContext(HelmExternalStoreContext)
+export function useHelmxExternalStore(): HelmxExternalStore | null {
+  return useContext(HelmxExternalStoreContext)
 }
 
 // ---- Narrow Domain Hooks --------------------------------------------------
@@ -180,7 +180,7 @@ export function useThemePreferencesState(): PrefsSlice {
   return useDomainSlice('prefs', (s) => s.getPrefsSlice())
 }
 
-export function useOptionalLocale(): HelmLocale | undefined {
+export function useOptionalLocale(): HelmxLocale | undefined {
   return useDomainSlice('locale', (s) => s.getLocale(), () => undefined)
 }
 
@@ -360,7 +360,7 @@ export function usePluginDoc(pluginId: string | undefined, docName: string | und
 // ---------------------------------------------------------------------------
 // Batch conversation-scoped plugin document (sessionDoc) subscription hooks
 // (host-only): single-value / diagnostics subscriptions live in
-// @helm/plugin-client as usePluginSessionDocValue / usePluginSessionDocState
+// @helmx/plugin-client as usePluginSessionDocValue / usePluginSessionDocState
 // (port-driven; plugins and the host share one implementation).
 // Ref-counted dedicated SSE streams connect only while mounted refs exist;
 // see lib/session-docs.ts.
@@ -463,8 +463,8 @@ export type { SessionDocKey }
 export type {
   AuthSlice,
   CatalogSlice,
-  HelmExternalStore,
-  HelmStoreActions,
+  HelmxExternalStore,
+  HelmxStoreActions,
   LocationTargetsSlice,
   NavSlice,
   PluginHostPortSlice,

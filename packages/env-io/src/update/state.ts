@@ -2,12 +2,12 @@
  * Atomic release state files under a state directory (kept separate from user data):
  * `current.json` (active release pointer) and `update-blocked.json` (failure cooldown).
  *
- * Honesty rules identical to the original helm-node engine: corruption and I/O errors
+ * Honesty rules identical to the original helmx-node engine: corruption and I/O errors
  * throw explicitly; `null` is returned only on `ENOENT`. Writes are atomic (`0600`,
  * temp file + rename) via the package's own atomic-write helper.
  *
  * The state directory is owned by exactly one consumer (product); consumers that must
- * keep a different on-disk `current.json` shape (e.g. the already-installed helm-node
+ * keep a different on-disk `current.json` shape (e.g. the already-installed helmx-node
  * launcher reads flat `entryPath`/`cliBinDir` fields) inject an `UpdateStateOps` codec
  * instead of sharing this module's default format.
  */
@@ -34,7 +34,7 @@ export interface BlockedReleaseRecord {
  * Disk codec for `current.json`: the engine works purely on the canonical
  * `CurrentReleaseRecord` and crosses this boundary only when touching disk. The default
  * implementation reads/writes the shared `entries` format; consumers with an existing
- * on-disk contract (helm-node's flat `entryPath`/`cliBinDir` launcher format) inject
+ * on-disk contract (helmx-node's flat `entryPath`/`cliBinDir` launcher format) inject
  * their own codec so already-installed binaries keep working. Blocked-record shape is
  * identical across consumers and is not injectable.
  */

@@ -3,7 +3,7 @@ import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
-import type { ConversationEntry, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
 import { formatFullTimestamp, formatMessageTime } from '../src/lib/format.js'
 import { buildTimelineItems } from '../src/conversation/timeline-model.js'
 import type { AssistantTurn, FoldableStep, HumanInputItem } from '../src/conversation/timeline-model.js'
@@ -68,14 +68,14 @@ test('formatFullTimestamp：返回 YYYY-MM-DD HH:mm:ss 完整时间戳，非法�
 // 2. timeline-model 时间与耗时解析
 // ---------------------------------------------------------------------------
 
-test('timeline-model：HumanInputItem 透传 createdAt（helm.input 与 entry.createdAt 兜底）', { timeout: 60_000 }, () => {
+test('timeline-model：HumanInputItem 透传 createdAt（helmx.input 与 entry.createdAt 兜底）', { timeout: 60_000 }, () => {
   const t1 = 1731234500000
   const t2 = 1731234600000
 
   const entries: ConversationEntry[] = [
     {
       id: '1',
-      kind: 'helm.input',
+      kind: 'helmx.input',
       data: { text: '带数据 createdAt 的输入', origin: 'human', createdAt: t1 },
     },
     {
@@ -623,7 +623,7 @@ test('ConversationTimeline：完成回合渲染时间与耗时，以及 Tooltip 
   const entries: ConversationEntry[] = [
     {
       id: '1',
-      kind: 'helm.input',
+      kind: 'helmx.input',
       data: { text: '查询状态', origin: 'human', createdAt: startMs - 5000 },
     },
     {
@@ -674,7 +674,7 @@ test('ConversationTimeline：回合处于 busy（working/live）时不提前渲�
   const entries: ConversationEntry[] = [
     {
       id: '1',
-      kind: 'helm.input',
+      kind: 'helmx.input',
       data: { text: '运行长任务', origin: 'human' },
     },
     {

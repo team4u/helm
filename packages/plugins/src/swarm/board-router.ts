@@ -4,7 +4,7 @@
  * - 双向游标批合并信封组装（附统一反回声守则与主控 objective / activeWorkingMembers 锚点）；
  * - 看板投影（BoardViewDoc + BoardBadgesDoc）合成与 (headSeq, memberStateDigest) 去重指纹。
  */
-import { HelmError, escapeXml } from '@helm/protocol'
+import { HelmxError, escapeXml } from '@helmx/protocol'
 import {
   SWARM_PLUGIN_ID,
   toGroupSummary,
@@ -41,14 +41,14 @@ export function resolvePostChannel(group: CollabGroupRecord, rawChannel: string 
   const channelName = rawChannel === undefined || rawChannel.trim() === '' ? 'main' : rawChannel.trim()
   const found = group.channels.find((c) => c.name === channelName)
   if (found === undefined) {
-    throw new HelmError('swarm_unknown_channel', `未知频道 '${channelName}'`, 404, {
+    throw new HelmxError('swarm_unknown_channel', `未知频道 '${channelName}'`, 404, {
       pluginId: SWARM_PLUGIN_ID,
       groupId: group.id,
       channel: channelName,
     })
   }
   if (found.archived === true) {
-    throw new HelmError('swarm_channel_archived', `频道 '${channelName}' 已归档，无法写入新帖`, 409, {
+    throw new HelmxError('swarm_channel_archived', `频道 '${channelName}' 已归档，无法写入新帖`, 409, {
       pluginId: SWARM_PLUGIN_ID,
       groupId: group.id,
       channel: channelName,
@@ -71,7 +71,7 @@ export function resolveBoardTargets(
   rawTargets: readonly string[],
 ): { normalizedTo: string[]; resolvedTargets: string[] } {
   if (!Array.isArray(rawTargets) || rawTargets.length === 0) {
-    throw new HelmError('validation_error', 'board_post.to 必须是非空目标数组', 400, { groupId: group.id })
+    throw new HelmxError('validation_error', 'board_post.to 必须是非空目标数组', 400, { groupId: group.id })
   }
   const normalizedTo: string[] = []
   const resolved: string[] = []
@@ -82,7 +82,7 @@ export function resolveBoardTargets(
 
   for (const rawItem of rawTargets) {
     if (typeof rawItem !== 'string' || rawItem.trim() === '') {
-      throw new HelmError('validation_error', 'board_post.to 含空目标项', 400, { groupId: group.id })
+      throw new HelmxError('validation_error', 'board_post.to 含空目标项', 400, { groupId: group.id })
     }
     const token = rawItem.trim()
     if (!normalizedTo.includes(token)) normalizedTo.push(token)
@@ -94,7 +94,7 @@ export function resolveBoardTargets(
 
     if (token === 'all') {
       if (caller.role === 'worker') {
-        throw new HelmError(
+        throw new HelmxError(
           'swarm_broadcast_forbidden',
           `成员 @${caller.from} 禁止使用 'all' 全组广播；请定向点名下一跳责任人或使用 #<channel> 子频道`,
           403,
@@ -110,7 +110,7 @@ export function resolveBoardTargets(
     if (token.startsWith('#')) {
       const chName = token.slice(1)
       if (chName === 'main') {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           "禁止向 '#main' 寻址；如需全组广播请由主控显式使用 'all'",
           400,
@@ -119,14 +119,14 @@ export function resolveBoardTargets(
       }
       const ch = group.channels.find((c) => c.name === chName)
       if (ch === undefined) {
-        throw new HelmError('swarm_unknown_channel', `未知子频道 '${token}'`, 404, {
+        throw new HelmxError('swarm_unknown_channel', `未知子频道 '${token}'`, 404, {
           pluginId: SWARM_PLUGIN_ID,
           groupId: group.id,
           channel: chName,
         })
       }
       if (ch.archived === true) {
-        throw new HelmError('swarm_channel_archived', `子频道 '${token}' 已归档，拒绝投递`, 409, {
+        throw new HelmxError('swarm_channel_archived', `子频道 '${token}' 已归档，拒绝投递`, 409, {
           pluginId: SWARM_PLUGIN_ID,
           groupId: group.id,
           channel: chName,
@@ -143,7 +143,7 @@ export function resolveBoardTargets(
     const cleanName = token.startsWith('@') ? token.slice(1) : token
     const member = group.members.find((m) => m.name === cleanName && m.lifecycle === 'active')
     if (member === undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'swarm_unknown_target',
         `未知或已归档的协同目标 '${token}'`,
         404,

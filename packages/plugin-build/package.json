@@ -1,5 +1,5 @@
 {
-  "name": "@helm/plugin-build",
+  "name": "@helmx/plugin-build",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -17,8 +17,8 @@
     "test": "tsx --test"
   },
   "dependencies": {
-    "@helm/env-io": "workspace:*",
-    "@helm/protocol": "workspace:*",
+    "@helmx/env-io": "workspace:*",
+    "@helmx/protocol": "workspace:*",
     "esbuild": "0.28.2"
   }
 }

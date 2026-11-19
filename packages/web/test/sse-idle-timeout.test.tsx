@@ -116,8 +116,8 @@ function hangingEventStream(): ReadableStream<Uint8Array> {
 
 test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无限重连', { timeout: 60_000 }, async () => {
   assert.equal(sseClientTimings.idleTimeoutMs, 30_000, '默认 SSE 空闲超时必须收敛至 30_000ms')
-  const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
-  const { useHelmStore } = await import('../src/lib/store-context.js')
+  const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
+  const { useHelmxStore } = await import('../src/lib/store-context.js')
   const originalTimings = { ...sseClientTimings }
   const originalFetch = globalThis.fetch
   Object.assign(sseClientTimings, {
@@ -126,7 +126,7 @@ test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无
     reconnectCapMs: 80,
     reconnectJitterMs: 5,
   })
-  localStorage.setItem('helm:token', 'stale-token')
+  localStorage.setItem('helmx:token', 'stale-token')
   let eventsCalls = 0
   globalThis.fetch = (async (input: RequestInfo | URL) => {
     const path = String(input)
@@ -147,7 +147,7 @@ test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无
   let observed: Observed = { authenticated: false, connectionError: null, sseConnected: false, eventsCalls: 0 }
   const history: Observed[] = []
   const Probe = (): React.ReactNode => {
-    const store = useHelmStore()
+    const store = useHelmxStore()
     observed = { authenticated: store.authenticated, connectionError: store.connectionError, sseConnected: store.sseConnected, eventsCalls }
     history.push(observed)
     return null
@@ -167,7 +167,7 @@ test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无
     await act(async () => {
       const r = createRoot(host)
       root = r
-      r.render(React.createElement(HelmStoreProvider, null, React.createElement(Probe)))
+      r.render(React.createElement(HelmxStoreProvider, null, React.createElement(Probe)))
     })
     // 第一条连接：snapshot 到达、进入挂起态（无任何后续字节）。
     await waitForObs(() => history.some((o) => o.sseConnected === true && o.eventsCalls === 1))
@@ -176,7 +176,7 @@ test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无
     // 重连 fetch 拿 401：必须登出（authenticated=false、token 清除）。
     await waitForObs((o) => o.authenticated === false && o.eventsCalls >= 2)
     assert.equal(eventsCalls, 2, '恰好两次 /api/events：挂起流一次 + 401 一次')
-    assert.equal(localStorage.getItem('helm:token'), null, '登出必须清除存储 token')
+    assert.equal(localStorage.getItem('helmx:token'), null, '登出必须清除存储 token')
     assert.equal(observed.sseConnected, false)
     // 401 登出后连接效应卸载：等待超过一次退避周期，不再有第三次重连。
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 150)) })
@@ -185,7 +185,7 @@ test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无
   } finally {
     Object.assign(sseClientTimings, originalTimings)
     globalThis.fetch = originalFetch
-    localStorage.removeItem('helm:token')
+    localStorage.removeItem('helmx:token')
     const r = root
     if (r !== undefined) await act(async () => { r.unmount() })
     host.remove()
@@ -193,8 +193,8 @@ test('挂起流idle timeout中止并重连，重连 401 必须登出且不再无
 })
 
 test('online 与 visibilitychange 秒醒：取消退避立即重连、陈旧流重连、健康流不误杀', { timeout: 60_000 }, async () => {
-  const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
-  const { useHelmStore } = await import('../src/lib/store-context.js')
+  const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
+  const { useHelmxStore } = await import('../src/lib/store-context.js')
   const originalTimings = { ...sseClientTimings }
   const originalFetch = globalThis.fetch
   const originalHiddenDescriptor = Object.getOwnPropertyDescriptor(document, 'hidden')
@@ -208,7 +208,7 @@ test('online 与 visibilitychange 秒醒：取消退避立即重连、陈旧流�
     reconnectCapMs: 10_000,
     reconnectJitterMs: 0,
   })
-  localStorage.setItem('helm:token', 'tok-wake')
+  localStorage.setItem('helmx:token', 'tok-wake')
 
   let eventsCalls = 0
   const streams: Array<{ abortable: boolean }> = []
@@ -245,7 +245,7 @@ test('online 与 visibilitychange 秒醒：取消退避立即重连、陈旧流�
 
   let sseConnected = false
   const Probe = (): React.ReactNode => {
-    sseConnected = useHelmStore().sseConnected
+    sseConnected = useHelmxStore().sseConnected
     return null
   }
   const host = document.createElement('div')
@@ -262,7 +262,7 @@ test('online 与 visibilitychange 秒醒：取消退避立即重连、陈旧流�
   try {
     await act(async () => {
       root = createRoot(host)
-      root.render(React.createElement(HelmStoreProvider, null, React.createElement(Probe)))
+      root.render(React.createElement(HelmxStoreProvider, null, React.createElement(Probe)))
     })
     await waitUntil(() => eventsCalls === 1)
     await act(async () => { await new Promise((resolve) => setTimeout(resolve, 25)) })
@@ -296,7 +296,7 @@ test('online 与 visibilitychange 秒醒：取消退避立即重连、陈旧流�
   } finally {
     Object.assign(sseClientTimings, originalTimings)
     globalThis.fetch = originalFetch
-    localStorage.removeItem('helm:token')
+    localStorage.removeItem('helmx:token')
     if (originalHiddenDescriptor !== undefined) {
       Object.defineProperty(document, 'hidden', originalHiddenDescriptor)
     } else {

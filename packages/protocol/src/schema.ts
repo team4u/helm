@@ -5,7 +5,7 @@
  * `typebox/value` evaluates JSON Schema without `new Function`, keeping browser CSP compatibility.
  */
 import { Check, Errors } from 'typebox/value'
-import { HelmError } from './error.js'
+import { HelmxError } from './error.js'
 import type { JsonSchema } from './plugin-dto.js'
 
 interface ValidationIssue {
@@ -37,8 +37,8 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function invalidSchemaError(schema: unknown, reason: string): HelmError {
-  return new HelmError('invalid_plugin_schema', `JSON Schema compilation failed: ${reason}`, 500, { schema })
+function invalidSchemaError(schema: unknown, reason: string): HelmxError {
+  return new HelmxError('invalid_plugin_schema', `JSON Schema compilation failed: ${reason}`, 500, { schema })
 }
 
 function assertValidRegex(root: JsonSchema, pattern: unknown, label: string): void {
@@ -66,7 +66,7 @@ function assertValidSubschema(
   visited.add(node)
 
   if (node['$async'] !== undefined) {
-    throw new HelmError(
+    throw new HelmxError(
       'invalid_plugin_schema',
       'Declared JSON Schema contains $async: the core synchronous validation boundary does not support async schemas',
       500,
@@ -180,7 +180,7 @@ export function validateOrThrow(
   }
   if (!ok) {
     const errors = validator.errors(value)
-    throw new HelmError(code, `${message}: ${formatErrors(errors)}`, status, { ...(extraDetails ?? {}), errors })
+    throw new HelmxError(code, `${message}: ${formatErrors(errors)}`, status, { ...(extraDetails ?? {}), errors })
   }
 }
 

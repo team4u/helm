@@ -12,7 +12,7 @@
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { WorkflowNodeState } from '../../contracts.js'
-import { StatusLight, formatCompactTimestamp, formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helm/plugin-client'
+import { StatusLight, formatCompactTimestamp, formatDurationMs, resolveLocalizedText, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
 import { useElapsedNowMs } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { SubagentLiveCard } from './SubagentCard.tsx'

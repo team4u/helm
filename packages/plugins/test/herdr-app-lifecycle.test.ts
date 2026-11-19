@@ -2,9 +2,9 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { createHelm } from '../../hub/src/app.js'
+import { createHelmx } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { runCli } from '../../cli/src/index.js'
 import { herdrServerFixture } from './herdr-server-fixture.js'
 import { makeFauxProvider, useTempDir } from './helpers/plugin-test-env.js'
@@ -13,11 +13,11 @@ import { makeFauxProvider, useTempDir } from './helpers/plugin-test-env.js'
 // ctx.host 端口 → 生产 transport → 受控行协议服务器）。
 async function openApp(dataDir: string) {
   const faux = makeFauxProvider()
-  return createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
+  return createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
 }
 
-test('createHelm 默认注册停用 Herdr，普通启动及原生回退不依赖终端服务', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-herdr-app-default-')
+test('createHelmx 默认注册停用 Herdr，普通启动及原生回退不依赖终端服务', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-herdr-app-default-')
   const app = await openApp(dir)
   try {
     const herdr = app.kernel.plugins.list().find((plugin) => plugin.id === 'builtin:herdr')
@@ -36,10 +36,10 @@ test('createHelm 默认注册停用 Herdr，普通启动及原生回退不依赖
   }
 })
 
-test('createHelm 先配置后启用，重启沿用开关与连接配置，停用后重启不连接', { timeout: 60_000 }, async (t) => {
+test('createHelmx 先配置后启用，重启沿用开关与连接配置，停用后重启不连接', { timeout: 60_000 }, async (t) => {
   const server = await herdrServerFixture(t)
-  const dir = useTempDir(t, 'helm-herdr-app-persist-')
-  let app: Awaited<ReturnType<typeof createHelm>> | undefined
+  const dir = useTempDir(t, 'helmx-herdr-app-persist-')
+  let app: Awaited<ReturnType<typeof createHelmx>> | undefined
   try {
     app = await openApp(dir)
     assert.equal(server.connectionCount(), 0, '默认停用时不得连接')
@@ -86,17 +86,17 @@ test('createHelm 先配置后启用，重启沿用开关与连接配置，停用
 
 test('Herdr 动作经真实 HTTP 自动映射 CLI，支持 --json 和 --current', { timeout: 60_000 }, async (t) => {
   const server = await herdrServerFixture(t)
-  const dir = useTempDir(t, 'helm-herdr-cli-')
+  const dir = useTempDir(t, 'helmx-herdr-cli-')
   const app = await openApp(dir)
   let hub: Awaited<ReturnType<typeof startHub>> | undefined
   const credential = app.kernel.auth.createProcessToken()
   try {
     hub = await startHub({ kernel: app.kernel, port: 0 })
     const env = {
-      HELM_HUB_URL: hub.url,
-      HELM_DATA_DIR: join(dir, 'cli'),
-      HELM_TOKEN: credential.token,
-      HELM_CONVERSATION_ID: '1',
+      HELMX_HUB_URL: hub.url,
+      HELMX_DATA_DIR: join(dir, 'cli'),
+      HELMX_TOKEN: credential.token,
+      HELMX_CONVERSATION_ID: '1',
     }
     async function cli(args: string[]) {
       let out = ''

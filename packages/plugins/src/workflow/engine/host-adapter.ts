@@ -18,7 +18,7 @@
  * workflow 引用解析）经 EngineHostDeps 回调注入，避免适配层反向持有服务。
  */
 
-import { HelmError } from '@helm/protocol'
+import { HelmxError } from '@helmx/protocol'
 import {
   agentGateResultMissingError as gateResultMissingError,
   sanitizeAgentExecutionInfo as sanitizeExecutionInfo,
@@ -30,7 +30,7 @@ import {
   type ConversationSummary,
   type EnvExecRequest,
   type EnvExecResponse,
-} from '@helm/protocol'
+} from '@helmx/protocol'
 import { withWorkflowSpawnMeta, type WorkflowRunSummary } from '../../contracts.js'
 import type { ActiveRun } from './active-run.js'
 import { errorMessage } from './run-store.js'
@@ -466,7 +466,7 @@ export async function invokeAgentSpawn(
         ...retained,
       }
     }
-    if (error instanceof HelmError) {
+    if (error instanceof HelmxError) {
       // 错误码随消息透传（节点 error 面向用户，码即诊断锚点）。
       return { ok: false, error: `[${error.code}] ${error.message}`, ...retained }
     }
@@ -490,7 +490,7 @@ export function readAgentTimeoutMs(request: WorkflowSpawnRequest): number | unde
   const raw: unknown = request.timeoutMs
   if (raw === undefined) return undefined
   if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1_000 || raw > 3_600_000) {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `agent timeoutMs 必须是 1_000..3_600_000 的整数毫秒值（收到 ${JSON.stringify(raw)}）`,
       400,

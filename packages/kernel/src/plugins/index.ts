@@ -1,11 +1,11 @@
 /**
  * Public exports for the plugin host module: PluginHost, hook pipeline, schema validation, and task tracking.
- * Protocol contract types are re-exported from `@helm/protocol` as the single source of truth.
+ * Protocol contract types are re-exported from `@helmx/protocol` as the single source of truth.
  */
 export * from './plugin-host.js';
 export { reloadExternalPlugin, type ExternalPluginHost, type ReloadablePluginHost } from './external-loader.js';
 export { loadExternalPlugins, rescanExternalPlugins } from './scan-visitor.js';
-export { readHelmClientDependencies, readHelmClientDist } from './plugin-manifest.js';
+export { readHelmxClientDependencies, readHelmxClientDist } from './plugin-manifest.js';
 export { readPrebuiltClientManifest, readPrebuiltClientBundle } from './ui-registry.js'
 export { registerPluginTsRoot, nextPluginGeneration, type BackendTsTransformFn } from './backend-ts-loader.js';
 export { doctorPluginDir } from './plugin-doctor.js';

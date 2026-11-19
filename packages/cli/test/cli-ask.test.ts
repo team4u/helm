@@ -1,12 +1,12 @@
 /**
- * Unit tests for `helm ask`: mock HTTP server simulating Hub contract (real fetch boundary).
+ * Unit tests for `helmx ask`: mock HTTP server simulating Hub contract (real fetch boundary).
  * Covers basic chain (create + wait + output), piped stdin merge, empty input rejection, creation error,
  * keeping conversation on turn error, --delete-on-success, --timeout validation and wait timeout,
  * and strict wait response validation (malformed keeps conversation; empty text is valid).
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import type { ConversationInputResult } from '@helm/protocol'
+import type { ConversationInputResult } from '@helmx/protocol'
 import type { StdinSource } from '../src/options.js'
 import {
   makeCliEnv,
@@ -43,7 +43,7 @@ const waitResult = (answer: string, conversationId = 9): ConversationInputResult
 const createdSummary = (id = 9) => ({ id, title: 't', profileId: 'default', tags: [] })
 
 test('ask basic flow: create conversation + ?wait=1; --json returns structured envelope, human mode outputs answer text only', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-ask-test-')
+  const dir = useTempDir(t, 'helmx-ask-test-')
   const hub = await startMockHub(
     {
       'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
@@ -82,7 +82,7 @@ test('ask basic flow: create conversation + ?wait=1; --json returns structured e
 })
 
 test('ask piped stdin: joins with positional prompt using blank line; usable standalone; skipped in TTY', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-ask-test-')
+  const dir = useTempDir(t, 'helmx-ask-test-')
   const hub = await startMockHub(
     {
       'POST /api/conversations': () => ({ status: 201, body: createdSummary() }),
@@ -101,7 +101,7 @@ test('ask piped stdin: joins with positional prompt using blank line; usable sta
 })
 
 test('ask empty input and extra positional args reject explicitly without contacting Hub', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-ask-test-')
+  const dir = useTempDir(t, 'helmx-ask-test-')
   const hub = await startMockHub({}, { autoRegisterCleanup: t })
   const env = makeCliEnv(hub.url, dir)
 
@@ -124,7 +124,7 @@ test('ask empty input and extra positional args reject explicitly without contac
 })
 
 test('ask creation failure: passes through upstream error message (without conversationId)', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-ask-test-')
+  const dir = useTempDir(t, 'helmx-ask-test-')
   const hub = await startMockHub(
     {
       'POST /api/conversations': () => ({
@@ -143,7 +143,7 @@ test('ask creation failure: passes through upstream error message (without conve
 })
 
 test('ask generation failure: keeps conversation and error includes inspectable ID and details.conversationId', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-ask-test-')
+  const dir = useTempDir(t, 'helmx-ask-test-')
   const hub = await startMockHub(
     {
       'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
@@ -160,14 +160,14 @@ test('ask generation failure: keeps conversation and error includes inspectable 
   assert.equal(err.code, 'turn_failed')
   assert.ok(err.message.includes('provider_error'), err.message)
   assert.ok(err.message.includes('#9'), err.message)
-  assert.ok(err.message.includes('helm conversations get 9'), err.message)
+  assert.ok(err.message.includes('helmx conversations get 9'), err.message)
   assert.equal(err.details?.conversationId, 9)
   assert.equal(err.details?.reason, 'provider_error')
   assert.equal(res.out, '')
 })
 
 test('ask --delete-on-success: deletes on success; keeps conversation and errors explicitly if delete fails', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-ask-test-')
+  const dir = useTempDir(t, 'helmx-ask-test-')
   const okHub = await startMockHub(
     {
       'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
@@ -204,7 +204,7 @@ test('ask --delete-on-success: deletes on success; keeps conversation and errors
 })
 
 test('ask strictly validates wait response: malformed/null/mismatched conversation returns invalid_response without deleting; empty text is valid', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-ask-test-')
+  const dir = useTempDir(t, 'helmx-ask-test-')
   const badCases: Array<{ name: string; body: unknown }> = [
     { name: 'empty object', body: {} },
     { name: 'null', body: null },
@@ -227,7 +227,7 @@ test('ask strictly validates wait response: malformed/null/mismatched conversati
       const err = parseCliError<{ conversationId: number }>(res)
       assert.equal(err.code, 'invalid_response', `${name}: ${err.message}`)
       assert.ok(err.message.includes('#9'), `${name}: ${err.message}`)
-      assert.ok(err.message.includes('helm conversations get 9'), `${name}: ${err.message}`)
+      assert.ok(err.message.includes('helmx conversations get 9'), `${name}: ${err.message}`)
       assert.equal(err.details?.conversationId, 9, name)
       assert.equal(res.out, '', name)
       // Never delete the conversation when validation fails (even with --delete-on-success)
@@ -264,7 +264,7 @@ test('ask strictly validates wait response: malformed/null/mismatched conversati
 })
 
 test('ask --timeout: invalid values rejected; timeout keeps conversation and reports ID', { timeout: 60_000 }, async (t) => {
-  const dir = useTempDir(t, 'helm-ask-test-')
+  const dir = useTempDir(t, 'helmx-ask-test-')
   const hub = await startMockHub(
     {
       'POST /api/conversations': () => ({ status: 201, body: createdSummary(9) }),
@@ -296,7 +296,7 @@ test('ask --timeout: invalid values rejected; timeout keeps conversation and rep
   const err = parseCliError<{ conversationId: number }>(timed)
   assert.equal(err.code, 'timeout')
   assert.ok(err.message.includes('#9'), err.message)
-  assert.ok(err.message.includes('helm conversations get 9'), err.message)
+  assert.ok(err.message.includes('helmx conversations get 9'), err.message)
   assert.equal(err.details?.conversationId, 9)
   assert.equal(timed.out, '')
 })

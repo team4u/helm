@@ -14,7 +14,7 @@
  *   pnpm check:hygiene -- --changed --base main
  *   pnpm check:hygiene -- --files <path...>  # explicit file list (must live inside this repo; outside paths rejected)
  *
- * Exit codes: 0 clean; 1 violations found; 2 usage/baseline error. No HELM_* env vars are
+ * Exit codes: 0 clean; 1 violations found; 2 usage/baseline error. No HELMX_* env vars are
  * injected.
  */
 import { existsSync, readFileSync } from 'node:fs';

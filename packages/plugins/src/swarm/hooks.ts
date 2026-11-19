@@ -1,4 +1,4 @@
-import { escapeXml, isSkillAvailable, type HelmPluginContext } from '@helm/protocol'
+import { escapeXml, isSkillAvailable, type HelmxPluginContext } from '@helmx/protocol'
 import {
   ACTIVE_SWARM_GROUP_SECTION_ID,
   ARCHIVED_WORKER_TAG,
@@ -16,7 +16,7 @@ const SWARM_SLASH_RE = /^\/skill:swarm(?:\s+([\s\S]*))?$/
 const INELIGIBLE_SWARM_SLASH_REASON =
   '不能在子成员或后台会话中使用 /skill:swarm 发起协同，请在顶层对话输入 /skill:swarm <任务>'
 
-async function isSwarmSkillAllowed(ctx: HelmPluginContext, profileId: string): Promise<boolean> {
+async function isSwarmSkillAllowed(ctx: HelmxPluginContext, profileId: string): Promise<boolean> {
   const [profile, allSkills] = await Promise.all([
     ctx.host.profiles.get(profileId),
     ctx.host.skills.list(),
@@ -67,7 +67,7 @@ export function activeSwarmGroupWorkerSection(
 }
 
 export function registerSwarmHooks(
-  ctx: HelmPluginContext,
+  ctx: HelmxPluginContext,
   coordinator: SwarmCoordinator,
 ): void {
   const {

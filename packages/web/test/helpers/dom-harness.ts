@@ -1,6 +1,6 @@
 /**
  * 共享 happy-dom 测试宿主原语：
- * - 不静态引入 @helm/plugin-client / Radix / react-dom/client，确保需要交互展开 Radix 浮层
+ * - 不静态引入 @helmx/plugin-client / Radix / react-dom/client，确保需要交互展开 Radix 浮层
  *   的测试可在调用 ensureHappyDom() 后再动态 import 相关模块；
  * - 提供幂等 DOM 注册、输入控制、微任务/宏任务冲刷、条件等待与 JSON 响应构造。
  */

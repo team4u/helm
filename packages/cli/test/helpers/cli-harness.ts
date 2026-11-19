@@ -1,6 +1,6 @@
 /**
  * Shared CLI test fixtures and execution helpers (`packages/cli/test/helpers/cli-harness.ts`).
- * Reuses Mock Hub, auto-cleaned temp directories, and DTO factories from `@helm/test-kit`
+ * Reuses Mock Hub, auto-cleaned temp directories, and DTO factories from `@helmx/test-kit`
  * to avoid duplicating `startHub / makeEnv / run / tempDir` boilerplate across CLI test files.
  */
 
@@ -15,28 +15,28 @@ export {
   makeProfile,
   sleep,
   waitFor,
-} from '@helm/test-kit'
-export type { Deferred, WaitForOptions } from '@helm/test-kit'
+} from '@helmx/test-kit'
+export type { Deferred, WaitForOptions } from '@helmx/test-kit'
 
 export {
   cleanupDir,
   makeTempDir,
   sanitizedHostEnv,
   useTempDir,
-} from '@helm/test-kit/node'
-export type { CleanupRegistrar } from '@helm/test-kit/node'
+} from '@helmx/test-kit/node'
+export type { CleanupRegistrar } from '@helmx/test-kit/node'
 
 export {
   startMockHub,
   startMockHub as startCliMockHub,
-} from '@helm/test-kit/http'
+} from '@helmx/test-kit/http'
 export type {
   MockHttpHit,
   MockHubHandle,
   MockRouteHandler,
   MockRouteResult,
   StartMockHubOptions,
-} from '@helm/test-kit/http'
+} from '@helmx/test-kit/http'
 
 /** Snapshot of stdout, stderr, and exit code returned by `runCliCaptured`. */
 export interface CliCapturedResult {
@@ -54,7 +54,7 @@ export interface RunCliCapturedOptions {
 }
 
 /**
- * Build isolated CLI test environment variables (injecting test `HELM_HUB_URL`, `HELM_DATA_DIR`, and `HELM_TOKEN` by default).
+ * Build isolated CLI test environment variables (injecting test `HELMX_HUB_URL`, `HELMX_DATA_DIR`, and `HELMX_TOKEN` by default).
  * Any key explicitly set to `undefined` in `extra` is deleted from the returned env object.
  */
 export function makeCliEnv(
@@ -63,9 +63,9 @@ export function makeCliEnv(
   extra: NodeJS.ProcessEnv = {},
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    HELM_HUB_URL: hubUrl,
-    HELM_DATA_DIR: dataDir,
-    HELM_TOKEN: 't-test',
+    HELMX_HUB_URL: hubUrl,
+    HELMX_DATA_DIR: dataDir,
+    HELMX_TOKEN: 't-test',
   }
   for (const [key, value] of Object.entries(extra)) {
     if (value === undefined) delete env[key]

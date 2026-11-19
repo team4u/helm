@@ -1,7 +1,7 @@
 /**
  * runtime.ts -- the host half of a workflow run (execution orchestration).
  *
- * Ported from @tintinweb/pi-subagents v0.23.1 (MIT); helm adaptation points:
+ * Ported from @tintinweb/pi-subagents v0.23.1 (MIT); helmx adaptation points:
  * - Added host-side handling of the `action()` primitive: shares the same totally-ordered prefix
  *   ledger with agent (index assigned by call-initiation order); the handler only runs after
  *   `action_started` append+fsync succeeds, and the call promise resolves only after the terminal
@@ -11,7 +11,7 @@
  *   wholesale; confirmed-successful actions/agents are always reused, zero duplicate side effects.
  *   Cached sub-results can serve as the prefix source for later resume calls of the same script,
  *   but there is no live session: after a prefix mismatch, fail explicitly; never fabricate live continuation.
- * - The spawn seam faces helm's `WorkflowServiceHost` (the injectable agent_spawn hook adaptation
+ * - The spawn seam faces helmx's `WorkflowServiceHost` (the injectable agent_spawn hook adaptation
  *   lives in service.ts); the runtime itself keeps zero kernel dependencies and is independently testable.
  * - worker thread + vm double boundary: terminate can kill looping scripts; the vm bans dynamic code
  *   generation and non-deterministic APIs (see worker-source.ts). This is a terminability/determinism

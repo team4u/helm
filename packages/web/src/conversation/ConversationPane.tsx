@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { conversationsApi } from '../lib/api.js'
-import type { ConversationAttachmentRef, ConversationEntry } from '@helm/protocol/browser'
-import { HelmIcon, Popover, PopoverContent, PopoverTrigger } from '@helm/plugin-client'
+import type { ConversationAttachmentRef, ConversationEntry } from '@helmx/protocol/browser'
+import { HelmxIcon, Popover, PopoverContent, PopoverTrigger } from '@helmx/plugin-client'
 import {
   isConversationArchivable,
   isConversationArchived,
@@ -165,7 +165,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const hasAnyArtifacts = Array.isArray(convArtifacts) && convArtifacts.length > 0
   if (detailError) {
     return (
-      <div className={`${isSplit ? 'helm-split-pane' : 'helm-pane'} pane-error`} role="alert">
+      <div className={`${isSplit ? 'helmx-split-pane' : 'helmx-pane'} pane-error`} role="alert">
         <div className="pane-error-row">
           <p>{t('conv.pane.loadFailed', { id: conversationId, error: detailError })}</p>
           <span className="pane-error-actions">
@@ -181,12 +181,12 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
 
   if (conversation === undefined) {
     return (
-      <div className={isSplit ? 'helm-split-pane' : 'helm-pane'} style={{ alignItems: 'center', justifyContent: 'center', color: 'var(--fg-muted)', fontSize: 12 }}>
+      <div className={isSplit ? 'helmx-split-pane' : 'helmx-pane'} style={{ alignItems: 'center', justifyContent: 'center', color: 'var(--fg-muted)', fontSize: 12 }}>
         {t('conv.pane.loading', { id: conversationId })}
         {isDrawer && onCloseDrawer !== undefined ? (
           <span className="pane-loading-split-close">
             <button type="button" className="btn btn-sm btn-ghost conversation-drawer-close-btn" aria-label={t('conv.pane.closeDrawerAria')} onClick={onCloseDrawer}>
-              <HelmIcon name="x" size={14} />
+              <HelmxIcon name="x" size={14} />
             </button>
           </span>
         ) : isSplit && onCloseSplit !== undefined ? (
@@ -306,7 +306,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   }
 
   return (
-    <div className="helm-pane">
+    <div className="helmx-pane">
       <header className="pane-topbar conversation-topbar">
         <div className="pane-title-group">
           {renaming ? (
@@ -385,7 +385,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               disabled={actionPending !== null}
               onClick={startNewThread}
             >
-              <HelmIcon name={actionPending === 'new-thread' ? 'loader' : 'plus'} size={12} />
+              <HelmxIcon name={actionPending === 'new-thread' ? 'loader' : 'plus'} size={12} />
               <span className="pane-action-label">{t('conv.pane.newTopic')}</span>
             </button>
           ) : null}
@@ -414,7 +414,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                 setWorkbenchOpen(true)
               }}
             >
-              <HelmIcon name="panel-right" size={12} />
+              <HelmxIcon name="panel-right" size={12} />
               <span className="pane-action-label">{t('conv.pane.workbench')}</span>
               {workbenchCount > 0 && <span className={`badge ${workbenchBadgeClass} tabular-nums`}>{workbenchCount}</span>}
             </button>
@@ -430,7 +430,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                 openTarget({ kind: 'conversation', conversationId })
               }}
             >
-              <HelmIcon name="external-link" size={12} />
+              <HelmxIcon name="external-link" size={12} />
               <span className="pane-action-label">{t('conv.pane.fullscreen')}</span>
             </button>
           ) : isSplit && onCloseSplit !== undefined ? (
@@ -460,7 +460,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                   aria-expanded={moreOpen}
                   ref={moreButtonRef}
                 >
-                  <HelmIcon name="more" size={14} />
+                  <HelmxIcon name="more" size={14} />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuPortal>
@@ -488,7 +488,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                     }}
                   >
                     <span className="pane-more-item-label">
-                      <HelmIcon name="edit" size={13} />
+                      <HelmxIcon name="edit" size={13} />
                       {t('conv.pane.renameConversation')}
                     </span>
                   </DropdownMenuItem>
@@ -500,7 +500,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                     }}
                   >
                     <span className="pane-more-item-label">
-                      <HelmIcon
+                      <HelmxIcon
                         name={compactPending ? 'loader' : 'archive'}
                         size={13}
                         className={compactPending ? 'spin-slow' : undefined}
@@ -521,7 +521,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                       }}
                     >
                       <span className="pane-more-item-label">
-                        <HelmIcon
+                        <HelmxIcon
                           name={actionPending === 'archive' || actionPending === 'restore-archive'
                             ? 'loader'
                             : archived ? 'rotate-ccw' : 'archive'}
@@ -558,7 +558,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                     }}
                   >
                     <span className="pane-more-item-label">
-                      <HelmIcon name={actionPending === 'reset' ? 'loader' : 'rotate-ccw'} size={13} />
+                      <HelmxIcon name={actionPending === 'reset' ? 'loader' : 'rotate-ccw'} size={13} />
                       {t('conv.pane.resetContextCmd')}
                     </span>
                   </DropdownMenuItem>
@@ -571,7 +571,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                       }}
                     >
                       <span className="pane-more-item-label">
-                        <HelmIcon name="trash-2" size={13} />
+                        <HelmxIcon name="trash-2" size={13} />
                         {t('conv.pane.deleteConversation')}
                       </span>
                     </DropdownMenuItem>
@@ -589,7 +589,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
                 title={t('conv.pane.closeChildDrawer')}
                 onClick={onCloseDrawer}
               >
-                <HelmIcon name="x" size={13} />
+                <HelmxIcon name="x" size={13} />
                 <span className="pane-action-label">{t('common.close')}</span>
               </button>
             </Tooltip>
@@ -601,12 +601,12 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
           <span className="pane-drawer-env-item mono">#{conversationId}</span>
           <span className="pane-drawer-env-sep" aria-hidden="true">·</span>
           <span className="pane-drawer-env-item">
-            <HelmIcon name="bot" size={11} />
+            <HelmxIcon name="bot" size={11} />
             <span>{conversation.profileId}</span>
           </span>
           <span className="pane-drawer-env-sep" aria-hidden="true">·</span>
           <span className="pane-drawer-env-item mono" title={`${currentNodeId}:${conversation.cwd || t('conv.pane.cwdNotSet')}`}>
-            <HelmIcon name={currentNodeId === 'local' ? 'laptop' : 'server'} size={11} />
+            <HelmxIcon name={currentNodeId === 'local' ? 'laptop' : 'server'} size={11} />
             <span>{`${currentNodeId}:${conversation.cwd || t('conv.pane.cwdNotSet')}`}</span>
           </span>
           {conversation.ownedBy !== undefined ? (

@@ -1,10 +1,10 @@
 /**
- * timeline-model 纯函数单测：helm.input 去重、toolCall+toolResult 配对、
+ * timeline-model 纯函数单测：helmx.input 去重、toolCall+toolResult 配对、
  * 连续步骤折叠与豁免折叠、pi.reset / pi.compaction 分割线转换、live 合并。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
-import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helm/protocol'
+import type { ConversationEntry, ConversationLive, ConversationSummary } from '@helmx/protocol'
 import { conversationsApi, ApiClientError } from '../src/lib/api.js'
 import { collectSubtreeIds } from '../src/conversation/ancestry-model.js'
 import {
@@ -23,7 +23,7 @@ import {
   lastEditableHumanInput,
   lastHumanTextOf,
   matchTimelineRenderer,
-  parseHelmInputData,
+  parseHelmxInputData,
   toolSummaryText,
   type ToolTrace,
 } from '../src/conversation/timeline-model.js'
@@ -78,9 +78,9 @@ function collectToolTraces(items: ReturnType<typeof buildTimelineItems>): ToolTr
 
 // ---------------------------------------------------------------------------
 
-test('helm.input 归一化：以 helm.input 为准，跳过紧随的重复 pi.user', { timeout: 60_000 }, () => {
+test('helmx.input 归一化：以 helmx.input 为准，跳过紧随的重复 pi.user', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([
-    entry('1', 'helm.input', {
+    entry('1', 'helmx.input', {
       data: { id: 'sub-1', text: '帮我修复构建', origin: 'human', attachments: [{ id: 'a1', name: 'err.png', mimeType: 'image/png', size: 120 }] },
     }),
     entry('2', 'pi.user', { model: [{ role: 'user', content: '帮我修复构建' }] }),
@@ -96,10 +96,10 @@ test('helm.input 归一化：以 helm.input 为准，跳过紧随的重复 pi.us
   assert.equal(human.fallback, false)
 })
 
-test('裸 pi.user（无前置 helm.input）兜底展示；agent/trigger origin 标记保留', { timeout: 60_000 }, () => {
+test('裸 pi.user（无前置 helmx.input）兜底展示；agent/trigger origin 标记保留', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([
     entry('1', 'pi.user', { model: [{ role: 'user', content: '历史遗留输入' }] }),
-    entry('2', 'helm.input', { data: { text: '来自 Worker 的汇报', origin: 'agent', meta: { renderer: 'noop' } } }),
+    entry('2', 'helmx.input', { data: { text: '来自 Worker 的汇报', origin: 'agent', meta: { renderer: 'noop' } } }),
   ])
   const humans = items.filter((i) => i.kind === 'human')
   assert.equal(humans.length, 2)
@@ -109,11 +109,11 @@ test('裸 pi.user（无前置 helm.input）兜底展示；agent/trigger origin �
   assert.deepEqual(humans[1]!.meta, { renderer: 'noop' })
 })
 
-test('parseHelmInputData：非法形状返回 undefined，不伪造', { timeout: 60_000 }, () => {
-  assert.equal(parseHelmInputData(undefined), undefined)
-  assert.equal(parseHelmInputData('text'), undefined)
-  assert.equal(parseHelmInputData({ text: 42 }), undefined)
-  const ok = parseHelmInputData({ text: 'x', origin: 'trigger', attachments: [null, { id: 'b', name: 'n', mimeType: 'a/b', size: 1 }] })
+test('parseHelmxInputData：非法形状返回 undefined，不伪造', { timeout: 60_000 }, () => {
+  assert.equal(parseHelmxInputData(undefined), undefined)
+  assert.equal(parseHelmxInputData('text'), undefined)
+  assert.equal(parseHelmxInputData({ text: 42 }), undefined)
+  const ok = parseHelmxInputData({ text: 'x', origin: 'trigger', attachments: [null, { id: 'b', name: 'n', mimeType: 'a/b', size: 1 }] })
   assert.ok(ok !== undefined)
   assert.equal(ok!.origin, 'trigger')
   assert.equal(ok!.attachments!.length, 1)
@@ -272,19 +272,19 @@ test('findToolView / matchTimelineRenderer 匹配判定', { timeout: 60_000 }, (
   const renderers = [
     { pluginId: 'p2', spec: { id: 'r', matchMeta: { renderer: 'superagent:worker-report' } } },
   ]
-  assert.equal(matchTimelineRenderer(entry('1', 'helm.input', { data: { meta: { renderer: 'superagent:worker-report' } } }), renderers)?.pluginId, 'p2')
-  assert.equal(matchTimelineRenderer(entry('2', 'helm.input', { data: { renderer: 'superagent:worker-report' } }), renderers)?.pluginId, 'p2')
-  assert.equal(matchTimelineRenderer(entry('3', 'helm.input', { data: { text: '普通' } }), renderers), undefined)
+  assert.equal(matchTimelineRenderer(entry('1', 'helmx.input', { data: { meta: { renderer: 'superagent:worker-report' } } }), renderers)?.pluginId, 'p2')
+  assert.equal(matchTimelineRenderer(entry('2', 'helmx.input', { data: { renderer: 'superagent:worker-report' } }), renderers)?.pluginId, 'p2')
+  assert.equal(matchTimelineRenderer(entry('3', 'helmx.input', { data: { text: '普通' } }), renderers), undefined)
   // kinds AND matchMeta
-  const kindRenderers = [{ pluginId: 'p3', spec: { id: 'k', kinds: ['helm.input'], matchMeta: { renderer: 'x' } } }]
-  assert.equal(matchTimelineRenderer(entry('4', 'helm.input', { data: { meta: { renderer: 'x' } } }), kindRenderers)?.pluginId, 'p3')
+  const kindRenderers = [{ pluginId: 'p3', spec: { id: 'k', kinds: ['helmx.input'], matchMeta: { renderer: 'x' } } }]
+  assert.equal(matchTimelineRenderer(entry('4', 'helmx.input', { data: { meta: { renderer: 'x' } } }), kindRenderers)?.pluginId, 'p3')
   assert.equal(matchTimelineRenderer(entry('5', 'pi.user', { data: { meta: { renderer: 'x' } } }), kindRenderers), undefined)
 })
 
 test('timeline.renderer 命中的 entry 渲染为插件卡片（豁免折叠）', { timeout: 60_000 }, () => {
   const renderers = [{ pluginId: 'p2', spec: { id: 'r', matchMeta: { renderer: 'superagent:worker-report' } } }]
   const items = buildTimelineItems(
-    [entry('1', 'helm.input', { data: { text: 'Worker 12 已完成', origin: 'agent', meta: { renderer: 'superagent:worker-report', workerId: 12 } } })],
+    [entry('1', 'helmx.input', { data: { text: 'Worker 12 已完成', origin: 'agent', meta: { renderer: 'superagent:worker-report', workerId: 12 } } })],
     { timelineRenderers: renderers },
   )
   assert.equal(items.length, 1)
@@ -343,7 +343,7 @@ test('live 合并：running 工具追加、流式文本并入进行中回合', {
 })
 
 test('工具摘要与产物引用检测', { timeout: 60_000 }, () => {
-  assert.equal(toolSummaryText('bash', { command: 'pnpm test --filter @helm/web' }), 'pnpm test --filter @helm/web')
+  assert.equal(toolSummaryText('bash', { command: 'pnpm test --filter @helmx/web' }), 'pnpm test --filter @helmx/web')
   const long = 'x'.repeat(80)
   assert.ok(toolSummaryText('bash', { command: long }).endsWith('…'))
   assert.equal(toolSummaryText('bash', { command: 'a\nb' }), 'a')
@@ -460,7 +460,7 @@ test('step-group 在产出正文前保持 active=true 默认展开，产出正�
 })
 
 test('多轮工具执行期间 turn.key 恒定不变，且 running 工具保留在同一 step-group 内不跳出', { timeout: 60_000 }, () => {
-  const userMsg = entry('10', 'helm.input', { data: { text: '检查目录与配置', origin: 'human' } })
+  const userMsg = entry('10', 'helmx.input', { data: { text: '检查目录与配置', origin: 'human' } })
 
   // 阶段 1：流式思考 + 第一个工具 running
   const s1 = buildTimelineItems([userMsg], {
@@ -505,7 +505,7 @@ test('多轮工具执行期间 turn.key 恒定不变，且 running 工具保留�
 })
 
 test('单条工具从执行到完成再追加第二条时，保留同一分组与工具标识', { timeout: 60_000 }, () => {
-  const userMsg = entry('1', 'helm.input', { data: { text: '检查目录', origin: 'human' } })
+  const userMsg = entry('1', 'helmx.input', { data: { text: '检查目录', origin: 'human' } })
   const call = assistantEntry('2', [toolCallBlock('c1', 'bash', { command: 'ls' })])
   const first = buildTimelineItems([userMsg, call], { working: true })
   const completed = buildTimelineItems([userMsg, call, toolResultEntry('3', 'c1', 'bash', { text: 'package.json' })], { working: true })
@@ -533,7 +533,7 @@ test('单条工具从执行到完成再追加第二条时，保留同一分组�
 })
 
 test('流式正文更新、落库和结束回合时保留同一正文标识', { timeout: 60_000 }, () => {
-  const userMsg = entry('1', 'helm.input', { data: { text: '给我结果', origin: 'human' } })
+  const userMsg = entry('1', 'helmx.input', { data: { text: '给我结果', origin: 'human' } })
   const streamed = (text: string, updatedAt: number) => buildTimelineItems([userMsg], {
     working: true,
     live: { conversationId: 1, text, tools: [], updatedAt },
@@ -556,8 +556,8 @@ test('流式正文更新、落库和结束回合时保留同一正文标识', { 
 
 test('lastHumanTextOf 与格式化工具', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([
-    entry('1', 'helm.input', { data: { text: '第一条', origin: 'human' } }),
-    entry('2', 'helm.input', { data: { text: '第二条', origin: 'human' } }),
+    entry('1', 'helmx.input', { data: { text: '第一条', origin: 'human' } }),
+    entry('2', 'helmx.input', { data: { text: '第二条', origin: 'human' } }),
   ])
   assert.equal(lastHumanTextOf(items), '第二条')
   assert.equal(lastHumanTextOf([]), undefined)
@@ -649,12 +649,12 @@ test('filterRewoundEntries：闭区间 [from, through] 内条目被移除，同�
   // marker 声明 [fromEntryId=2, throughEntryId=4]（提交新 input 前的旧 tail）；
   // 新 input id=5 大于 through 但小于 marker id，绝不能被误隐藏。
   const entries: ConversationEntry[] = [
-    entry('1', 'helm.input', { data: { text: '最早的问题', origin: 'human' } }),
-    entry('2', 'helm.input', { data: { text: '被覆盖的问题', origin: 'human' } }),
+    entry('1', 'helmx.input', { data: { text: '最早的问题', origin: 'human' } }),
+    entry('2', 'helmx.input', { data: { text: '被覆盖的问题', origin: 'human' } }),
     entry('3', 'pi.assistant', { model: [{ role: 'assistant', content: [{ type: 'text', text: '被覆盖的回答' }] }] }),
     toolResultEntry('4', 'c1', 'bash', { text: '被覆盖的工具结果' }),
-    entry('5', 'helm.input', { data: { text: '改写后的新问题', origin: 'human' } }),
-    entry('6', 'helm.rewind', { data: { fromEntryId: 2, throughEntryId: 4, omittedEntryIds: [2, 3, 4], omittedInputIds: ['in-2'], createdAt: 123 } }),
+    entry('5', 'helmx.input', { data: { text: '改写后的新问题', origin: 'human' } }),
+    entry('6', 'helmx.rewind', { data: { fromEntryId: 2, throughEntryId: 4, omittedEntryIds: [2, 3, 4], omittedInputIds: ['in-2'], createdAt: 123 } }),
     entry('7', 'pi.assistant', { model: [{ role: 'assistant', content: [{ type: 'text', text: '新回答' }] }] }),
   ]
   const active = filterRewoundEntries(entries)
@@ -663,18 +663,18 @@ test('filterRewoundEntries：闭区间 [from, through] 内条目被移除，同�
 
 test('filterRewoundEntries：无效区间不误伤，多次连续 rewind 叠加生效', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [
-    entry('1', 'helm.input', { data: { text: 'A', origin: 'human' } }),
-    entry('2', 'helm.input', { data: { text: 'B', origin: 'human' } }),
+    entry('1', 'helmx.input', { data: { text: 'A', origin: 'human' } }),
+    entry('2', 'helmx.input', { data: { text: 'B', origin: 'human' } }),
     entry('3', 'pi.assistant', { model: [{ role: 'assistant', content: [{ type: 'text', text: '答B' }] }] }),
-    entry('4', 'helm.rewind', { data: { fromEntryId: 2, throughEntryId: 3, omittedEntryIds: [2, 3], omittedInputIds: [], createdAt: 1 } }),
-    entry('5', 'helm.input', { data: { text: 'C', origin: 'human' } }),
+    entry('4', 'helmx.rewind', { data: { fromEntryId: 2, throughEntryId: 3, omittedEntryIds: [2, 3], omittedInputIds: [], createdAt: 1 } }),
+    entry('5', 'helmx.input', { data: { text: 'C', origin: 'human' } }),
     entry('6', 'pi.assistant', { model: [{ role: 'assistant', content: [{ type: 'text', text: '答C' }] }] }),
     // 非法形状：from/through 缺失 / 超前 through → rewind 自身移除但不覆盖任何条目
-    entry('7', 'helm.rewind', {}),
-    entry('8', 'helm.rewind', { data: { fromEntryId: 2, throughEntryId: 99 } }),
+    entry('7', 'helmx.rewind', {}),
+    entry('8', 'helmx.rewind', { data: { fromEntryId: 2, throughEntryId: 99 } }),
     // 第二次 rewind：闭区间 [5, 8]，第二次改写后的问题与第一次 rewind 全部消失
-    entry('9', 'helm.rewind', { data: { fromEntryId: 5, throughEntryId: 8, omittedEntryIds: [5, 6, 7, 8], omittedInputIds: [], createdAt: 2 } }),
-    entry('10', 'helm.input', { data: { text: '最终问题', origin: 'human' } }),
+    entry('9', 'helmx.rewind', { data: { fromEntryId: 5, throughEntryId: 8, omittedEntryIds: [5, 6, 7, 8], omittedInputIds: [], createdAt: 2 } }),
+    entry('10', 'helmx.input', { data: { text: '最终问题', origin: 'human' } }),
   ]
   const active = filterRewoundEntries(entries)
   assert.deepEqual(active.map((e) => e.id), ['1', '10'])
@@ -682,12 +682,12 @@ test('filterRewoundEntries：无效区间不误伤，多次连续 rewind 叠加�
 
 test('buildTimelineItems：rewind 后被覆盖的提问/工具/回答不再渲染，同批新 input 保留', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([
-    entry('1', 'helm.input', { data: { text: '最早的问题', origin: 'human' } }),
-    entry('2', 'helm.input', { data: { text: '被覆盖的问题', origin: 'human' } }),
+    entry('1', 'helmx.input', { data: { text: '最早的问题', origin: 'human' } }),
+    entry('2', 'helmx.input', { data: { text: '被覆盖的问题', origin: 'human' } }),
     assistantEntry('3', [{ type: 'text', text: '被覆盖的回答' }]),
     toolResultEntry('4', 'c1', 'bash', { text: '被覆盖的工具结果' }),
-    entry('5', 'helm.input', { data: { text: '改写后的新问题', origin: 'human' } }),
-    entry('6', 'helm.rewind', { data: { fromEntryId: 2, throughEntryId: 4, omittedEntryIds: [2, 3, 4], omittedInputIds: [], createdAt: 1 } }),
+    entry('5', 'helmx.input', { data: { text: '改写后的新问题', origin: 'human' } }),
+    entry('6', 'helmx.rewind', { data: { fromEntryId: 2, throughEntryId: 4, omittedEntryIds: [2, 3, 4], omittedInputIds: [], createdAt: 1 } }),
     assistantEntry('7', [{ type: 'text', text: '新回答' }]),
   ])
   const humans = items.filter((i) => i.kind === 'human')
@@ -699,13 +699,13 @@ test('buildTimelineItems：rewind 后被覆盖的提问/工具/回答不再渲�
 
 test('lastEditableHumanInput：仅返回 origin=human 的可编辑输入，跳过 agent/trigger；含附件与 reset 边界', { timeout: 60_000 }, () => {
   const entries: ConversationEntry[] = [
-    entry('1', 'helm.input', { data: { text: '第一条', origin: 'human' } }),
-    entry('2', 'helm.input', {
+    entry('1', 'helmx.input', { data: { text: '第一条', origin: 'human' } }),
+    entry('2', 'helmx.input', {
       data: { text: '第二条', origin: 'human', attachments: [{ id: 'a1', name: '图.png', mimeType: 'image/png', size: 10 }] },
     }),
     entry('3', 'pi.assistant', { model: [{ role: 'assistant', content: [{ type: 'text', text: '回答' }] }] }),
-    entry('4', 'helm.rewind', { data: { fromEntryId: 2, throughEntryId: 3, omittedEntryIds: [2, 3], omittedInputIds: [], createdAt: 1 } }),
-    entry('5', 'helm.input', { data: { text: '第三条', origin: 'human' } }),
+    entry('4', 'helmx.rewind', { data: { fromEntryId: 2, throughEntryId: 3, omittedEntryIds: [2, 3], omittedInputIds: [], createdAt: 1 } }),
+    entry('5', 'helmx.input', { data: { text: '第三条', origin: 'human' } }),
   ]
   const target = lastEditableHumanInput(entries)
   assert.ok(target !== undefined)
@@ -714,7 +714,7 @@ test('lastEditableHumanInput：仅返回 origin=human 的可编辑输入，跳�
   assert.equal(target!.attachments, undefined)
 
   // 无 rewind 时返回最后一条（含附件）
-  const noRewind = lastEditableHumanInput(entries.filter((e) => e.kind !== 'helm.rewind'))
+  const noRewind = lastEditableHumanInput(entries.filter((e) => e.kind !== 'helmx.rewind'))
   assert.ok(noRewind !== undefined)
   assert.equal(noRewind!.text, '第三条')
   const withAtt = lastEditableHumanInput(entries.slice(0, 3))
@@ -724,21 +724,21 @@ test('lastEditableHumanInput：仅返回 origin=human 的可编辑输入，跳�
 
   // 最新输入来自 agent / trigger：不是人类编辑对象，继续向前找到上一条人类输入
   const agentLast = lastEditableHumanInput([
-    entry('1', 'helm.input', { data: { text: '人类提问', origin: 'human' } }),
+    entry('1', 'helmx.input', { data: { text: '人类提问', origin: 'human' } }),
     entry('2', 'pi.assistant', { model: [{ role: 'assistant', content: [{ type: 'text', text: '回答' }] }] }),
-    entry('3', 'helm.input', { data: { text: 'Worker 已完成', origin: 'agent' } }),
-    entry('4', 'helm.input', { data: { text: 'cron 触发', origin: 'trigger' } }),
+    entry('3', 'helmx.input', { data: { text: 'Worker 已完成', origin: 'agent' } }),
+    entry('4', 'helmx.input', { data: { text: 'cron 触发', origin: 'trigger' } }),
   ])
   assert.ok(agentLast !== undefined)
   assert.equal(agentLast!.text, '人类提问')
   assert.equal(agentLast!.entryId, 1)
 
   // 全部为非人类输入：无可编辑对象
-  assert.equal(lastEditableHumanInput([entry('3', 'helm.input', { data: { text: '汇报', origin: 'agent' } })]), undefined)
+  assert.equal(lastEditableHumanInput([entry('3', 'helmx.input', { data: { text: '汇报', origin: 'agent' } })]), undefined)
 
   // pi.reset 边界后无人类输入：不跨边界原地编辑
   const afterReset: ConversationEntry[] = [
-    entry('1', 'helm.input', { data: { text: '旧输入', origin: 'human' } }),
+    entry('1', 'helmx.input', { data: { text: '旧输入', origin: 'human' } }),
     entry('2', 'pi.reset', {}),
   ]
   assert.equal(lastEditableHumanInput(afterReset), undefined)
@@ -784,14 +784,14 @@ test('withdraw 与 submitInput(replaceFromEntryId)：请求体构造与非法 su
 
 test('collectSiblingCalls：收集全部工具调用轻量摘要（callId 顺序 / 状态归一 / details 透传 structuredOutput）', { timeout: 60_000 }, () => {
   const items = buildTimelineItems([
-    entry('1', 'helm.input', { data: { text: '开始', origin: 'human' } }),
+    entry('1', 'helmx.input', { data: { text: '开始', origin: 'human' } }),
     assistantEntry('2', [toolCallBlock('call_1', 'subagent', { prompt: '首次派生' })]),
     toolResultEntry('3', 'call_1', 'subagent', { text: '首战告捷', details: { execution: { conversationId: 42 } } }),
     assistantEntry('4', [{ type: 'text', text: '继续深挖' }]),
-    entry('5', 'helm.input', { data: { text: '续接 42', origin: 'human' } }),
+    entry('5', 'helmx.input', { data: { text: '续接 42', origin: 'human' } }),
     assistantEntry('6', [toolCallBlock('call_2', 'subagent', { prompt: '继续', resume: 42 })]),
     toolResultEntry('7', 'call_2', 'subagent', { text: '第二轮完成', details: { execution: { conversationId: 42 } } }),
-    entry('8', 'helm.input', { data: { text: '再续接 42 并派生 43', origin: 'human' } }),
+    entry('8', 'helmx.input', { data: { text: '再续接 42 并派生 43', origin: 'human' } }),
     assistantEntry('9', [
       toolCallBlock('call_3', 'subagent', { prompt: '再继续', resume: '42' }),
       toolCallBlock('call_4', 'subagent', { prompt: '新任务' }),
@@ -831,7 +831,7 @@ test('collectSiblingCalls：无 callId 的调用跳过，step-group 内工具同
 test('buildTimelineItems：compacting=true 时在回合之后、queuedInputs 之前插入 pending compaction 分割线', { timeout: 60_000 }, () => {
   const items = buildTimelineItems(
     [
-      entry('1', 'helm.input', { data: { text: '历史提问', origin: 'human' } }),
+      entry('1', 'helmx.input', { data: { text: '历史提问', origin: 'human' } }),
       assistantEntry('2', [{ type: 'text', text: '历史回答' }]),
     ],
     {
@@ -875,14 +875,14 @@ test('buildTimelineItems：compacting=true 时在回合之后、queuedInputs 之
 
 test('buildTimelineItems：compacting 未开启时不插入 pending compaction 分割线', { timeout: 60_000 }, () => {
   const withoutFlag = buildTimelineItems([
-    entry('1', 'helm.input', { data: { text: '提问', origin: 'human' } }),
+    entry('1', 'helmx.input', { data: { text: '提问', origin: 'human' } }),
     assistantEntry('2', [{ type: 'text', text: '回答' }]),
   ])
   assert.equal(withoutFlag.some((item) => item.kind === 'divider' && item.pending === true), false)
 
   const falseFlag = buildTimelineItems(
     [
-      entry('1', 'helm.input', { data: { text: '提问', origin: 'human' } }),
+      entry('1', 'helmx.input', { data: { text: '提问', origin: 'human' } }),
       assistantEntry('2', [{ type: 'text', text: '回答' }]),
     ],
     { compacting: false },

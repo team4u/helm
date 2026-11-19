@@ -8,7 +8,7 @@ import { homedir } from 'node:os';
 import { posix, win32 } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FileError, err, ok, type Result as SdkResult } from '@earendil-works/pi-durable/env';
-import { normalizeTargetPath, type TargetPlatform } from '@helm/protocol';
+import { normalizeTargetPath, type TargetPlatform } from '@helmx/protocol';
 
 function joinTargetPath(platform: TargetPlatform, ...parts: string[]): string {
   return platform === 'win32' ? win32.join(...parts) : posix.join(...parts);
@@ -19,7 +19,7 @@ function joinTargetPath(platform: TargetPlatform, ...parts: string[]): string {
  *
  * - `posix` target: resolves strictly by `node:path/posix` rules (`/mnt/...` is a real path
  *   and is never rewritten; unaffected by host OS even under injected tests on Windows).
- * - `win32` target: expands `~` and `file://`, then normalizes via `@helm/protocol`'s
+ * - `win32` target: expands `~` and `file://`, then normalizes via `@helmx/protocol`'s
  *   `normalizeTargetPath` — `/mnt/<drive>/...` (WSL mount view) and `/<drive>/...`
  *   (Git Bash / MSYS drive view) deterministically map to `<DRIVE>:\...`; native Windows,
  *   UNC, and relative paths are lexically normalized; driveless POSIX roots (`/home`, `/tmp`,

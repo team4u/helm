@@ -16,7 +16,7 @@ export interface ServiceSpecOptions {
   platform?: NodeJS.Platform;
   /** Node executable path (defaults to `process.execPath`). */
   nodePath?: string;
-  /** `helm-node` CLI entrypoint (compiled `cli.js` or source `cli.ts`). */
+  /** `helmx-node` CLI entrypoint (compiled `cli.js` or source `cli.ts`). */
   cliEntryPath: string;
   dataDir: string;
   hubUrl?: string;
@@ -127,9 +127,9 @@ function quoteWindowsArg(arg: string): string {
   return `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/g, '$1$1')}"`;
 }
 
-const DARWIN_LABEL = 'ai.helm.node';
-const LINUX_UNIT = 'helm-node.service';
-const WIN_TASK = 'HelmNode';
+const DARWIN_LABEL = 'ai.helmx.node';
+const LINUX_UNIT = 'helmx-node.service';
+const WIN_TASK = 'HelmxNode';
 
 /** CLI arguments for the service unit (`start --data-dir <dir> [--hub <url>]`). */
 function cliArgs(dataDir: string, hubUrl?: string): string[] {
@@ -205,7 +205,7 @@ export function renderServiceSpec(options: ServiceSpecOptions): ServiceSpec {
     const targetPath = path.join(home, '.config', 'systemd', 'user', LINUX_UNIT);
     const execStart = [nodePath, cliEntryPath, ...cliArgs(dataDir, hubUrl)].map(quoteSystemdArg).join(' ');
     const content = `[Unit]
-Description=Helm Node Daemon
+Description=Helmx Node Daemon
 After=network.target
 
 [Service]
@@ -228,7 +228,7 @@ WantedBy=default.target
     };
   }
 
-  throw new Error(`unsupported platform ${JSON.stringify(platform)}: helm-node service only supports darwin, linux, and win32`);
+  throw new Error(`unsupported platform ${JSON.stringify(platform)}: helmx-node service only supports darwin, linux, and win32`);
 }
 
 export interface ServiceOperationOptions {

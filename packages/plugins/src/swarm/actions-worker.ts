@@ -1,4 +1,4 @@
-import { HelmError, assertProfileId, type HelmPluginContext } from '@helm/protocol'
+import { HelmxError, assertProfileId, type HelmxPluginContext } from '@helmx/protocol'
 import type { AcquireWorktreeResult } from '../contracts.js'
 import {
   assertWorkerConversationId,
@@ -63,7 +63,7 @@ export interface InspectWorkerResult {
   recentEntries: Array<{ id: string; kind: string; text: string }>
 }
 
-export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmCoordinator) {
+export function createWorkerHandlers(ctx: HelmxPluginContext, coordinator: SwarmCoordinator) {
   const {
     getConfig,
     readConversationOrUndefined,
@@ -79,7 +79,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
     const hasId = input.workerConversationId !== undefined
     const hasName = input.name !== undefined && input.name.trim() !== ''
     if (!hasId && !hasName) {
-      throw new HelmError('validation_error', '必须指定 workerConversationId 或成员名 name', 400, {})
+      throw new HelmxError('validation_error', '必须指定 workerConversationId 或成员名 name', 400, {})
     }
     if (hasName) {
       const cleanName = assertMemberName(input.name)
@@ -90,18 +90,18 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
         group = groups.findLatestGroupForConversation(callerConversationId)
       }
       if (group === undefined) {
-        throw new HelmError('swarm_group_not_found', '未找到目标协作组', 404, { pluginId: SWARM_PLUGIN_ID })
+        throw new HelmxError('swarm_group_not_found', '未找到目标协作组', 404, { pluginId: SWARM_PLUGIN_ID })
       }
       const member = group.members.find((m) => m.name === cleanName)
       if (member === undefined) {
-        throw new HelmError('swarm_unknown_target', `协作组 '${group.id}' 中不存在成员 '${cleanName}'`, 404, {
+        throw new HelmxError('swarm_unknown_target', `协作组 '${group.id}' 中不存在成员 '${cleanName}'`, 404, {
           pluginId: SWARM_PLUGIN_ID,
           groupId: group.id,
           name: cleanName,
         })
       }
       if (hasId && assertWorkerConversationId(input.workerConversationId) !== member.conversationId) {
-        throw new HelmError('validation_error', 'workerConversationId 与 name 指向不同会话', 400, {})
+        throw new HelmxError('validation_error', 'workerConversationId 与 name 指向不同会话', 400, {})
       }
       return { group, member, workerConversationId: member.conversationId }
     }
@@ -114,7 +114,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
         return { group: g, member: m, workerConversationId: workerId }
       }
     }
-    throw new HelmError('not_found', `会话 #${workerId} 不是 ${SWARM_PLUGIN_ID} 登记的协作组成员`, 404, {
+    throw new HelmxError('not_found', `会话 #${workerId} 不是 ${SWARM_PLUGIN_ID} 登记的协作组成员`, 404, {
       pluginId: SWARM_PLUGIN_ID,
       workerConversationId: workerId,
     })
@@ -127,20 +127,20 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
     idempotencyKey?: string,
   ): Promise<{ workerConversationId: number; groupId: string; name: string; worktreeId?: string; postSeq: number }> => {
     if (typeof input.prompt !== 'string' || input.prompt.trim() === '') {
-      throw new HelmError('validation_error', 'dispatch_worker 需要 prompt（非空文本）', 400, {})
+      throw new HelmxError('validation_error', 'dispatch_worker 需要 prompt（非空文本）', 400, {})
     }
     const group = resolveCoordinatorGroup(groups, input.groupId, conversationId, true)
     const memberName = assertMemberName(input.name)
     const access: WorkerAccess = input.access === undefined ? 'readwrite' : input.access
     if (access !== 'readwrite' && access !== 'readonly') {
-      throw new HelmError('validation_error', `access 非法（期望 readwrite | readonly，收到：${String(access)}）`, 400, {})
+      throw new HelmxError('validation_error', `access 非法（期望 readwrite | readonly，收到：${String(access)}）`, 400, {})
     }
     const isolation: WorkerIsolation = input.isolation === undefined ? 'inherit' : input.isolation
     if (isolation !== 'inherit' && isolation !== 'worktree') {
-      throw new HelmError('validation_error', `isolation 非法（期望 inherit | worktree，收到：${String(isolation)}）`, 400, {})
+      throw new HelmxError('validation_error', `isolation 非法（期望 inherit | worktree，收到：${String(isolation)}）`, 400, {})
     }
     if (input.forkEntryId !== undefined && input.forkFrom === undefined) {
-      throw new HelmError('validation_error', '指定 forkEntryId 时必须同时指定 forkFrom', 400, {})
+      throw new HelmxError('validation_error', '指定 forkEntryId 时必须同时指定 forkFrom', 400, {})
     }
 
     let sourceConversationId: number | undefined
@@ -152,7 +152,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
         const cleanFrom = fromToken.startsWith('@') ? fromToken.slice(1) : fromToken
         const peer = group.members.find((m) => m.name === cleanFrom)
         if (peer === undefined) {
-          throw new HelmError('swarm_unknown_target', `forkFrom 目标成员 '${fromToken}' 不存在`, 404, {
+          throw new HelmxError('swarm_unknown_target', `forkFrom 目标成员 '${fromToken}' 不存在`, 404, {
             pluginId: SWARM_PLUGIN_ID,
             groupId: group.id,
             forkFrom: fromToken,
@@ -168,17 +168,17 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
     let targetProfile = defaultProfile
     if (input.profileId !== undefined) {
       if (typeof input.profileId !== 'string') {
-        throw new HelmError('validation_error', 'profileId 必须是字符串', 400, {})
+        throw new HelmxError('validation_error', 'profileId 必须是字符串', 400, {})
       }
       assertProfileId(input.profileId)
       targetProfile = input.profileId
     }
     const profileRecord = await ctx.host.profiles.get(targetProfile)
     if (profileRecord === undefined) {
-      throw new HelmError('validation_error', `Profile 不存在：${targetProfile}`, 400, { profileId: targetProfile })
+      throw new HelmxError('validation_error', `Profile 不存在：${targetProfile}`, 400, { profileId: targetProfile })
     }
     if (profileRecord.humanSelectable === false) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `dispatch_worker 禁止使用系统内部 Profile '${targetProfile}'`,
         400,
@@ -186,7 +186,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
       )
     }
     if (profileRecord.runtime !== undefined) {
-      throw new HelmError(
+      throw new HelmxError(
         'unsupported_runtime',
         `dispatch_worker 仅支持内建会话运行时，不支持外部运行时 Profile '${targetProfile}'（runtime=${profileRecord.runtime.kind}:${profileRecord.runtime.agent}）`,
         400,
@@ -205,14 +205,14 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
       if (chName === 'main') continue
       const ch = group.channels.find((c) => c.name === chName)
       if (ch === undefined) {
-        throw new HelmError('swarm_unknown_channel', `频道 '${chName}' 不存在`, 404, {
+        throw new HelmxError('swarm_unknown_channel', `频道 '${chName}' 不存在`, 404, {
           pluginId: SWARM_PLUGIN_ID,
           groupId: group.id,
           channel: chName,
         })
       }
       if (ch.archived === true) {
-        throw new HelmError('swarm_channel_archived', `频道 '${chName}' 已归档，无法订阅`, 409, {
+        throw new HelmxError('swarm_channel_archived', `频道 '${chName}' 已归档，无法订阅`, 409, {
           pluginId: SWARM_PLUGIN_ID,
           groupId: group.id,
           channel: chName,
@@ -224,7 +224,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
     return enqueueDispatch(async () => {
       const freshGroup = groups.getGroup(group.id)
       if (freshGroup === undefined || freshGroup.status !== 'active') {
-        throw new HelmError('swarm_group_closed', `协作组 '${group.id}' 已不可用或已结单`, 409, {
+        throw new HelmxError('swarm_group_closed', `协作组 '${group.id}' 已不可用或已结单`, 409, {
           pluginId: SWARM_PLUGIN_ID,
           groupId: group.id,
         })
@@ -247,7 +247,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
             postSeq: existingPostSeq,
           }
         }
-        throw new HelmError(
+        throw new HelmxError(
           'swarm_member_conflict',
           `协作组 '${freshGroup.id}' 中成员名 '${memberName}' 已被占用`,
           409,
@@ -257,7 +257,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
       const activeCount = freshGroup.members.filter((m) => m.lifecycle === 'active').length
       const maxMembers = getConfig().maxWorkersPerGroup
       if (activeCount >= maxMembers) {
-        throw new HelmError(
+        throw new HelmxError(
           'swarm_group_member_limit',
           `协作组 '${freshGroup.id}' 活跃成员数已达上限 ${maxMembers}`,
           409,
@@ -272,7 +272,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
         ...(sourceConversationId !== undefined ? { fork: true } : {}),
       })
       if (explicitNodeId !== undefined && explicitNodeId !== resolvedTarget.nodeId) {
-        throw new HelmError(
+        throw new HelmxError(
           'validation_error',
           `显式指定 nodeId '${explicitNodeId}' 与解析目标节点 '${resolvedTarget.nodeId}' 不一致`,
           400,
@@ -308,7 +308,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
       const now = Date.now()
 
       try {
-        ctx.host.markConversationOwnership(created.id, 'helm')
+        ctx.host.markConversationOwnership(created.id, 'helmx')
         if (sourceConversationId !== undefined || effort !== undefined) {
           await ctx.host.updateConversation(created.id, {
             profileId: targetProfile,
@@ -340,7 +340,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
           )) as AcquireWorktreeResult
           acquiredWorktreeId = wt.worktreeId
           if (explicitNodeId !== undefined && explicitNodeId !== wt.nodeId) {
-            throw new HelmError(
+            throw new HelmxError(
               'validation_error',
               `显式指定 nodeId '${explicitNodeId}' 与 worktree 分配节点 '${wt.nodeId}' 不一致`,
               400,
@@ -406,7 +406,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
 
     const summary = readConversationOrUndefined(workerConversationId)
     if (summary === undefined) {
-      throw new HelmError('not_found', `会话 #${workerConversationId} 不存在`, 404, {
+      throw new HelmxError('not_found', `会话 #${workerConversationId} 不存在`, 404, {
         workerConversationId,
       })
     }
@@ -414,7 +414,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
       return { aborted: false, workerConversationId, name: member.name }
     }
 
-    await ctx.host.abortConversationGuarded(workerConversationId, { expectedOwnership: 'helm' })
+    await ctx.host.abortConversationGuarded(workerConversationId, { expectedOwnership: 'helmx' })
     groups.syncProjections()
     return { aborted: true, workerConversationId, name: member.name }
   }
@@ -424,12 +424,12 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
     conversationId: number | undefined,
   ): Promise<{ workerConversationId: number; model: string; name: string }> => {
     if (typeof input.model !== 'string' || input.model.trim() === '') {
-      throw new HelmError('validation_error', 'model 必须是非空字符串（格式 provider/model）', 400, {})
+      throw new HelmxError('validation_error', 'model 必须是非空字符串（格式 provider/model）', 400, {})
     }
     const { group, member, workerConversationId } = resolveTargetWorker(input, conversationId)
     assertCoordinatorAuthority(conversationId, group)
     if (member.lifecycle !== 'active') {
-      throw new HelmError('swarm_unknown_target', `成员 @${member.name} 已归档，无法切换模型`, 409, {
+      throw new HelmxError('swarm_unknown_target', `成员 @${member.name} 已归档，无法切换模型`, 409, {
         pluginId: SWARM_PLUGIN_ID,
         groupId: group.id,
         name: member.name,
@@ -438,12 +438,12 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
 
     const summary = readConversationOrUndefined(workerConversationId)
     if (summary === undefined) {
-      throw new HelmError('not_found', `会话 #${workerConversationId} 不存在`, 404, {
+      throw new HelmxError('not_found', `会话 #${workerConversationId} 不存在`, 404, {
         workerConversationId,
       })
     }
     if (isWorkerBusy(coordinator, workerConversationId, summary.status)) {
-      throw new HelmError(
+      throw new HelmxError(
         'swarm_worker_busy',
         `成员 @${member.name} (#${workerConversationId}) 当前仍在运行中（${summary.status}）；请先等待完成或调用 abort_worker 刹停后再切换模型`,
         409,
@@ -470,7 +470,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
         group.coordinatorConversationId === conversationId ||
         group.members.some((m) => m.conversationId === conversationId && m.lifecycle === 'active')
       if (!isParticipant) {
-        throw new HelmError(
+        throw new HelmxError(
           'conversation_scope_violation',
           `当前会话 #${conversationId} 无权检视协作组 '${group.id}' 成员`,
           403,
@@ -520,7 +520,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
     }
     const summary = readConversationOrUndefined(workerConversationId)
     if (summary !== undefined && isWorkerBusy(coordinator, workerConversationId, summary.status)) {
-      throw new HelmError(
+      throw new HelmxError(
         'swarm_worker_busy',
         `成员 @${member.name} (#${workerConversationId}) 当前正在运行或结算，拒绝归档（请先 abort_worker 或等待结束）`,
         409,
@@ -531,7 +531,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
     return enqueueDispatch(async () => {
       const freshSummary = readConversationOrUndefined(workerConversationId)
       if (freshSummary !== undefined && isWorkerBusy(coordinator, workerConversationId, freshSummary.status)) {
-        throw new HelmError(
+        throw new HelmxError(
           'swarm_worker_busy',
           `成员 @${member.name} (#${workerConversationId}) 已进入运行，拒绝归档`,
           409,
@@ -545,7 +545,7 @@ export function createWorkerHandlers(ctx: HelmPluginContext, coordinator: SwarmC
           await releaseWorktreeHold(ctx, group.id, member.name, wtCheck.worktreeId, signal)
         } else {
           if (input.force !== true && wtCheck.inspected.exists && (wtCheck.isDirty || wtCheck.unmergedCommits > 0)) {
-            throw new HelmError(
+            throw new HelmxError(
               'swarm_worktree_unmerged',
               `成员 @${member.name} 的工作树 ${wtCheck.worktreeId} (branch: ${wtCheck.inspected.currentBranch ?? wtCheck.inspected.record.branch}) 存在未提交改动(${wtCheck.inspected.dirtyFileCount})或未合入提交(${wtCheck.unmergedCommits})；请先合入或传 keepWorktree: true / force: true`,
               409,

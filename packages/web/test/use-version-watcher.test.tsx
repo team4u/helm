@@ -3,7 +3,7 @@
  * bootId 首次/变化触发、clean 自动刷新与 dirty 挂起/补刷、visibility/focus
  * 5s 节流、hidden/visible 轮询行为、vite:preloadError 兜底、WebView-safe
  * 刷新导航阶梯（同址 replace → cache-buster 升级重试、手动不被自动闸门短路、
- * 同入口跨页防环）、卸载后 listener/timer 清理，以及 HelmStoreProvider 对
+ * 同入口跨页防环）、卸载后 listener/timer 清理，以及 HelmxStoreProvider 对
  * kernelBootId 的快照暴露。
  */
 import assert from 'node:assert/strict'
@@ -21,11 +21,11 @@ import {
 ensureHappyDom()
 const { createRoot } = await import('react-dom/client')
 
-import { makeTestStore, HelmExternalStoreContext } from './helpers/store.js'
+import { makeTestStore, HelmxExternalStoreContext } from './helpers/store.js'
 import { hangingEventStream } from './helpers/sse-stream.js'
 import { sseClientTimings } from '../src/lib/live-state.js'
-import type { HelmStoreValue } from '../src/lib/types.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { HelmxStoreValue } from '../src/lib/types.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 import {
   useVersionWatcher,
   versionWatchTimings,
@@ -39,7 +39,7 @@ import {
 } from '../src/shell/version-watch-model.js'
 import { clearComposerDirty, setComposerDirty, type ComposerDirtySnapshot } from '../src/conversation/composer-dirty.js'
 import { useComposerSend, type ComposerSendApi } from '../src/conversation/composer-send.js'
-import type { ConversationSummary } from '@helm/protocol'
+import type { ConversationSummary } from '@helmx/protocol'
 import {
   clearStandbyDraft,
   resetStandbyDrafts,
@@ -52,7 +52,7 @@ const NEW_ENTRY = '/assets/index-newhash.js'
 
 /** 与 Vite 构建产物同构的 index.html 正文。 */
 const builtIndexHtml = (src: string): string =>
-  `<!doctype html><html lang="zh-CN"><head><title>Helm</title>` +
+  `<!doctype html><html lang="zh-CN"><head><title>Helmx</title>` +
   `<script type="module" crossorigin src="${src}"></script></head>` +
   `<body><div id="root"></div></body></html>`
 
@@ -77,8 +77,8 @@ function dispatchVisibility(visible: boolean): void {
 const CLEAN_COMPOSER: ComposerDirtySnapshot = { hasDraftText: false, editingEntry: false, hasAttachments: false, busy: false }
 
 interface Harness {
-  renderStore: (bootId: string | null, overrides?: { activeModal?: HelmStoreValue['activeModal'] }) => void
-  store: () => HelmExternalStore
+  renderStore: (bootId: string | null, overrides?: { activeModal?: HelmxStoreValue['activeModal'] }) => void
+  store: () => HelmxExternalStore
   view: () => VersionWatcherView
   fetchCalls: Array<{ url: string; init: RequestInit }>
   reloads: () => number
@@ -148,13 +148,13 @@ function mountWatcher(initialHtml = builtIndexHtml(CURRENT_ENTRY), nav: { locati
   const root: Root = createRoot(host)
   act(() => {
     root.render(
-      <HelmExternalStoreContext.Provider value={store}>
+      <HelmxExternalStoreContext.Provider value={store}>
         <WatcherProbe />
-      </HelmExternalStoreContext.Provider>,
+      </HelmxExternalStoreContext.Provider>,
     )
   })
   // kernelBootId 经真实 setter 推进（auth 领域订阅通知）；其余覆写按用例一次性水合。
-  const renderStore = (bootId: string | null, overrides: { activeModal?: HelmStoreValue['activeModal'] } = {}): void => {
+  const renderStore = (bootId: string | null, overrides: { activeModal?: HelmxStoreValue['activeModal'] } = {}): void => {
     const { activeModal } = overrides
     act(() => {
       store.setKernelBootId(bootId)
@@ -235,7 +235,7 @@ test('bootId 首次快照只建基线不探测；之后变化立即探测且指�
   h.renderStore('boot-2')
   await flush()
   assert.equal(h.fetchCalls.length, 1)
-  assert.match(h.fetchCalls[0]!.url, /^\/index\.html\?helmv=/, '探测 URL 携带防缓存唯一参数')
+  assert.match(h.fetchCalls[0]!.url, /^\/index\.html\?helmxv=/, '探测 URL 携带防缓存唯一参数')
   assert.equal(h.fetchCalls[0]!.init.cache, 'no-store')
   assert.equal(h.view().updateAvailable, false, '入口指纹未变不算新版本')
   assert.equal(h.reloads(), 0)
@@ -703,9 +703,9 @@ test('Composer 实例上报与卸载清报：旧实例残留不阻塞刷新', { 
   const composerRoot = createRoot(composerHost)
   act(() => {
     composerRoot.render(
-      <HelmExternalStoreContext.Provider value={makeTestStore({})}>
+      <HelmxExternalStoreContext.Provider value={makeTestStore({})}>
         <ComposerSendHost />
-      </HelmExternalStoreContext.Provider>,
+      </HelmxExternalStoreContext.Provider>,
     )
   })
   assert.equal(h.view().deferReason, null, '空草稿不挂起')
@@ -1154,9 +1154,9 @@ test('卸载后清理 listener 与轮询 timer：事件不再探测，周期不�
 // Provider 集成：SSE snapshot 的 bootId 暴露为 store.kernelBootId
 // ---------------------------------------------------------------------------
 
-test('HelmStoreProvider：snapshot 把 bootId 暴露到 store.kernelBootId，重连换代后推进', { timeout: 60_000 }, async () => {
-  const { HelmStoreProvider } = await import('../src/lib/HelmStoreProvider.js')
-  const { useHelmStore } = await import('../src/lib/store-context.js')
+test('HelmxStoreProvider：snapshot 把 bootId 暴露到 store.kernelBootId，重连换代后推进', { timeout: 60_000 }, async () => {
+  const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
+  const { useHelmxStore } = await import('../src/lib/store-context.js')
 
   const encoder = new TextEncoder()
   const conv = (id: number) => ({
@@ -1259,7 +1259,7 @@ test('HelmStoreProvider：snapshot 把 bootId 暴露到 store.kernelBootId，重
 
   let observedBootId: string | null = null
   const Probe = (): React.ReactNode => {
-    const store = useHelmStore()
+    const store = useHelmxStore()
     observedBootId = store.kernelBootId ?? null
     return null
   }
@@ -1278,9 +1278,9 @@ test('HelmStoreProvider：snapshot 把 bootId 暴露到 store.kernelBootId，重
     })
     await act(async () => {
       root.render(
-        <HelmStoreProvider>
+        <HelmxStoreProvider>
           <Probe />
-        </HelmStoreProvider>,
+        </HelmxStoreProvider>,
       )
     })
     await waitFor('boot-1')
@@ -1350,7 +1350,7 @@ test('App 版本横幅集成：渲染显式 type=button 立即刷新按钮并直
     await act(async () => {
       appRoot.render(<App />)
     })
-    await waitForCondition(() => appHost.querySelector('.helm-shell') !== null)
+    await waitForCondition(() => appHost.querySelector('.helmx-shell') !== null)
     // 弱网失败（指纹未变）：不弹版本横幅、不强刷，改为提示可恢复错误
     act(() => {
       window.dispatchEvent(new Event('vite:preloadError', { cancelable: true }))

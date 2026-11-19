@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { ConversationStatus } from '@helm/protocol/browser'
+import type { ConversationStatus } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 import type { EditRequestTarget } from '../conversation/timeline-model.js'
 
@@ -134,7 +134,7 @@ export function busyEnterMode(modifier: boolean): 'steer' | 'followUp' {
  * legacy underscore spellings stay accepted. pi.compaction is substantive
  * context: compaction must not become an environment unlock path. */
 const CONVERSATIONAL_ENTRY_KINDS: ReadonlySet<string> = new Set([
-  'helm.input',
+  'helmx.input',
   'pi.user',
   'pi.assistant',
   'pi.tool_call',

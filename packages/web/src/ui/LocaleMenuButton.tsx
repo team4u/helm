@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react'
-import { HelmIcon } from '@helm/plugin-client'
+import { HelmxIcon } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useStoreActions, useThemePreferencesState } from '../lib/store-context.js'
 import { resolveBrowserLocale } from '../lib/theme-preferences.js'
@@ -68,7 +68,7 @@ export function LocaleMenuButton({
             aria-label={triggerLabel}
             aria-expanded={open}
           >
-            <HelmIcon name="globe" size={iconSize} />
+            <HelmxIcon name="globe" size={iconSize} />
           </button>
         </DropdownMenuTrigger>
       </Tooltip>
@@ -91,7 +91,7 @@ export function LocaleMenuButton({
                 onSelect={() => selectPreference(item.value)}
               >
                 <span>{item.label}</span>
-                {selected && <HelmIcon name="check" size={12} />}
+                {selected && <HelmxIcon name="check" size={12} />}
               </DropdownMenuItem>
             )
           })}

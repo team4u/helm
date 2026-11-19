@@ -1,5 +1,5 @@
 /**
- * Single unified `state.sqlite`: pi-durable generated tables (`pi_` prefix) + helm-owned tables + FTS5 derived index.
+ * Single unified `state.sqlite`: pi-durable generated tables (`pi_` prefix) + helmx-owned tables + FTS5 derived index.
  * All SQL goes through the same `NodeSqliteDatabase` adapter serialized queue (during transactions the adapter
  * queues other operations; raw calls bypassing this facade can conflict with pi transactions or roll back each
  * other) — never open a second connection.
@@ -15,16 +15,16 @@ import type { SqliteStorage as SqliteStorageT } from '@earendil-works/pi-durable
 import type { NodeSqliteDatabase } from '@earendil-works/chord/sqlite/node'
 import { join } from 'node:path'
 
-export interface HelmDatabase {
+export interface HelmxDatabase {
   storage: SqliteStorageT
-  /** Read/write access for helm-owned tables, serialized on the same database connection. */
+  /** Read/write access for helmx-owned tables, serialized on the same database connection. */
   db: NodeSqliteDatabase
   /** Idempotent close: repeated calls (e.g. after `harness.close` closes storage) will not throw. */
   close(): Promise<void>
 }
 
-const HELM_SCHEMA = `
-CREATE TABLE IF NOT EXISTS helm_conversations (
+const HELMX_SCHEMA = `
+CREATE TABLE IF NOT EXISTS helmx_conversations (
   id INTEGER PRIMARY KEY,
   title TEXT NOT NULL DEFAULT '',
   profile_id TEXT NOT NULL DEFAULT 'default',
@@ -43,11 +43,11 @@ CREATE TABLE IF NOT EXISTS helm_conversations (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS helm_conversation_tool_links (
+CREATE TABLE IF NOT EXISTS helmx_conversation_tool_links (
   conversation_id INTEGER PRIMARY KEY,
   parent_tool_call_id TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS helm_asks (
+CREATE TABLE IF NOT EXISTS helmx_asks (
   id TEXT PRIMARY KEY,
   conversation_id INTEGER NOT NULL,
   owner_plugin_id TEXT,
@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS helm_asks (
   created_at INTEGER NOT NULL,
   settled_at INTEGER
 );
-CREATE TABLE IF NOT EXISTS helm_artifacts (
+CREATE TABLE IF NOT EXISTS helmx_artifacts (
   id TEXT PRIMARY KEY,
   conversation_id INTEGER NOT NULL,
   kind TEXT NOT NULL,
@@ -68,15 +68,15 @@ CREATE TABLE IF NOT EXISTS helm_artifacts (
   size INTEGER NOT NULL,
   created_at INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS helm_artifacts_conv ON helm_artifacts (conversation_id);
-CREATE TABLE IF NOT EXISTS helm_plugin_docs (
+CREATE INDEX IF NOT EXISTS helmx_artifacts_conv ON helmx_artifacts (conversation_id);
+CREATE TABLE IF NOT EXISTS helmx_plugin_docs (
   plugin_id TEXT NOT NULL,
   name TEXT NOT NULL,
   value TEXT NOT NULL,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (plugin_id, name)
 );
-CREATE TABLE IF NOT EXISTS helm_plugin_session_docs (
+CREATE TABLE IF NOT EXISTS helmx_plugin_session_docs (
   plugin_id TEXT NOT NULL,
   name TEXT NOT NULL,
   conversation_id INTEGER NOT NULL,
@@ -84,24 +84,24 @@ CREATE TABLE IF NOT EXISTS helm_plugin_session_docs (
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (plugin_id, name, conversation_id)
 );
-CREATE INDEX IF NOT EXISTS helm_plugin_session_docs_conv
-  ON helm_plugin_session_docs (conversation_id);
-CREATE TABLE IF NOT EXISTS helm_seq (
+CREATE INDEX IF NOT EXISTS helmx_plugin_session_docs_conv
+  ON helmx_plugin_session_docs (conversation_id);
+CREATE TABLE IF NOT EXISTS helmx_seq (
   key TEXT PRIMARY KEY,
   value INTEGER NOT NULL
 );
-CREATE TABLE IF NOT EXISTS helm_tombstones (
+CREATE TABLE IF NOT EXISTS helmx_tombstones (
   id INTEGER PRIMARY KEY,
   deleted_at INTEGER NOT NULL
 );
 `
 
 /**
- * Separate FTS5 table creation: tokenizer config is outside schema versioning; see `HelmStore.rebuildFts` for rebuilds.
+ * Separate FTS5 table creation: tokenizer config is outside schema versioning; see `HelmxStore.rebuildFts` for rebuilds.
  * The `body` column stores redacted plain text (secret values are never persisted).
  */
 const FTS_SCHEMA = `
-CREATE VIRTUAL TABLE IF NOT EXISTS helm_conversation_fts USING fts5(
+CREATE VIRTUAL TABLE IF NOT EXISTS helmx_conversation_fts USING fts5(
   conversation_id UNINDEXED,
   entry_id UNINDEXED,
   title,
@@ -110,14 +110,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS helm_conversation_fts USING fts5(
 `
 
 /**
- * Open (or create) the single `state.sqlite`; pi tables and helm tables share one connection and transaction queue.
+ * Open (or create) the single `state.sqlite`; pi tables and helmx tables share one connection and transaction queue.
  * The adapter is built by `openNodeSqliteDatabase` (single connection, WAL, `synchronous=NORMAL`,
  * `busy_timeout=5s`; do not touch raw `node:sqlite` handles directly).
  */
-export async function openHelmDatabase(dataDir: string): Promise<HelmDatabase> {
+export async function openHelmxDatabase(dataDir: string): Promise<HelmxDatabase> {
   const statePath = join(dataDir, 'state.sqlite')
   const db = await openNodeSqliteDatabase(statePath)
-  // Proxy view: pi-durable `SqliteStorage` and `HelmStore` share the underlying connection and serialized
+  // Proxy view: pi-durable `SqliteStorage` and `HelmxStore` share the underlying connection and serialized
   // transaction queue, so `harness.close() -> storage.close()` must not disconnect the underlying `db` prematurely
   // (closed solely by `teardownKernelRuntime` via trailing `database.close()`).
   const storageDb: SqliteDatabase = {
@@ -132,8 +132,8 @@ export async function openHelmDatabase(dataDir: string): Promise<HelmDatabase> {
   let storage: SqliteStorageT
   try {
     storage = await SqliteStorage.open(storageDb, { prefix: 'pi_' })
-    // Run helm table DDL through the adapter queue as well to avoid racing pi initialization. Use latest schema directly during dev.
-    await db.exec(HELM_SCHEMA)
+    // Run helmx table DDL through the adapter queue as well to avoid racing pi initialization. Use latest schema directly during dev.
+    await db.exec(HELMX_SCHEMA)
     await db.exec(FTS_SCHEMA)
   } catch (error) {
     await db.close().catch(() => {})
@@ -145,7 +145,7 @@ export async function openHelmDatabase(dataDir: string): Promise<HelmDatabase> {
     db,
     async close() {
       // Idempotent: `harness.close()` may already close `storage` (`storageDb.close` is a no-op;
-      // the underlying `db` is closed only here). Keep `storage.close()` fallback for test paths opening `HelmDatabase` standalone.
+      // the underlying `db` is closed only here). Keep `storage.close()` fallback for test paths opening `HelmxDatabase` standalone.
       if (closed) return
       closed = true
       await storage.close(BACKGROUND_CONTEXT)

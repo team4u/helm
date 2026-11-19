@@ -19,11 +19,11 @@ import type { Context } from '@earendil-works/chord/context'
 import type { ExecutionEnv } from '@earendil-works/pi-durable/env'
 import { constants as fsConstants } from 'node:fs'
 import { mkdir, open, readFile, realpath, stat, writeFile } from 'node:fs/promises'
-import { targetPathShape, type TargetPlatform } from '@helm/protocol'
+import { targetPathShape, type TargetPlatform } from '@helmx/protocol'
 import { envWithFileMutationQueue, localWithFileMutationQueue } from '../../env/file-mutation-queue.js'
 import { nodePathForShape, resolveTargetPath } from './target-path.js'
 import { requireRemoteEnv, type FileOpAction } from './guards.js'
-import type { HelmToolDeps } from '../tool-deps.js'
+import type { HelmxToolDeps } from '../tool-deps.js'
 
 /** Single-file byte cap for `read` (explicit cap aligned with spill preview limit). */
 export const READ_FILE_MAX_BYTES = 128 * 1024
@@ -186,7 +186,7 @@ function remoteReadableEnv(env: ExecutionEnv): ReadableFileEnv {
 
 /** Construct `read` execution environment: guards remote nodes first (explicit error text), local uses `node:fs`. */
 export function readableEnvFor(
-  deps: HelmToolDeps,
+  deps: HelmxToolDeps,
   nodeId: string,
   base: string,
 ): { error: string } | { env: ReadableFileEnv } {
@@ -200,7 +200,7 @@ export function readableEnvFor(
 
 /** Construct `write`/`edit` execution environment: guards remote nodes first (explicit error text), local uses `node:fs`. */
 export function writableEnvFor(
-  deps: HelmToolDeps,
+  deps: HelmxToolDeps,
   nodeId: string,
   base: string,
   action: Extract<FileOpAction, 'write' | 'edit'>,

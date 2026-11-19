@@ -15,13 +15,13 @@ import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
 import * as ReactDOMClient from 'react-dom/client'
-import type { PluginSummary } from '@helm/protocol'
+import type { PluginSummary } from '@helmx/protocol'
 import { PluginCard } from '../src/plugins/PluginCard.js'
 import { PluginDetailDrawer } from '../src/plugins/PluginDetailDrawer.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
-import type { HelmStoreValue } from '../src/lib/types.js'
-import type { HelmExternalStore } from '../src/lib/helm-store.js'
+import type { HelmxStoreValue } from '../src/lib/types.js'
+import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
@@ -62,11 +62,11 @@ const SCREEN_UI = [
 function screenStore(
   plugins: PluginSummary[],
   ui: Array<{ pluginId: string; surface: string; spec: Record<string, unknown> }>,
-): HelmExternalStore {
+): HelmxExternalStore {
   // 真实 store 从 uiContributions 派生 groupedUi（screens 即 surface='screen' 的贡献，与生产同链路）。
   return makeTestStore({
     plugins,
-    uiContributions: ui as HelmStoreValue['uiContributions'],
+    uiContributions: ui as HelmxStoreValue['uiContributions'],
   })
 }
 
@@ -127,7 +127,7 @@ test('PluginCard：停用或无 Screen 时不渲染打开按钮（无 Provider �
     host.remove()
   }
 
-  // 无 Provider（HelmExternalStoreContext 为 null）：卡片可渲染且不出现打开按钮
+  // 无 Provider（HelmxExternalStoreContext 为 null）：卡片可渲染且不出现打开按钮
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = ReactDOMClient.createRoot(host)

@@ -6,9 +6,9 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import type { WorkbenchPanelProps } from '@helm/protocol'
+import type { WorkbenchPanelProps } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../../contracts.js'
-import { resolveLocalizedText, useConversations, usePluginContext, usePluginLocale } from '@helm/plugin-client'
+import { resolveLocalizedText, useConversations, usePluginContext, usePluginLocale } from '@helmx/plugin-client'
 import { usePluginSessionDoc } from './hooks.ts'
 import { Icon } from './WorkflowIcon.tsx'
 import { WorkflowRunCardBody, WorkflowRunResultBox } from './WorkflowRunCard.tsx'

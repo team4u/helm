@@ -238,7 +238,7 @@ function classifyNative(
     return
   }
 
-  // ---- owned（helm/bot）确定性规则表（原生差异分支）。 ----
+  // ---- owned（helmx/bot）确定性规则表（原生差异分支）。 ----
   if (probe.status === 'blocked') {
     if (facts.pendingAskCount > 0) {
       planBlockedWithPendingAsk(finding, 'notify_only（已有待答 Ask，沿用既有审批）', ops)
@@ -390,7 +390,7 @@ function classifyExternal(
  * workflow_run 失败探针分类（§3.2 断点续跑）：
  * - 事实严格校验（kind/runId/conversationId/failedAt/autoResumeCount），
  *   残缺只读告知，绝不猜造；
- * - 严格仅 helm 归属后台探针（human/bot 一律不自动续跑）；
+ * - 严格仅 helmx 归属后台探针（human/bot 一律不自动续跑）；
  * - 冷却退避：autoResumeCount 0/1/2 → 2/5/15 分钟；未满冷却不产生任何
  *   动作（每 15s tick 通知会刷屏）；
  * - autoResumeCount 达上限后交人类（限频告知）；
@@ -442,9 +442,9 @@ function classifyWorkflowRun(
     planSeqMissing(finding, ops)
     return
   }
-  if (probe.ownedBy !== 'helm') {
-    // 严格仅 helm 归属后台探针：human/bot（含缺省未知）一律不自动续跑。
-    finding.disposition = 'notify_only（非 helm 归属，拒绝自动续跑）'
+  if (probe.ownedBy !== 'helmx') {
+    // 严格仅 helmx 归属后台探针：human/bot（含缺省未知）一律不自动续跑。
+    finding.disposition = 'notify_only（非 helmx 归属，拒绝自动续跑）'
     ops.push({ type: 'notify', finding, refractoryMs: EXTERNAL_REFRACTORY_MS })
     return
   }

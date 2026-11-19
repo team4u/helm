@@ -1,5 +1,5 @@
 /**
- * builtin:workflow env.exec + prepareAction 插件接线集成验收（真实 createHelm 组合）。
+ * builtin:workflow env.exec + prepareAction 插件接线集成验收（真实 createHelmx 组合）。
  *
  * 与 app-workflow.integration.test.ts 的分工：本文件专注 3b70fd1e 主线能力经
  * **插件边界**（ctx.host.execEnv / ctx.host.prepareAction）接入后的真实行为：
@@ -23,12 +23,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { HelmError, type PluginDefinition } from '@helm/protocol'
+import { HelmxError, type PluginDefinition } from '@helmx/protocol'
 import type { WorkflowRunSummary } from '../src/contracts.js'
-import { createHelm } from '../../hub/src/app.js'
+import { createHelmx } from '../../hub/src/app.js'
 import { readJournal, type WorkflowJournalEntry } from '../src/workflow/engine/journal.js'
 import { pluginDataDirName } from '../../kernel/src/plugins/plugin-dir-name.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { makeFauxProvider, useTempDir } from './helpers/plugin-test-env.js'
 
 /** 初始会话 id（SDK 保留 #1 承载；普通会话语义，无产品级特权）。 */
@@ -44,7 +44,7 @@ interface Env {
   convCwd: string
   /** 绑定 (local, convCwd) 的靶点会话：env.exec 缺省靶点继承自它。 */
   convId: number
-  app: Awaited<ReturnType<typeof createHelm>>
+  app: Awaited<ReturnType<typeof createHelmx>>
   /** echo action handler 执行计数（副作用哨兵）。 */
   echoCalls: string[]
   runWorkflow(request: Record<string, unknown>): Promise<{ run: WorkflowRunSummary }>
@@ -53,10 +53,10 @@ interface Env {
 }
 
 async function makeEnv(): Promise<Env> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-wf-env-act-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-wf-env-act-'))
   const convCwd = join(dataDir, 'conv-cwd')
   const faux = makeFauxProvider()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
+  const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
 
   // 会话绑定 (nodeId='local', cwd=convCwd)：env.exec 缺省靶点必须继承它。
   const { mkdirSync } = await import('node:fs')
@@ -191,7 +191,7 @@ test('env.exec2: 普通插件动作 preflight invalid input 不锁死 resume；�
       conversationId: env.convId,
       wait: true,
     }), (error: unknown) => {
-      if (!(error instanceof HelmError) || error.code !== 'workflow_failed') return false
+      if (!(error instanceof HelmxError) || error.code !== 'workflow_failed') return false
       const details = error.details as { runId?: unknown } | undefined
       if (typeof details?.runId !== 'string') return false
       failedRunId = details.runId
@@ -236,9 +236,9 @@ test('env.exec2: 普通插件动作 preflight invalid input 不锁死 resume；�
 })
 
 test('env.exec3: 插件声明 idempotent: true 的动作在账本生效（resume 失败步安全重跑）', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-wf-idem-')
+  const dataDir = useTempDir(t, 'helmx-wf-idem-')
   const faux = makeFauxProvider()
-  const app = await createHelm({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
+  const app = await createHelmx({ buildProvider: createPluginBuildProvider(), dataDir, cwd: dataDir, model: 'faux/faux-1', providers: [faux.provider] })
   try {
     let handlerRuns = 0
     let shouldFail = true
@@ -259,7 +259,7 @@ test('env.exec3: 插件声明 idempotent: true 的动作在账本生效（resume
           },
           handler: () => {
             handlerRuns++
-            if (shouldFail) throw new HelmError('probe_failed', '第一次执行失败', 500)
+            if (shouldFail) throw new HelmxError('probe_failed', '第一次执行失败', 500)
             return { n: handlerRuns }
           },
         })
@@ -280,7 +280,7 @@ test('env.exec3: 插件声明 idempotent: true 的动作在账本生效（resume
       conversationId: ROOT_CONVERSATION_ID,
       wait: true,
     }), (error: unknown) => {
-      if (!(error instanceof HelmError) || error.code !== 'workflow_failed') return false
+      if (!(error instanceof HelmxError) || error.code !== 'workflow_failed') return false
       const details = error.details as { runId?: unknown } | undefined
       if (typeof details?.runId !== 'string') return false
       failedRunId = details.runId

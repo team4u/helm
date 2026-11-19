@@ -16,7 +16,7 @@
  * - Honest boundary: TTL / turn end cannot revoke environment variables already injected into already-started child processes;
  *   it only guarantees subsequent spawns will no longer inject them.
  *
- * addRedaction registers global value-based redaction (e.g. kernel-managed HELM_TOKEN): not an env var,
+ * addRedaction registers global value-based redaction (e.g. kernel-managed HELMX_TOKEN): not an env var,
  * excluded from stats, and not cleared by clear(conversationId); multiple registrations for the same value stack
  * and redaction stops only once all handles are disposed; clear() removes everything including global redactions.
  *
@@ -24,7 +24,7 @@
  * process environment variables or memory—that is an inherent privilege of trusted code, and this module does not promise zero leakage.
  */
 import { randomUUID } from 'node:crypto'
-import { HelmError, isValidEnvName, type SecretLifetime } from '@helm/protocol'
+import { HelmxError, isValidEnvName, type SecretLifetime } from '@helmx/protocol'
 
 const REDACTED_PREFIX = '[REDACTED:stash:'
 export const REDACTED_MARKER = '[REDACTED]'
@@ -54,12 +54,12 @@ export function validateSecretLifetime(lifetime: SecretLifetime, context: string
     lifetime === null || typeof lifetime !== 'object' || Array.isArray(lifetime) ||
     (Object.getPrototypeOf(lifetime) !== Object.prototype && Object.getPrototypeOf(lifetime) !== null)
   ) {
-    throw new HelmError('validation_error', `${context} must be an object (received ${typeof lifetime})`, 400)
+    throw new HelmxError('validation_error', `${context} must be an object (received ${typeof lifetime})`, 400)
   }
   const keys = Object.keys(lifetime)
   for (const key of keys) {
     if (key !== 'ttlMs' && key !== 'scope') {
-      throw new HelmError('validation_error', `${context} contains unknown key '${key}' (only allows ttlMs / scope)`, 400, { key })
+      throw new HelmxError('validation_error', `${context} contains unknown key '${key}' (only allows ttlMs / scope)`, 400, { key })
     }
   }
   const ttlMs = (lifetime as { ttlMs?: unknown }).ttlMs
@@ -70,7 +70,7 @@ export function validateSecretLifetime(lifetime: SecretLifetime, context: string
       ttlMs <= 0 ||
       ttlMs > MAX_SECRET_TTL_MS
     ) {
-      throw new HelmError(
+      throw new HelmxError(
         'validation_error',
         `${context}.ttlMs must be a positive safe integer not exceeding ${MAX_SECRET_TTL_MS} (received ${String(ttlMs)})`,
         400,
@@ -80,7 +80,7 @@ export function validateSecretLifetime(lifetime: SecretLifetime, context: string
   }
   const scope = (lifetime as { scope?: unknown }).scope
   if (scope !== undefined && scope !== 'conversation' && scope !== 'turn') {
-    throw new HelmError(
+    throw new HelmxError(
       'validation_error',
       `${context}.scope only allows 'conversation' | 'turn' (received ${String(scope)})`,
       400,

@@ -7,10 +7,10 @@
  *   非幂等 action 零重复执行、原账本文件 seq 严格递增且零重复终态行、agent_started 截断尾行容错与悬挂 action_started 阻断；
  * - T3：同步 subagent 与同步 SubagentWorkflow 工具（replay: 'safe'）在父回合 ToolTask 中途
  *   close() 重启后的 (conversationId, callId) 幂等重放，零重复派生；
- * - T5：单子代理 resumeFromRunId、resume_failed 动作与真实 CLI `helm workflows resume-failed`
+ * - T5：单子代理 resumeFromRunId、resume_failed 动作与真实 CLI `helmx workflows resume-failed`
  *   （5 个失败任务拉起 4 跳过 1、二次调用幂等 0 新拉起、参数互斥校验）；
  * - 安全红线：crashRecoveries > 3 熔断（[crash_recovery_limit]）、secretNames 未就绪重启失效
- *   （[secret_grant_expired_on_restart]，落盘绝不含 secretNames）、配置类型校验与 HELM_AUTO_RECOVER=0 逃生阀。
+ *   （[secret_grant_expired_on_restart]，落盘绝不含 secretNames）、配置类型校验与 HELMX_AUTO_RECOVER=0 逃生阀。
  */
 
 import assert from 'node:assert/strict'
@@ -22,9 +22,9 @@ import { setTimeout as delay } from 'node:timers/promises'
 import { test } from 'node:test'
 import { pathToFileURL } from 'node:url'
 import { fauxAssistantMessage, fauxToolCall } from '@earendil-works/pi-ai/providers/faux'
-import { createPluginBuildProvider } from '@helm/plugin-build'
-import { HelmError, type AgentSpawnRequest, type HelmEventFrame } from '@helm/protocol'
-import { createHelm } from '../../hub/src/app.js'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
+import { HelmxError, type AgentSpawnRequest, type HelmxEventFrame } from '@helmx/protocol'
+import { createHelmx } from '../../hub/src/app.js'
 import { startHub } from '../../kernel/src/http/index.js'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import type { WorkflowRunSummary } from '../src/contracts.js'
@@ -46,7 +46,7 @@ const PI_AI_DIR = join(KERNEL_DIR, 'node_modules/@earendil-works/pi-ai')
 const KERNEL_SRC = pathToFileURL(join(KERNEL_DIR, 'src/runtime/index.ts')).href
 const PI_AI_FAUX_URL = pathToFileURL(join(PI_AI_DIR, 'dist/providers/faux.js')).href
 const WORKFLOW_SRC = pathToFileURL(new URL('../src/workflow.ts', import.meta.url).pathname).href
-const PLUGIN_BUILD_URL = import.meta.resolve('@helm/plugin-build')
+const PLUGIN_BUILD_URL = import.meta.resolve('@helmx/plugin-build')
 const CLI_ENTRY = new URL('../../cli/src/index.ts', import.meta.url).pathname
 const TSX_CLI = require.resolve('tsx/cli')
 
@@ -97,7 +97,7 @@ async function spawnSigkillSeeder(
     cwd: KERNEL_DIR,
     env: sanitizedHostEnv({
       HOME: seedDir,
-      HELM_WATCHDOG_INTERVAL_MS: '0',
+      HELMX_WATCHDOG_INTERVAL_MS: '0',
       ...extraEnv,
     }),
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -130,7 +130,7 @@ async function spawnSigkillSeeder(
 // ---------------------------------------------------------------------------
 
 test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 close() 优雅挂起后重启原位重挂完成且零重复消息/零重复树', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-t1-graceful-')
+  const root = useTempDir(t, 'helmx-t1-graceful-')
   const repoDir = gitTemplate.cloneTo(join(root, 'repo'))
   const dataDir = join(root, 'data')
   mkdirSync(dataDir, { recursive: true })
@@ -213,7 +213,7 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
     assert.equal(suspendedRecord['suspendedCleanly'], true, '优雅 close 必须置位 suspendedCleanly=true')
     assert.equal(suspendedRecord['crashRecoveries'], undefined, '优雅挂起不得累加 crashRecoveries')
     const specOnDisk = suspendedRecord['subagentSpec'] as Record<string, unknown>
-    assert.ok(specOnDisk && specOnDisk['requestId'] === `helm:spawn:${runId}`)
+    assert.ok(specOnDisk && specOnDisk['requestId'] === `helmx:spawn:${runId}`)
     assert.equal('secretNames' in specOnDisk, false, 'subagentSpec 绝不得落盘 secretNames')
 
     // 进程 2：重开恢复，hold_step 重放通过，子会话调 register_structured_output 并通过 gate，向父会话汇报
@@ -236,9 +236,9 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
       autoResume: false,
     })
     const parentReports: string[] = []
-    k2.events.subscribe((frame: HelmEventFrame) => {
+    k2.events.subscribe((frame: HelmxEventFrame) => {
       const ev = frame.event as { type?: string; conversationId?: number; entry?: { kind?: string; data?: { meta?: { kind?: string } } } }
-      if (ev.type === 'conversation.entry' && ev.conversationId === 1 && ev.entry?.kind === 'helm.input') {
+      if (ev.type === 'conversation.entry' && ev.conversationId === 1 && ev.entry?.kind === 'helmx.input') {
         parentReports.push(String(ev.entry.data?.meta?.kind ?? ''))
       }
     })
@@ -291,7 +291,7 @@ test('T1-A: 原生后台单子代理（isolation:worktree + schema + gate）经 
 })
 
 test('T1-B: 原生后台单子代理经真实子进程 SIGKILL 强杀后重启原位恢复完成（crashRecoveries=1）', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-t1-sigkill-')
+  const root = useTempDir(t, 'helmx-t1-sigkill-')
   const repoDir = gitTemplate.cloneTo(join(root, 'repo'))
   const dataDir = join(root, 'data')
   const seedDir = join(root, 'seed')
@@ -306,8 +306,8 @@ import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
 import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
 import { createWorkflowPlugin } from ${JSON.stringify(WORKFLOW_SRC)}
 
-const dataDir = process.env.HELM_DATA_DIR!
-const repoDir = process.env.HELM_REPO_DIR!
+const dataDir = process.env.HELMX_DATA_DIR!
+const repoDir = process.env.HELMX_REPO_DIR!
 const faux = fauxProvider({ tokensPerSecond: 1, tokenSize: { min: 1, max: 1 } })
 faux.setResponses([fauxAssistantMessage('这是一段极慢速流式回复用于在流式中途触发真实SIGKILL强杀现场验证后台子代理原位重挂恢复')])
 const kernel = await KernelRuntime.open({ buildProvider: createPluginBuildProvider(), dataDir, cwd: repoDir, model: 'faux/faux-1', providers: [faux.provider], autoResume: false })
@@ -324,7 +324,7 @@ await kernel.documentStore.flush()
 await new Promise((r) => process.stdout.write('RUN=' + runId + ',CHILD=' + childId + '\\n', r))
 process.kill(process.pid, 'SIGKILL')
 `,
-    { HELM_DATA_DIR: dataDir, HELM_REPO_DIR: repoDir },
+    { HELMX_DATA_DIR: dataDir, HELMX_REPO_DIR: repoDir },
   )
 
   const match = /RUN=([^\s,]+),CHILD=(\d+)/.exec(out)
@@ -378,7 +378,7 @@ process.kill(process.pid, 'SIGKILL')
 // ---------------------------------------------------------------------------
 
 test('T2-A: DSL 多阶段混合并发工作流经 close() 后按原 runId 原位续跑（已完成 agent/action 零重跑且账本零重复行）', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-t2-graceful-')
+  const dataDir = useTempDir(t, 'helmx-t2-graceful-')
   let sideEffectCount = 0
   const enteredHoldB = deferred<void>()
 
@@ -528,7 +528,7 @@ return { s1, count: act.count, pa, pb, s3 }
 })
 
 test('T2-B: DSL 工作流经真实 SIGKILL 强杀恢复 + 截断 agent_started 尾行容错 + 悬挂非幂等 action_started 诚实阻断', { timeout: 60_000 }, async (t) => {
-  const root = useTempDir(t, 'helm-t2-sigkill-')
+  const root = useTempDir(t, 'helmx-t2-sigkill-')
   const dataDir = join(root, 'data')
   const seedDir = join(root, 'seed')
   mkdirSync(dataDir, { recursive: true })
@@ -544,7 +544,7 @@ import { KernelRuntime } from ${JSON.stringify(KERNEL_SRC)}
 import { createPluginBuildProvider } from ${JSON.stringify(PLUGIN_BUILD_URL)}
 import { createWorkflowPlugin } from ${JSON.stringify(WORKFLOW_SRC)}
 
-const dataDir = process.env.HELM_DATA_DIR!
+const dataDir = process.env.HELMX_DATA_DIR!
 const faux = fauxProvider({ tokensPerSecond: 2, tokenSize: { min: 2, max: 2 } })
 let callIdx = 0
 faux.setResponses([
@@ -573,7 +573,7 @@ await kernel.documentStore.flush()
 await new Promise((r) => process.stdout.write('RUN=' + run.id + '\\n', r))
 process.kill(process.pid, 'SIGKILL')
 `,
-    { HELM_DATA_DIR: dataDir },
+    { HELMX_DATA_DIR: dataDir },
   )
 
   const runId = /RUN=([^\s]+)/.exec(out)?.[1]
@@ -615,7 +615,7 @@ process.kill(process.pid, 'SIGKILL')
   }
 
   // 悬挂非幂等 action_started 阻断验证：启动恢复必须守卫中止关联子会话并标 failed([workflow_action_uncertain])
-  const uncertainDir = useTempDir(t, 'helm-t2-uncertain-')
+  const uncertainDir = useTempDir(t, 'helmx-t2-uncertain-')
   const abortedChildren: number[] = []
   const stateMap = new Map<string, unknown>()
   const memState: WorkflowStateStore = {
@@ -668,13 +668,13 @@ process.kill(process.pid, 'SIGKILL')
 
 test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执行中遇 close() 重启后按 (conversationId, callId) 幂等重放，零重复派生', { timeout: 60_000 }, async (t) => {
   for (const mode of ['subagent', 'SubagentWorkflow'] as const) {
-    const dataDir = useTempDir(t, `helm-t3-${mode}-`)
+    const dataDir = useTempDir(t, `helmx-t3-${mode}-`)
     const enteredChildHold = deferred<void>()
 
     const f1 = makeFauxProvider()
     if (mode === 'subagent') {
       f1.setResponses([
-        // 父会话（helm-owned，默认同步）发起 subagent 工具调用
+        // 父会话（helmx-owned，默认同步）发起 subagent 工具调用
         fauxAssistantMessage(
           [fauxToolCall('subagent', { prompt: '执行同步子任务' }, { id: 'call-sync-sub-1' })],
           { stopReason: 'toolUse' },
@@ -735,9 +735,9 @@ test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执�
       })
       await k1.start()
 
-      // 创建 helm-owned 自动化父会话（同步执行 subagent / SubagentWorkflow）
+      // 创建 helmx-owned 自动化父会话（同步执行 subagent / SubagentWorkflow）
       const parentConv = await k1.createConversation({ title: `t3-${mode}` })
-      k1.markConversationOwnership(parentConv.id, 'helm')
+      k1.markConversationOwnership(parentConv.id, 'helmx')
       await k1.submitInput(parentConv.id, `请执行 ${mode}`, { origin: 'agent' })
 
       await enteredChildHold.promise
@@ -811,13 +811,13 @@ test('T3: 同步 subagent 与同步 SubagentWorkflow 在父回合 ToolTask 执�
 // T5：单子代理续接、resume_failed 批量恢复（动作 + 真 CLI）与熔断/机密/配置红线
 // ---------------------------------------------------------------------------
 
-test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次调用幂等 0 新拉起）与真 CLI helm workflows resume-failed 端到端', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-t5-batch-')
+test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次调用幂等 0 新拉起）与真 CLI helmx workflows resume-failed 端到端', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helmx-t5-batch-')
   const externalResumes: AgentSpawnRequest[] = []
   const faux = makeFauxProvider()
   faux.setResponses(Array.from({ length: 20 }, (_, idx) => fauxAssistantMessage(`RESUMED_OK_${idx + 1}`)))
 
-  const app = await createHelm({
+  const app = await createHelmx({
     buildProvider: createPluginBuildProvider(),
     dataDir,
     cwd: dataDir,
@@ -836,7 +836,7 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
             externalResumes.push(req)
             req.onResolved?.({ nodeId: 'local', executionId: 'pane-ext-4', effectiveCwd: dataDir })
             if (req.resume === undefined) {
-              throw new HelmError('subagent_failed', '首次外部执行模拟失败', 502)
+              throw new HelmxError('subagent_failed', '首次外部执行模拟失败', 502)
             }
             return { action: 'handled', result: 'EXT_RESUMED_DONE' }
           }
@@ -860,7 +860,7 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
     title: 'subagent-child',
     parentConversationId: conv1,
   })
-  app.kernel.markConversationOwnership(realChild.id, 'helm')
+  app.kernel.markConversationOwnership(realChild.id, 'helmx')
 
   const seedFailedRecord = (convId: number, rec: Record<string, unknown>) => {
     const dir = join(dataDir, 'plugins', 'builtin%3Aworkflow', 'artifacts', String(convId))
@@ -914,7 +914,7 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
     subagentMeta: { agentType: 'assistant', execution: { nodeId: 'local', conversationId: realChild.id } },
     subagentSpec: {
       agentId: 'wf_fail_sub_native_03:subagent-0',
-      requestId: 'helm:spawn:wf_fail_sub_native_03',
+      requestId: 'helmx:spawn:wf_fail_sub_native_03',
       prompt: '原任务指令',
       agentType: 'assistant',
     },
@@ -934,7 +934,7 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
     subagentMeta: { agentType: 'ext:cli', execution: { nodeId: 'local', executionId: 'pane-ext-4', effectiveCwd: dataDir } },
     subagentSpec: {
       agentId: 'wf_fail_sub_ext_04:subagent-0',
-      requestId: 'helm:spawn:wf_fail_sub_ext_04',
+      requestId: 'helmx:spawn:wf_fail_sub_ext_04',
       prompt: '外部终端任务',
       agentType: 'ext:cli',
     },
@@ -988,9 +988,9 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
   const { token } = (await setupRes.json()) as { token: string }
   const cliEnv = {
     ...process.env,
-    HELM_HUB_URL: hub.url,
-    HELM_DATA_DIR: join(dataDir, 'cli-home'),
-    HELM_TOKEN: token,
+    HELMX_HUB_URL: hub.url,
+    HELMX_DATA_DIR: join(dataDir, 'cli-home'),
+    HELMX_TOKEN: token,
   }
 
   // 1) 参数互斥与缺失校验
@@ -1002,7 +1002,7 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
   // 2) 对 conv1 执行 CLI `--current`：5 个失败任务拉起 4 个、跳过 1 个（且不影响 conv2）
   const firstCli = await runCli(['workflows', 'resume-failed', '--current', '--json'], {
     ...cliEnv,
-    HELM_CONVERSATION_ID: String(conv1),
+    HELMX_CONVERSATION_ID: String(conv1),
   })
   assert.equal(firstCli.code, 0, `resume-failed --current 失败: ${firstCli.err}`)
   const firstOut = JSON.parse(firstCli.out) as {
@@ -1055,8 +1055,8 @@ test('T5: resume_failed 批量恢复（5 失败任务拉起 4 跳过 1、二次�
   }
 })
 
-test('安全红线：crashRecoveries > 3 熔断、secret_grant_expired_on_restart 拒绝降级、配置校验与 HELM_AUTO_RECOVER=0 逃生阀', { timeout: 60_000 }, async (t) => {
-  const dataDir = useTempDir(t, 'helm-safety-redlines-')
+test('安全红线：crashRecoveries > 3 熔断、secret_grant_expired_on_restart 拒绝降级、配置校验与 HELMX_AUTO_RECOVER=0 逃生阀', { timeout: 60_000 }, async (t) => {
+  const dataDir = useTempDir(t, 'helmx-safety-redlines-')
   const abortedIds: number[] = []
   const settledReports: WorkflowRunSummary[] = []
   const docs = new Map<string, unknown>()
@@ -1124,7 +1124,7 @@ test('安全红线：crashRecoveries > 3 熔断、secret_grant_expired_on_restar
   await sTrip.close()
 
   // 2) secretNames 授予且崩溃于 onResolved 前：落盘不含 secretNames，重启诚实标 failed(secret_grant_expired_on_restart)
-  const secretDir = useTempDir(t, 'helm-secret-redline-')
+  const secretDir = useTempDir(t, 'helmx-secret-redline-')
   const sDocs = new Map<string, unknown>()
   const sState: WorkflowStateStore = {
     get: <T>(k: string, init: T) => (sDocs.has(k) ? structuredClone(sDocs.get(k) as T) : init),
@@ -1162,20 +1162,20 @@ test('安全红线：crashRecoveries > 3 熔断、secret_grant_expired_on_restar
   await sSecret2.close()
   await sSecret1.close()
 
-  // 3) HELM_AUTO_RECOVER=0 逃生阀与非法配置校验
-  const envDir = useTempDir(t, 'helm-env-valve-')
-  const prevEnv = process.env.HELM_AUTO_RECOVER
-  process.env.HELM_AUTO_RECOVER = '0'
+  // 3) HELMX_AUTO_RECOVER=0 逃生阀与非法配置校验
+  const envDir = useTempDir(t, 'helmx-env-valve-')
+  const prevEnv = process.env.HELMX_AUTO_RECOVER
+  process.env.HELMX_AUTO_RECOVER = '0'
   try {
     const eSvc = new WorkflowService({ dataDir: envDir, state: sState, host: makeMockHost() })
-    assert.equal(eSvc.isAutoRecoverOnRestart(), false, 'HELM_AUTO_RECOVER=0 必须立即关闭自动恢复')
+    assert.equal(eSvc.isAutoRecoverOnRestart(), false, 'HELMX_AUTO_RECOVER=0 必须立即关闭自动恢复')
     await eSvc.close()
   } finally {
-    if (prevEnv === undefined) delete process.env.HELM_AUTO_RECOVER
-    else process.env.HELM_AUTO_RECOVER = prevEnv
+    if (prevEnv === undefined) delete process.env.HELMX_AUTO_RECOVER
+    else process.env.HELMX_AUTO_RECOVER = prevEnv
   }
 
-  const cfgDir = useTempDir(t, 'helm-cfg-invalid-')
+  const cfgDir = useTempDir(t, 'helmx-cfg-invalid-')
   const fauxCfg = makeFauxProvider()
   const kCfg = await KernelRuntime.open({
     buildProvider: createPluginBuildProvider(),
@@ -1191,6 +1191,6 @@ test('安全红线：crashRecoveries > 3 熔断、secret_grant_expired_on_restar
   await kCfg.plugins.register(createWorkflowPlugin())
   await assert.rejects(
     () => kCfg.plugins.setConfig('builtin:workflow', { autoRecoverOnRestart: 'not-a-boolean' as unknown as boolean }),
-    (err: unknown) => err instanceof HelmError && err.code === 'validation_error',
+    (err: unknown) => err instanceof HelmxError && err.code === 'validation_error',
   )
 })

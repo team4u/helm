@@ -10,7 +10,7 @@
  *    settle/resetChain、source 口径（provider / estimate / mixed）；
  * 2. 插件装配层（真 PluginHost + 事件替身）：conversation.live / entry /
  *    deleted 事件驱动 sessionDoc 发布（节流、阶段变化立即写、终态写）、
- *    上下文失效 marker（pi.reset / pi.compaction / helm.rewind）清空、
+ *    上下文失效 marker（pi.reset / pi.compaction / helmx.rewind）清空、
  *    failed / aborted 回合清空（不冒充终态）、turn_settled working（链延续）
  *    与终态（链结算 + 下一 generation 帧重置）、UI 插槽注册到
  *    COMPOSER_STATUS_SLOT、生命周期（prepare 清上周期文档 / stop 清内存态）、
@@ -21,11 +21,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import assert from 'node:assert/strict'
-import type { ConversationSummary, PluginDefinition } from '@helm/protocol'
-import { COMPOSER_STATUS_SLOT, HelmError } from '@helm/protocol'
+import type { ConversationSummary, PluginDefinition } from '@helmx/protocol'
+import { COMPOSER_STATUS_SLOT, HelmxError } from '@helmx/protocol'
 import { PluginHost, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin-host-backend.js'
-import { createPluginBuildProvider } from '@helm/plugin-build'
+import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createTokenSpeedPlugin } from '../src/token-speed.js'
 import { MemoryDocStore } from './helpers/plugin-test-env.js'
 import {
@@ -462,7 +462,7 @@ class EventBackend {
         }
       },
       getConversation(id: number): ConversationSummary {
-        if (deleted.has(id)) throw new HelmError('not_found', `会话不存在：${id}`, 404)
+        if (deleted.has(id)) throw new HelmxError('not_found', `会话不存在：${id}`, 404)
         return conversationOf(id, 'working')
       },
     }
@@ -530,8 +530,8 @@ function entryEvent(conversationId: number, taskId: number | undefined, output: 
   }
 }
 
-/** 上下文失效 marker 条目事件（pi.reset / pi.compaction / helm.rewind）。 */
-function markerEvent(conversationId: number, kind: 'pi.reset' | 'pi.compaction' | 'helm.rewind'): unknown {
+/** 上下文失效 marker 条目事件（pi.reset / pi.compaction / helmx.rewind）。 */
+function markerEvent(conversationId: number, kind: 'pi.reset' | 'pi.compaction' | 'helmx.rewind'): unknown {
   return { type: 'conversation.entry', conversationId, entry: { id: '10', kind } }
 }
 
@@ -545,7 +545,7 @@ interface Harness {
 }
 
 async function openPlugin(options?: { now?: () => number }): Promise<Harness> {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-token-speed-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-token-speed-'))
   const backend = new EventBackend()
   const docs = new MemoryDocStore()
   const sessionDocs = new MemorySessionDocStore()
@@ -703,7 +703,7 @@ test('插件装配：会话删除彻底清理（瞬态内存态清理；会话�
     await backend.dispatch('conversation.deleted', { type: 'conversation.deleted', conversationId: CONV })
     assert.throws(
       () => docOf(CONV),
-      (err: unknown) => err instanceof HelmError && err.code === 'not_found',
+      (err: unknown) => err instanceof HelmxError && err.code === 'not_found',
       '已删会话读取公共会话文档显式 404',
     )
     // 删除后事件不再驱动任何写入（状态机已清理；会话也不存在了）。
@@ -730,7 +730,7 @@ test('插件装配：UI 插槽注册到 COMPOSER_STATUS_SLOT；停用后监听�
     assert.equal(writesOf(4), 0, '停用后事件监听解除，无任何写入')
     assert.throws(
       () => docOf(4),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
       '停用后公共会话文档读取 404',
     )
   } finally {
@@ -761,7 +761,7 @@ test('插件装配：空闲时上下文失效 marker（reset/compaction/rewind�
     await host.runHook('turn_settled', { conversation: conversationOf(CONV, 'done'), inputs: [], outcome: 'completed', settledAt: 500 })
     assert.equal(docOf(CONV)!.phase, 'settled')
     // 三种边界 marker 逐个验证：任一到达即彻底清空，不残留旧回合值。
-    for (const kind of ['pi.compaction', 'helm.rewind', 'pi.reset'] as const) {
+    for (const kind of ['pi.compaction', 'helmx.rewind', 'pi.reset'] as const) {
       await backend.dispatch('conversation.live', liveEvent(CONV, 600, { taskId: 2, attempt: 1 }))
       await backend.dispatch('conversation.live', liveEvent(CONV, 700, { taskId: 2, attempt: 1, message: message([text('b'.repeat(400))]) }))
       await backend.dispatch('conversation.live', liveEvent(CONV, 900, { taskId: 2, attempt: 1, message: message([text('b'.repeat(800))]) }))
@@ -813,7 +813,7 @@ test('插件装配：失败 / 中止回合直接清空测量，不冒充正常�
 })
 
 test('插件装配：生命周期——durable: false 不读写持久化存储，停用立即清空内存态，重启用无过期实时状态', { timeout: 60_000 }, async () => {
-  const dataDir = mkdtempSync(join(tmpdir(), 'helm-token-speed-'))
+  const dataDir = mkdtempSync(join(tmpdir(), 'helmx-token-speed-'))
   const backend = new EventBackend()
   const docs = new MemoryDocStore()
   const sessionDocs = new MemorySessionDocStore()
@@ -851,7 +851,7 @@ test('插件装配：生命周期——durable: false 不读写持久化存储�
     await host.disable(TOKEN_SPEED_PLUGIN_ID)
     assert.throws(
       () => readTransient(8),
-      (err: unknown) => err instanceof HelmError && err.code === 'plugin_doc_not_found',
+      (err: unknown) => err instanceof HelmxError && err.code === 'plugin_doc_not_found',
       '停用后瞬态会话文档立即下线（404）',
     )
     assert.equal(sessionDocs.writes.length, staleWrites)
