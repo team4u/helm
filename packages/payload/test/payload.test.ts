@@ -21,7 +21,7 @@
  *
  * The same assembly also produces the stable CLI artifact (dist-cli/, a zero-dependency
  * single-file bundle of the complete control CLI: packages/cli/dist/index.js with the
- * @helm/hub-launcher update-path closure inlined):
+ * bundled-in launcher update-path closure inlined):
  * 6. cli assembly contract: shebang single-file bundle, bin/name/version/engines (name
  *    overridable via HELM_CLI_PACKAGE, bin single-sourced from packages/cli/package.json), an
  *    empty dependency set (no unpublished private workspace packages), exact files whitelist;
@@ -133,9 +133,6 @@ test('payload assembly: missing build artifacts are rebuilt on demand, then buil
   }
   if (!existsSync(path.join(repoRoot, 'packages/env-io/dist/index.js'))) {
     runCommand('pnpm', ['--filter', '@helm/env-io', 'run', 'build'], repoRoot, 180_000);
-  }
-  if (!existsSync(path.join(repoRoot, 'packages/hub-launcher/dist/index.js'))) {
-    runCommand('pnpm', ['--filter', '@helm/hub-launcher', 'run', 'build'], repoRoot, 180_000);
   }
   if (!existsSync(path.join(repoRoot, 'packages/plugin-build/dist/index.js'))) {
     runCommand('pnpm', ['--filter', '@helm/plugin-build', 'run', 'build'], repoRoot, 240_000);
@@ -756,7 +753,7 @@ test('payload prebuilt mermaid: unpacked plugins.tgz serves mermaid & chunks wit
  * place the CLI artifact and the real payload artifact meet before a release ships.
  *
  * Note: the user-facing update surface (`helm update --check/--watch/--status/--stop/--channel/
- * --interval-ms/--tarball+--version`, no --start) is implemented CLI-side on @helm/hub-launcher's
+ * --interval-ms/--tarball+--version`, no --start) is implemented CLI-side on the bundled-in launcher's
  * typed API; this sequence pins the distribution contract against it.
  */
 test('cli golden sequence: installed helm updates from a real payload tarball, health-gates, and stops', {

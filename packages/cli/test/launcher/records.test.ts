@@ -18,8 +18,8 @@ import {
   resolveEffectiveLaunchConfig,
   persistableLaunchConfig,
   writePidRecord,
-} from '../src/records.js';
-import { readCurrentEntry } from '../src/current.js';
+} from '../../src/launcher/records.js';
+import { readCurrentEntry } from '../../src/launcher/current.js';
 import {
   assertDistTag,
   assertInstallIsolation,
@@ -31,8 +31,8 @@ import {
   resolveBlockedCooldownMs,
   resolveUpdateIntervalMs,
   resolveUpdateTag,
-} from '../src/layout.js';
-import { UsageError } from '../src/io.js';
+} from '../../src/launcher/layout.js';
+import { UsageError } from '../../src/launcher/io.js';
 
 test('hub.pid round-trips and rejects invalid shapes explicitly', { timeout: 60_000 }, async (t) => {
   const root = useTempDir(t, 'helm-launcher-pid-');

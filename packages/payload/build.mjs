@@ -28,7 +28,7 @@
  *
  * The same build also assembles the stable CLI artifact (see src/assemble-cli.mjs): dist-cli/ is a
  * second publish package — a zero-dependency, single-file bundle of the complete control CLI
- * (packages/cli/dist/index.js incl. the @helm/hub-launcher update-path closure) that installs
+ * (packages/cli/dist/index.js incl. the bundled-in launcher update-path closure) that installs
  * globally via one `npm install -g` (bin helm). The Hub payload contract above is unchanged by that
  * artifact except for the cli entry bytes; a missing CLI bundle aborts the build.
  *
@@ -196,7 +196,7 @@ mkdirSync(stagingDir, { recursive: true });
 
 // --- Stable CLI artifact (second publish entry) + the payload CLI entry: one esbuild bundle, two consumers.
 // assembleCliArtifact bundles packages/cli/dist/index.js (the full control CLI incl. the
-// @helm/hub-launcher typed-API update path) into dist-cli/index.js — a hard release input; a broken
+// bundled-in launcher typed-API update path) into dist-cli/index.js — a hard release input; a broken
 // bundle contract aborts the build inside assemble-cli.mjs. The same bytes are shipped inside the
 // Hub payload as cli/dist/index.js below, so both artifacts run one identical CLI.
 const cliArtifact = await assembleCliArtifact({
@@ -210,7 +210,7 @@ for (const dir of ['hub', 'kernel', 'plugins', 'plugin-build', 'env-io', 'protoc
   cpSync(path.join(repoRoot, 'packages', dir, 'package.json'), path.join(stagingDir, dir, 'package.json'));
 }
 // The payload's CLI entry is the same single-file bundle as the dist-cli artifact: the bundle
-// self-contains the CLI's workspace closure (@helm/hub-launcher / the env-io update engine / tar ride along via
+// self-contains the CLI's workspace closure (the bundled-in launcher / the env-io update engine / tar ride along via
 // the update path), so the payload root dependency set needs no additions for the CLI to run and
 // start.mjs check keeps resolving from the cli entry point. The remaining cli/dist tsc outputs stay
 // as layout/auditing helper assets; `helm plugins build`'s computed dynamic import of

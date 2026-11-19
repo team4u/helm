@@ -1008,7 +1008,7 @@ async function runPluginsBuild(ctx: CommandContext): Promise<void> {
       entry = import.meta.resolve(pluginBuildPkg)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ERR_MODULE_NOT_FOUND') throw error
-      const { readCurrentEntry, resolveInstallRoot } = await import('@helm/hub-launcher')
+      const { readCurrentEntry, resolveInstallRoot } = await import('../launcher/index.js')
       const current = await readCurrentEntry(resolveInstallRoot(ctx.env))
       entry = pathToFileURL(createRequire(current.entryPath).resolve(pluginBuildPkg)).href
     }

@@ -14,11 +14,11 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { useTempDir, sanitizedHostEnv } from '@helm/test-kit/node';
 import { readBlockedRelease, readCurrentRelease, writeBlockedRelease, writeCurrentRelease } from '@helm/env-io';
-import { readPidRecord, readLaunchConfig, writePidRecord } from '../src/records.js';
-import { performHubUpdate, checkHubUpgrade, type PerformUpdateOptions } from '../src/update.js';
-import { stageHubRelease } from '../src/staging.js';
-import { startHub, stopHub } from '../src/process.js';
-import { UsageError } from '../src/io.js';
+import { readPidRecord, readLaunchConfig, writePidRecord } from '../../src/launcher/records.js';
+import { performHubUpdate, checkHubUpgrade, type PerformUpdateOptions } from '../../src/launcher/update.js';
+import { stageHubRelease } from '../../src/launcher/staging.js';
+import { startHub, stopHub } from '../../src/launcher/process.js';
+import { UsageError } from '../../src/launcher/io.js';
 import {
   captureIo,
   cleanupPid,

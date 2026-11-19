@@ -40,8 +40,6 @@
     "packages/plugins/test/**/*.ts",
     "packages/hub/src/**/*.ts",
     "packages/hub/test/**/*.ts",
-    "packages/hub-launcher/src/**/*.ts",
-    "packages/hub-launcher/test/**/*.ts",
     "packages/node/src/**/*.ts",
     "packages/node/test/**/*.ts",
     "packages/cli/src/**/*.ts",

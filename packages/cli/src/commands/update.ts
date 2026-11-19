@@ -76,7 +76,7 @@ export const updateCommand: CommandSpec = {
       throw new CliError('--channel and --version are mutually exclusive', 'conflicting_flags')
     }
 
-    const { cmdCheck, cmdRun, cmdStatus, cmdStop, cmdUpdate, resolveInstallRoot, UsageError } = await import('@helm/hub-launcher')
+    const { cmdCheck, cmdRun, cmdStatus, cmdStop, cmdUpdate, resolveInstallRoot, UsageError } = await import('../launcher/index.js')
     const handlers = { check: cmdCheck, watch: cmdRun, status: cmdStatus, stop: cmdStop, update: cmdUpdate }
     const dataDir = read('data-dir')
     try {

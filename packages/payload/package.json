@@ -10,7 +10,6 @@
   "devDependencies": {
     "@helm/cli": "workspace:*",
     "@helm/hub": "workspace:*",
-    "@helm/hub-launcher": "workspace:*",
     "@helm/kernel": "workspace:*",
     "@helm/plugins": "workspace:*",
     "@helm/web": "workspace:*",

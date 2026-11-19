@@ -20,8 +20,8 @@
   },
   "dependencies": {
     "@helm/env-io": "workspace:*",
-    "@helm/hub-launcher": "workspace:*",
-    "@helm/protocol": "workspace:*"
+    "@helm/protocol": "workspace:*",
+    "tar": "7.5.23"
   },
   "devDependencies": {
     "@helm/plugin-build": "workspace:*",

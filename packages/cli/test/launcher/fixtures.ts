@@ -26,8 +26,8 @@ import net from 'node:net';
 import path from 'node:path';
 import { killProcessTree } from '@helm/env-io';
 import * as tar from 'tar';
-import { defaultUpdateCore, type UpdateCore } from '../src/update-core.js';
-import type { LauncherIo } from '../src/io.js';
+import { defaultUpdateCore, type UpdateCore } from '../../src/launcher/update-core.js';
+import type { LauncherIo } from '../../src/launcher/io.js';
 
 export type FakePayloadMode =
   | 'ok' // normal startup: log lines, listen, banner

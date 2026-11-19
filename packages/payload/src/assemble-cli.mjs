@@ -8,11 +8,11 @@
  * no dependency on unpublished private workspace packages. The bundle input is
  * packages/cli/dist/index.js — the full control CLI: the core static command table, dynamic
  * plugin-action commands over the Hub HTTP API, and the local Hub lifecycle surface
- * (`helm update ...`) implemented on @helm/hub-launcher's typed API (workspace import; the
- * launcher package itself publishes no bin of its own). esbuild inlines the whole closure
- * (@helm/cli → @helm/hub-launcher → @helm/env-io (update engine included) / @helm/protocol → typebox,
- * plus tar for payload staging), all pure JavaScript — so the Hub payload's root dependency
- * set needs no additions for this CLI to run.
+ * (`helm update ...`) implemented on the bundled-in launcher's typed API (packages/cli/src/
+ * launcher, same-package relative imports; it publishes no bin of its own). esbuild inlines
+ * the whole closure (@helm/cli → its launcher subtree → @helm/env-io (update engine included) /
+ * @helm/protocol → typebox, plus tar for payload staging), all pure JavaScript — so the Hub
+ * payload's root dependency set needs no additions for this CLI to run.
  *
  * One deliberate runtime-resolved capability: `helm plugins build` loads the plugin client
  * compiler (@helm/plugin-build) through a computed dynamic import (a specifier esbuild cannot
@@ -47,13 +47,11 @@ export const cliPackageName = process.env.HELM_CLI_PACKAGE ?? '@team4u/helm';
  */
 export async function assembleCliArtifact({ repoRoot, version, enginesNode }) {
   const cliPkgDir = path.join(repoRoot, 'packages/cli');
-  const launcherPkgDir = path.join(repoRoot, 'packages/hub-launcher');
   const stagingDir = path.join(repoRoot, 'packages/payload/dist-cli');
 
   const inputs = [
     ['cli dist entry', path.join(cliPkgDir, 'dist/index.js')],
     ['cli package.json', path.join(cliPkgDir, 'package.json')],
-    ['hub-launcher dist entry', path.join(launcherPkgDir, 'dist/index.js')],
     ['env-io dist', path.join(repoRoot, 'packages/env-io/dist/index.js')],
     ['protocol dist', path.join(repoRoot, 'packages/protocol/dist/index.js')],
   ];
@@ -75,8 +73,8 @@ export async function assembleCliArtifact({ repoRoot, version, enginesNode }) {
   rmSync(stagingDir, { recursive: true, force: true });
   mkdirSync(stagingDir, { recursive: true });
 
-  // Node builtins stay external automatically for platform=node; everything else (cli + launcher
-  // + env-io incl. the update engine + protocol + typebox + tar) is inlined with legal comments preserved. The
+  // Node builtins stay external automatically for platform=node; everything else (cli + its
+  // launcher subtree + env-io incl. the update engine + protocol + typebox + tar) is inlined with legal comments preserved. The
   // plugins-build compiler is intentionally NOT part of this graph (computed dynamic import, see
   // header) — it resolves at runtime from the Hub payload's / local release's node_modules.
   const bundleResult = await esbuildBundle({

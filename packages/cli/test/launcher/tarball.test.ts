@@ -17,8 +17,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { test } from 'node:test';
 import { useTempDir, sanitizedHostEnv } from '@helm/test-kit/node';
-import { unpackPayloadTarball } from '../src/tarball.js';
-import { stageHubRelease } from '../src/staging.js';
+import { unpackPayloadTarball } from '../../src/launcher/tarball.js';
+import { stageHubRelease } from '../../src/launcher/staging.js';
 import {
   captureIo,
   createFakeRegistry,
