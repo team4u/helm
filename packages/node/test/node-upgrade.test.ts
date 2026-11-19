@@ -1,6 +1,7 @@
 /**
- * Node-side regressions for the `@helm/node` self-upgrade adapter over the shared
- * update engine re-exported from `@helm/env-io`.
+ * Node-side regressions for the node self-upgrade adapter (npm artifacts default to
+ * `@team4u/helm-node` + `@team4u/helm-cli`) over the shared update engine re-exported
+ * from `@helm/env-io`.
  *
  * Everything here locks Node external behavior only: own version resolution
  * (`getNodeVersion` / `resolveEffectiveNodeVersion`), the launcher-compatible flat
@@ -36,8 +37,8 @@ import {
   type PreparedNodeReplacement,
 } from '../src/daemon/upgrader.js';
 
-const NODE_PACKAGE_NAME = '@helm/node';
-const CLI_PACKAGE_NAME = '@helm/cli';
+const NODE_PACKAGE_NAME = '@team4u/helm-node';
+const CLI_PACKAGE_NAME = '@team4u/helm-cli';
 
 function makeReplacement(pid: number, opts?: { commitError?: Error; abortError?: Error }) {
   const calls: string[] = [];
@@ -57,15 +58,12 @@ function makeReplacement(pid: number, opts?: { commitError?: Error; abortError?:
 
 /** stageExtractor: create a fake dual-package layout inside stagingDir. */
 async function fakeExtractor(stagingDir: string, _version: string): Promise<{ entryPath: string; cliBinDir: string }> {
-  await fs.mkdir(path.join(stagingDir, 'node_modules', '@helm', 'node', 'dist'), { recursive: true });
+  const nodePkgDir = path.join(stagingDir, 'node_modules', ...NODE_PACKAGE_NAME.split('/'));
+  await fs.mkdir(path.join(nodePkgDir, 'dist'), { recursive: true });
   await fs.mkdir(path.join(stagingDir, 'node_modules', '.bin'), { recursive: true });
-  await fs.writeFile(path.join(stagingDir, 'node_modules', '@helm', 'node', 'dist', 'cli.js'), '#!/usr/bin/env node\n', 'utf8');
-  await fs.writeFile(
-    path.join(stagingDir, 'node_modules', '@helm', 'node', 'package.json'),
-    JSON.stringify({ name: NODE_PACKAGE_NAME, version: _version }),
-    'utf8',
-  );
-  return { entryPath: path.join('node_modules', '@helm', 'node', 'dist', 'cli.js'), cliBinDir: 'node_modules/.bin' };
+  await fs.writeFile(path.join(nodePkgDir, 'dist', 'cli.js'), '#!/usr/bin/env node\n', 'utf8');
+  await fs.writeFile(path.join(nodePkgDir, 'package.json'), JSON.stringify({ name: NODE_PACKAGE_NAME, version: _version }), 'utf8');
+  return { entryPath: path.join('node_modules', ...NODE_PACKAGE_NAME.split('/'), 'dist', 'cli.js'), cliBinDir: 'node_modules/.bin' };
 }
 
 function makeRegistryFetch(latest: string) {
@@ -89,14 +87,15 @@ async function makeNpmReleaseCache(dir: string, version: string, nodePkg = NODE_
   const nodePkgDir = path.join(candidateDir, 'node_modules', ...nodePkg.split('/'));
   const cliPkgDir = path.join(candidateDir, 'node_modules', ...cliPkg.split('/'));
   await fs.mkdir(path.join(nodePkgDir, 'dist'), { recursive: true });
-  await fs.mkdir(path.join(cliPkgDir, 'dist'), { recursive: true });
+  await fs.mkdir(cliPkgDir, { recursive: true });
   await fs.mkdir(path.join(candidateDir, 'node_modules', '.bin'), { recursive: true });
   await fs.writeFile(path.join(nodePkgDir, 'dist', 'cli.js'), '#!/usr/bin/env node\n', 'utf8');
   await fs.writeFile(path.join(nodePkgDir, 'package.json'), JSON.stringify({ name: nodePkg, version }), 'utf8');
-  await fs.writeFile(path.join(cliPkgDir, 'dist', 'index.js'), '#!/usr/bin/env node\n', 'utf8');
+  // The published CLI artifact ships its single-file bundle at the package root (bin `helm` -> `./index.js`).
+  await fs.writeFile(path.join(cliPkgDir, 'index.js'), '#!/usr/bin/env node\n', 'utf8');
   await fs.writeFile(
     path.join(cliPkgDir, 'package.json'),
-    JSON.stringify({ name: cliPkg, version, bin: { helm: './dist/index.js' } }),
+    JSON.stringify({ name: cliPkg, version, bin: { helm: './index.js' } }),
     'utf8',
   );
   await fs.writeFile(
@@ -205,13 +204,13 @@ test('flat current.json: corrupt or incomplete records throw explicitly rather t
 // 3. Node adapter wiring over the shared update engine
 // ---------------------------------------------------------------------------
 
-test('checkNodeUpgrade: queries the @helm/node package latest and falls back to getNodeVersion', { timeout: 60_000 }, async () => {
+test('checkNodeUpgrade: queries the @team4u/helm-node package latest and falls back to getNodeVersion', { timeout: 60_000 }, async () => {
   const dir = await tempDir('helm-node-upgrade-');
   const { fetchFn, urls } = makeRegistryFetch('1.2.0');
   const result = await checkNodeUpgrade(dir, { currentVersion: '1.0.0', fetchFn });
   assert.equal(result.latestVersion, '1.2.0');
   assert.equal(result.updateAvailable, true);
-  assert.match(urls[0]!, /@helm%2Fnode\/latest|@helm\/node\/latest/);
+  assert.match(urls[0]!, /@team4u%2Fhelm-node\/latest|@team4u\/helm-node\/latest/);
 
   // Fall back to getNodeVersion when current.json is absent and currentVersion is omitted
   const dir2 = await tempDir('helm-node-upgrade-');

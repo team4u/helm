@@ -2,8 +2,8 @@
  * `helm-node` self-upgrade adapter over the shared update engine in `@helm/env-io`.
  *
  * Node-specific policy kept here:
- * - the dual-package release layout (`@helm/node` + `@helm/cli`, package names via
- *   `HELM_NPM_PACKAGE` / `HELM_NPM_CLI_PACKAGE`, read at call time);
+ * - the dual-package release layout (`@team4u/helm-node` + `@team4u/helm-cli`, package
+ *   names via `HELM_NPM_PACKAGE` / `HELM_NPM_CLI_PACKAGE`, read at call time);
  * - the launcher-compatible flat `current.json` disk contract
  *   `{version, entryPath, cliBinDir?, updatedAt}` — an already-installed launcher reads
  *   `entryPath` directly after a self-upgrade, so the shared entries-map state stays an
@@ -70,7 +70,7 @@ export interface StagedNodeRelease {
   version: string;
   /** Immutable release directory (`releases/<ver>/<uuid>`). */
   releaseDir: string;
-  /** Absolute path to `@helm/node`'s `dist/cli.js` entrypoint. */
+  /** Absolute path to the node package's `dist/cli.js` entrypoint. */
   entryPath: string;
   /** Absolute path to `node_modules/.bin` containing the staged `helm` CLI binary. */
   cliBinDir: string;
@@ -235,16 +235,17 @@ const nodeStateOps: UpdateStateOps = {
 // Dual-package layout + update source
 // ---------------------------------------------------------------------------
 
-const nodePackageName = (): string => process.env.HELM_NPM_PACKAGE || '@helm/node';
-const cliPackageName = (): string => process.env.HELM_NPM_CLI_PACKAGE || '@helm/cli';
+const nodePackageName = (): string => process.env.HELM_NPM_PACKAGE || '@team4u/helm-node';
+const cliPackageName = (): string => process.env.HELM_NPM_CLI_PACKAGE || '@team4u/helm-cli';
 
-/** Dual `@helm/node` + `@helm/cli` staging layout; mirrors the previous local validation order. */
+/** Dual `@team4u/helm-node` + `@team4u/helm-cli` staging layout; mirrors the previous local validation order. */
 function makeNodeReleaseLayout(): ReleaseLayout {
   const nodePkg = nodePackageName();
   const cliPkg = cliPackageName();
   const packages: NpmPackageSpec[] = [
     { name: nodePkg, requiredFiles: ['dist/cli.js'] },
-    { name: cliPkg, requiredFiles: ['dist/index.js'], requiredBins: ['helm'] },
+    // The published CLI artifact ships a root-level single-file bundle (bin `helm` -> `./index.js`).
+    { name: cliPkg, requiredFiles: ['index.js'], requiredBins: ['helm'] },
   ];
   return {
     packages,

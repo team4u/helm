@@ -4,7 +4,7 @@
  * without any new public HTTP surface (nothing is added to auth status or user APIs).
  *
  * Write discipline (the reader side — the launcher — fails closed on anything it cannot bind to
- * the current Hub instance; see `@helm/hub-launcher`'s activity reader):
+ * the current Hub instance; see the launcher's activity reader in packages/cli/src/launcher):
  * - periodic atomic rewrite (tmp + rename) every `intervalMs`, plus an immediate write at start;
  * - SYNCHRONOUS rewrite on every idle→busy transition (registered via `listenBusyEntered`): the
  *   tracker invokes the listener inside its synchronous mutation path. This limits the idle
