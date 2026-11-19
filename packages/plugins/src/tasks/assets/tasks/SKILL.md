@@ -53,6 +53,6 @@ Use `builtin:tasks` when work should run in **independent execution conversation
 
 ## 6. Tool & CLI Reference
 
-- Model tools (planning side): `task_create`, `task_list`, `task_inspect`, `task_start`, `task_approve`, `task_rework`.
+- Model tools (planning side): `task_create`, `task_list`, `task_inspect`, `task_start`, `task_approve`, `task_rework`; assignee side adds `task_request_plan_approval` (planFirst gate) and `task_submit`.
 - Assignee side (inside a task execution conversation): `task_submit` (summary + verification + branch + changed files) is the only way to hand in work — it must be called before the assignee ends.
-- CLI equivalents: `helmx tasks create|list|inspect|update|start|submit|approve|rework|archive|delete`.
+- CLI equivalents: `helmx tasks create|list|inspect|update|start|submit|approve|rework|archive|delete|request-plan-approval|resume-kickoff`. `resume-kickoff` is an explicit user action: it re-delivers a kickoff that a restart left undelivered — the plugin never re-delivers automatically.
