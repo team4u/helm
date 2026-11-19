@@ -14,6 +14,7 @@ import {
   isValidEnvName,
   isValidProfileId,
   type Profile,
+  type ProfileChangedEvent,
   type ProfileStarterPrompt,
   type SkillSummary,
 } from '@helmx/protocol'
@@ -268,8 +269,20 @@ interface ProfileDeleteDeps {
   isProfileInUse(profileId: string): boolean | Promise<boolean>
 }
 
+/**
+ * Optional event publish port (narrow structural slice of the runtime's EventHub):
+ * ProfileService emits `profile.changed` after successful save/delete so connected
+ * Web/CLI clients re-read the profile catalog. Omitted in pure-service tests.
+ */
+export interface ProfileServiceEvents {
+  publish(type: 'profile.changed', payload: unknown): unknown
+}
+
 export class ProfileService {
-  constructor(private readonly dataDir: string) {}
+  constructor(
+    private readonly dataDir: string,
+    private readonly events?: ProfileServiceEvents,
+  ) {}
 
   /** Bootstrap the default assistant profile on first startup (returns existing profile unchanged without overwriting user edits). */
   async ensureDefault(): Promise<Profile> {
@@ -327,6 +340,8 @@ export class ProfileService {
     } else if (existing === undefined) {
       await atomicWriteFile(join(dir, 'SYSTEM.md'), SYSTEM_DEFAULT)
     }
+    // Emit only after all writes succeed: validateProfileInput already strips `system` (detail endpoints attach it on demand).
+    this.events?.publish('profile.changed', { type: 'profile.changed', profile } satisfies ProfileChangedEvent)
     return profile
   }
 
@@ -346,7 +361,16 @@ export class ProfileService {
         profileId: id,
       })
     }
+    const existing = await this.get(id)
     await rm(profileDir(this.dataDir, id), { recursive: true, force: true })
+    // Notify only for a profile that actually existed (delete on a missing id is an idempotent no-op and must not fabricate a removal event).
+    if (existing !== undefined) {
+      this.events?.publish('profile.changed', {
+        type: 'profile.changed',
+        profile: existing,
+        removed: true,
+      } satisfies ProfileChangedEvent)
+    }
   }
 
   async getSystem(id: string): Promise<string> {

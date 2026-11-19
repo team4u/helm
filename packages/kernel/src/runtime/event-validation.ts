@@ -22,6 +22,7 @@ import type {
   HelmxEvent,
   HelmxSnapshot,
   NodeInfo,
+  Profile,
   PublicPluginDoc,
   PublicPluginSessionDoc,
   SecretLifetime,
@@ -271,6 +272,30 @@ const NODE_CHANGED_CHECKER = Compile(
   }),
 )
 
+/**
+ * profile.changed shape: the profile payload itself is normalized by ProfileService before publishing
+ * (same discipline as plugin.changed's loose plugin object); the checker pins the identity field and
+ * the optional scalar/array fields that clients rely on ("may be omitted, must never be wrong").
+ */
+const PROFILE_CHANGED_CHECKER = Compile(
+  Type.Object({
+    profile: Type.Object({
+      id: NonEmptyString,
+      name: Type.Optional(Type.String()),
+      model: Type.Optional(Type.String()),
+      thinkingLevel: Type.Optional(Type.String()),
+      nodeId: Type.Optional(Type.String()),
+      cwd: Type.Optional(Type.String()),
+      tags: Type.Optional(Type.Array(Type.String())),
+      skills: Type.Optional(Type.Array(Type.String())),
+      managedByPlugin: Type.Optional(Type.String()),
+      humanSelectable: Type.Optional(Type.Boolean()),
+      restrictToCwd: Type.Optional(Type.Boolean()),
+    }),
+    removed: Type.Optional(Type.Boolean()),
+  }),
+)
+
 const NOTIFICATION_CHECKER = Compile(
   Type.Object({
     level: Type.Enum(['info', 'warning', 'error'] as const),
@@ -371,6 +396,18 @@ const CORE_EVENT_ASSEMBLERS: Readonly<Record<string, CoreEventAssembler>> = {
     return {
       type: 'node.changed',
       node: parsed.node as NodeInfo,
+      ...(parsed.removed !== undefined ? { removed: parsed.removed } : {}),
+    }
+  },
+  'profile.changed': (source) => {
+    const parsed = parseEventShape(
+      PROFILE_CHANGED_CHECKER,
+      source,
+      "profile.changed requires { profile: Profile (non-empty id); removed?: boolean }",
+    )
+    return {
+      type: 'profile.changed',
+      profile: parsed.profile as Profile,
       ...(parsed.removed !== undefined ? { removed: parsed.removed } : {}),
     }
   },

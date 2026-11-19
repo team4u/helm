@@ -8,6 +8,7 @@
  */
 
 import type { AskSpec } from './ask.js'
+import type { Profile } from './assets.js'
 import type { ConversationEntry, ConversationLive, ConversationSummary } from './conversation.js'
 import type { NodeInfo } from './env-rpc.js'
 import { HelmxError } from './error.js'
@@ -60,6 +61,7 @@ export type HelmxEventType =
   | 'plugin.session_doc.updated'
   | 'models.changed'
   | 'node.changed'
+  | 'profile.changed'
   | 'notification'
 
 export interface ConversationUpsertEvent {
@@ -141,6 +143,18 @@ export interface NodeChangedEvent {
   removed?: boolean
 }
 
+/**
+ * Profile created/updated/deleted (covers HTTP/CLI writes and plugin bootstrap):
+ * clients re-read the profile catalog (sidebar role list, profile center).
+ * On delete the payload carries the last known profile shape plus `removed: true`.
+ */
+export interface ProfileChangedEvent {
+  type: 'profile.changed'
+  profile: Profile
+  /** True when the profile was deleted. */
+  removed?: boolean
+}
+
 /** Human notification (e.g. Watchdog read-only diagnostic alerts). */
 export interface NotificationEvent {
   type: 'notification'
@@ -173,6 +187,7 @@ export type HelmxEvent =
   | PluginSessionDocUpdatedEvent
   | ModelsChangedEvent
   | NodeChangedEvent
+  | ProfileChangedEvent
   | NotificationEvent
   | CustomHelmxEvent
 

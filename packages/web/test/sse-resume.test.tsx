@@ -460,6 +460,53 @@ test('plugin.changed enabled-state hot reload invalidates the client module cach
   }
 })
 
+test('profile.changed triggers a profile catalog refresh: CLI-created roles appear in the sidebar/center without a manual reload', { timeout: 60_000 }, async () => {
+  localStorage.setItem('helmx:token', 't1')
+  // The catalog endpoint serves a growing list: initially only the default assistant, after the event also 'researcher'.
+  const profileLists = [
+    [{ id: 'assistant', name: 'person assist' }],
+    [
+      { id: 'assistant', name: 'person assist' },
+      { id: 'researcher', name: 'Researcher', tags: ['team-a'] },
+    ],
+  ]
+  let profileFetches = 0
+  const h = await mountProvider({
+    onFetch: (path) => {
+      if (path === '/api/profiles') {
+        const list = profileLists[Math.min(profileFetches, profileLists.length - 1)]
+        profileFetches += 1
+        return new Response(JSON.stringify(list), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return undefined
+    },
+  })
+  try {
+    const conn = snapshotConnection(h, { bootId: 'b1', seq: 1, conversations: [], pendingAsks: [], plugins: [], ui: [] })
+    await h.waitFor((o) => o.sseConnected === true)
+    // Boot-time asset load fetched the catalog exactly once.
+    await h.waitFor(() => h.fetchedUrls.filter((url) => url === '/api/profiles').length >= 1)
+    assert.ok(!h.store().profiles.some((p) => p.id === 'researcher'), 'the new role is absent before the event')
+
+    // A CLI `helmx profiles create` lands as a durable profile.changed frame; the client re-reads the catalog.
+    conn.send(eventFrame(2, { type: 'profile.changed', profile: { id: 'researcher', name: 'Researcher', tags: ['team-a'] } }))
+    await h.waitFor(() => h.fetchedUrls.filter((url) => url === '/api/profiles').length >= 2)
+    await h.waitFor(() => h.store().profiles.some((p) => p.id === 'researcher'))
+    const fetched = h.store().profiles.find((p) => p.id === 'researcher')
+    assert.equal(fetched?.name, 'Researcher')
+    assert.deepEqual(fetched?.tags, ['team-a'])
+
+    // Removal events refresh the same way (no stale sidebar entries after `helmx profiles delete`).
+    profileLists.push([{ id: 'assistant', name: 'person assist' }])
+    conn.send(eventFrame(3, { type: 'profile.changed', profile: { id: 'researcher', name: 'Researcher' }, removed: true }))
+    await h.waitFor(() => !h.store().profiles.some((p) => p.id === 'researcher'))
+    conn.end()
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 30)) })
+  } finally {
+    await h.close()
+  }
+})
+
 // ---------------------------------------------------------------------------
 // Protocol-boundary failures: credentials always invalidated, forcing a full next connection (never relying on the server to never send bad data)
 // ---------------------------------------------------------------------------

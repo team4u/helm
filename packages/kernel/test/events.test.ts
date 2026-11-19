@@ -685,6 +685,81 @@ describe('EventHub.publish event shapes', { timeout: 60_000 }, () => {
     assert.equal(hub.seq, 2)
   })
 
+  it('profile.changed accepts enveloped and unwrapped shapes, preserving the full Profile payload and removed flag', { timeout: 60_000 }, () => {
+    const { hub } = makeFixture()
+    const frames: HelmxEventFrame[] = []
+    const off = hub.subscribe((f) => frames.push(f))
+    const profile = {
+      id: 'researcher',
+      name: 'Researcher',
+      model: 'openai/gpt-5',
+      thinkingLevel: 'high',
+      nodeId: 'local',
+      cwd: '/root/code/helm',
+      tags: ['team-a'],
+      skills: ['git-commit'],
+      runtime: { kind: 'herdr', agent: 'agy' },
+      humanSelectable: true,
+      restrictToCwd: false,
+    }
+    // Enveloped form (ProfileService publish form: {type, profile}).
+    hub.publish('profile.changed', { type: 'profile.changed', profile })
+    // Direct {profile} form without envelope type (update with scalar change).
+    hub.publish('profile.changed', { profile: { ...profile, name: 'Senior Researcher' } })
+    // removed: true (published by ProfileService.delete).
+    hub.publish('profile.changed', { type: 'profile.changed', profile, removed: true })
+    off()
+    assert.equal(frames.length, 3)
+    const e1 = frames[0]?.event
+    assert.ok(e1 && 'profile' in e1)
+    assert.equal(e1.type, 'profile.changed')
+    assert.equal(e1.profile.id, 'researcher')
+    assert.equal(e1.profile.name, 'Researcher')
+    assert.equal(e1.profile.runtime?.kind, 'herdr', 'full Profile including runtime is preserved')
+    assert.equal('removed' in e1, false, 'omits removed when unset')
+    const e2 = frames[1]?.event
+    assert.ok(e2 && 'profile' in e2)
+    assert.equal(e2.profile.name, 'Senior Researcher')
+    const e3 = frames[2]?.event
+    assert.ok(e3 && 'profile' in e3)
+    assert.equal(e3.removed, true, 'removed: true passes through for Web catalog refresh')
+    assert.ok(!('payload' in e1), 'must not fall into CustomHelmxEvent payload wrapper')
+  })
+
+  it('profile.changed rejects invalid inputs without advancing seq', { timeout: 60_000 }, () => {
+    const { hub, persistedSeqs } = makeFixture()
+    hub.publish('notification', { level: 'info', title: 'baseline' })
+    assert.equal(hub.seq, 1)
+    assert.throws(() => hub.publish('profile.changed', { type: 'profile.changed' }), /profile\.changed|invalid_event/)
+    assert.throws(() => hub.publish('profile.changed', { profile: { name: 'no id' } }), /profile\.changed/)
+    assert.throws(
+      () => hub.publish('profile.changed', { profile: { id: 42 as unknown as string } }),
+      /profile\.changed/,
+    )
+    assert.throws(() => hub.publish('profile.changed', { profile: { id: '' } }), /profile\.changed/)
+    assert.throws(
+      () => hub.publish('profile.changed', { profile: { id: 'x', tags: 'team-a' as never } }),
+      /profile\.changed/,
+    )
+    assert.throws(
+      () => hub.publish('profile.changed', { profile: { id: 'x', skills: [7 as never] } }),
+      /profile\.changed/,
+    )
+    assert.throws(
+      () => hub.publish('profile.changed', { profile: { id: 'x', humanSelectable: 'yes' as never } }),
+      /profile\.changed/,
+    )
+    assert.throws(
+      () => hub.publish('profile.changed', { profile: { id: 'x' }, removed: 'true' as never }),
+      /removed/,
+    )
+    assert.throws(() => hub.publish('profile.changed', 'researcher'), /profile\.changed/)
+    assert.equal(hub.seq, 1, 'invalid input must not advance seq')
+    assert.deepEqual(persistedSeqs, [1], 'invalid input must not persist seq')
+    hub.publish('profile.changed', { profile: { id: 'x' } })
+    assert.equal(hub.seq, 2)
+  })
+
   it('unknown event types pass through as CustomHelmxEvent {type, payload} without posing as notifications', { timeout: 60_000 }, () => {
     const { hub } = makeFixture()
     const frames: HelmxEventFrame[] = []

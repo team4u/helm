@@ -115,7 +115,6 @@ export function assembleRuntimeServices(
     updateConversation(id: number, patch: ConversationPatch): Promise<ConversationSummary>
   },
 ): AssembledRuntimeServices {
-  const profilesSvc = new ProfileService(init.dataDir)
   // Scan machine-level shared skill roots alongside workspace skills; pass an empty array to isolate fully in tests.
   const skillsSvc = new SkillService(init.dataDir, {
     externalRoots: init.externalSkillRoots ?? defaultExternalSkillRoots(),
@@ -159,6 +158,10 @@ export function assembleRuntimeServices(
     persistSeq: (seq) => options.store.setEventSeq(seq),
   })
   events.redactFn = (t) => options.stashService.redact(t)
+
+  // ProfileService publishes `profile.changed` through the global EventHub after successful save/delete
+  // (HTTP/CLI writes and plugin bootstraps), so connected Web clients refresh the profile catalog.
+  const profilesSvc = new ProfileService(init.dataDir, { publish: (type, payload) => events.publish(type, payload) })
 
   const sessionDocLifecycleRelease = events.subscribe((frame) => {
     const event = frame.event

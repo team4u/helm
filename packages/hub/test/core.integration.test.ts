@@ -308,6 +308,38 @@ test('核心协同 1：profile/memory 默认装配与锁定保护、SYSTEM/MEMOR
   }
 })
 
+test('profile.changed 端到端：HTTP/CLI 写入 Profile 经真实装配广播事件（Web 端 refreshAssets 的服务端依据）', { timeout: 60_000 }, async () => {
+  const { kernel, call } = mainEnv
+  const frames: Array<{ profile?: { id: string; name?: string }; removed?: boolean }> = []
+  const off = kernel.events.subscribe((frame) => {
+    const ev = frame.event as { type?: string; profile?: { id: string; name?: string }; removed?: boolean }
+    if (ev?.type === 'profile.changed') frames.push({ profile: ev.profile, removed: ev.removed })
+  })
+  try {
+    const created = await call('POST', '/api/profiles', {
+      id: 'smoke-role',
+      name: 'Smoke Role',
+      system: '# smoke\nrole prompt',
+    })
+    assert.equal(created.status, 201)
+    const updated = await call('PUT', '/api/profiles/smoke-role', { name: 'Smoke Role v2' })
+    assert.equal(updated.status, 200)
+    const removed = await call('DELETE', '/api/profiles/smoke-role')
+    assert.equal(removed.status, 200)
+    assert.deepEqual(
+      frames.map((f) => ({ id: f.profile?.id, name: f.profile?.name, removed: f.removed === true })),
+      [
+        { id: 'smoke-role', name: 'Smoke Role', removed: false },
+        { id: 'smoke-role', name: 'Smoke Role v2', removed: false },
+        { id: 'smoke-role', name: 'Smoke Role v2', removed: true },
+      ],
+      'save x2 + delete x1 must each broadcast exactly one profile.changed (create/update/delete)',
+    )
+  } finally {
+    off()
+  }
+})
+
 test('核心协同 2：load_skill 读取与路径防护、Profile skills 白名单/空数组禁用、托管技能随插件启停同步', { timeout: 60_000 }, async () => {
   const { kernel, faux, dataDir } = mainEnv
   const host = kernel.plugins

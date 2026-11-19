@@ -297,6 +297,7 @@ function dispatchFrameSideEffects(
     void ctx.refreshAssets()
   }
   if (event.type === 'models.changed') void ctx.refreshAssets()
+  if (event.type === 'profile.changed') void ctx.refreshAssets()
   if (event.type === 'conversation.upsert' && 'conversation' in event) {
     const conv = event.conversation
     if (!conv.unread) ctx.unreadClearedSeq.current.delete(conv.id)

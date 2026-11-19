@@ -398,7 +398,9 @@ before(async () => {
   dataDir = await makeTempDir('helmx-http-test-')
   auth = new AuthService(dataDir)
   credentials = new CredentialService(dataDir)
-  profiles = new ProfileService(dataDir)
+  hub0 = new TestEventHub()
+  // ProfileService is wired to the test EventHub the same way the runtime wires it (profile.changed on save/delete).
+  profiles = new ProfileService(dataDir, { publish: (type, payload) => hub0.publish(type, payload) })
   skills = new SkillService(dataDir)
   providers = new ProviderService(dataDir)
   stash = new SecretStash()
@@ -406,7 +408,6 @@ before(async () => {
   pluginHost = new PluginHost({ buildProvider: createPluginBuildProvider(), dataDir, host: hostApiForPluginHost(), docs: new MemoryDocStore() })
   await registerRoutePlugin(pluginHost)
   await registerDocPlugin(pluginHost)
-  hub0 = new TestEventHub()
   handler0 = createHubHandler(makeKernel())
   conversations.set(ROOT_CONVERSATION_ID, summary(1, 'Personal Assistant'))
   conversations.set(2, { ...summary(2, 'Worker'), profileId: 'worker', tags: ['worker'] })
@@ -1071,6 +1072,10 @@ test('SSE unauthenticated returns 401', { timeout: 60_000 }, async () => {
 
 test('profiles CRUD (real ProfileService + system online read/write; memory contract removed)', { timeout: 60_000 }, async () => {
   const { handler } = makeHandlers()
+  const profileEvents: Array<{ type: string; payload: any }> = []
+  const off = hub0.subscribe((e) => {
+    if (e.type === 'profile.changed') profileEvents.push({ type: e.type, payload: e.payload })
+  })
   const created = await call(handler, 'POST', '/api/profiles', {
     body: {
       id: 'researcher',
@@ -1083,14 +1088,22 @@ test('profiles CRUD (real ProfileService + system online read/write; memory cont
   assert.equal(created.body.id, 'researcher')
   assert.equal(created.body.system, '# Researcher system prompt\nBe rigorous.')
   assert.equal(created.body.memory, undefined, 'Profile contract no longer includes memory field')
+  assert.equal(profileEvents.length, 1, 'POST emits exactly one profile.changed')
+  assert.equal(profileEvents[0]?.payload?.profile?.id, 'researcher')
+  assert.equal(profileEvents[0]?.payload?.profile?.name, 'Researcher')
+  assert.equal(profileEvents[0]?.payload?.removed, undefined, 'create is not a removal')
+  assert.equal(profileEvents[0]?.payload?.profile?.system, undefined, 'system text never enters the event payload')
   const list = await call(handler, 'GET', '/api/profiles')
   assert.ok(list.body.some((p: any) => p.id === 'researcher'))
+  assert.equal(profileEvents.length, 1, 'GET does not emit profile.changed')
   const put = await call(handler, 'PUT', '/api/profiles/researcher', {
     body: { name: 'Senior Researcher', system: '# Senior Researcher prompt\nUpdated edition.' },
   })
   assert.equal(put.status, 200)
   assert.equal(put.body.name, 'Senior Researcher')
   assert.equal(put.body.system, '# Senior Researcher prompt\nUpdated edition.')
+  assert.equal(profileEvents.length, 2, 'PUT emits exactly one profile.changed')
+  assert.equal(profileEvents[1]?.payload?.profile?.name, 'Senior Researcher')
   const got = await call(handler, 'GET', '/api/profiles/researcher')
   assert.equal(got.status, 200)
   assert.equal(got.body.system, '# Senior Researcher prompt\nUpdated edition.')
@@ -1100,10 +1113,15 @@ test('profiles CRUD (real ProfileService + system online read/write; memory cont
   })
   assert.equal(rejected.status, 400)
   assert.match(String(rejected.body?.error?.message ?? ''), /memory/)
+  assert.equal(profileEvents.length, 2, 'rejected writes emit no event')
   const del = await call(handler, 'DELETE', '/api/profiles/researcher')
   assert.equal(del.status, 200)
   const gone = await call(handler, 'GET', '/api/profiles/researcher')
   assert.equal(gone.status, 404)
+  assert.equal(profileEvents.length, 3, 'DELETE emits exactly one profile.changed')
+  assert.equal(profileEvents[2]?.payload?.profile?.id, 'researcher')
+  assert.equal(profileEvents[2]?.payload?.removed, true, 'delete carries removed: true')
+  off()
 })
 
 test('profiles detail read failure throws explicitly rather than returning blank body that overwrites file', { timeout: 60_000 }, async () => {
