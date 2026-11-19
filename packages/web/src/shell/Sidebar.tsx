@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { HelmxIcon } from '@helmx/plugin-client'
@@ -8,7 +8,6 @@ import {
   useGroupedUi,
   useLocationTargets,
   usePendingAsks,
-  usePluginDocsState,
   usePlugins,
   useProfilesSlice,
   useStoreActions,
@@ -33,14 +32,12 @@ import {
   type SidebarStoreView,
   type SidebarTargetPresence,
 } from './sidebar-model.js'
-import {
-  collectBackgroundBadgeDocs,
-  summarizeConversationBackgroundActivity,
-  type ConversationBackgroundActivity,
-  type ConversationBackgroundIndex,
-} from './background-activity-model.js'
+import type { ConversationBackgroundActivity, ConversationBackgroundIndex } from './background-activity-model.js'
 import { AgentStandingsGroup } from './SidebarAgentStandings.js'
 import { ArchivedConversationsGroup } from './SidebarArchivedConversations.js'
+import { SidebarAttentionGroup } from './SidebarAttentionGroup.js'
+import { useGlobalAttention } from './use-attention-indicator.js'
+import { composeAttentionSummary, type GlobalAttentionIndicator } from './attention-model.js'
 import {
   ConversationStatusDot,
   HoverIconButton,
@@ -296,6 +293,8 @@ const SPACE_LABEL_KEYS: Record<
  * Activity Rail（48px）：仅空间切换（对话/视图/设置）+ 主题按钮。
  * 桌面与移动抽屉共用；空间按钮直接导航主舞台到对应空间的最近目标（store.openSpace），
  * 系统中心入口收敛到「设置」空间内的纵向列表。
+ * 「对话空间」按钮常驻挂载全局态势微标（与移动端汉堡同源 indicator）：桌面折叠
+ * 侧栏时也能一眼感知全局并发（需处理/运行中/未读完成的紧凑计数与灯色）。
  */
 function ActivityRail({
   sseConnected,
@@ -305,6 +304,7 @@ function ActivityRail({
   onToggleSidebarCollapsed,
   space,
   onOpenSpace,
+  attentionIndicator,
 }: {
   sseConnected: boolean
   theme: 'dark' | 'light'
@@ -313,6 +313,7 @@ function ActivityRail({
   onToggleSidebarCollapsed?: () => void
   space: SidebarSpace
   onOpenSpace: (space: SidebarSpace) => void
+  attentionIndicator: GlobalAttentionIndicator
 }) {
   const { t } = useWebLocale()
   const expandWithShortcut = t('shell.sidebar.expandNavWithShortcut', { shortcut: formatModShortcut('B') })
@@ -330,6 +331,7 @@ function ActivityRail({
       : themePreference === 'light'
         ? t('shell.theme.light')
         : t('shell.theme.dark')
+  const attentionSummary = composeAttentionSummary(attentionIndicator, t)
 
   return (
     <nav className="activity-rail" aria-label={t('shell.sidebar.mainNavigation')}>
@@ -351,17 +353,26 @@ function ActivityRail({
       <div className="activity-rail-spaces">
         {(Object.keys(SPACE_LABEL_KEYS) as SidebarSpace[]).map((key) => {
           const spaceLabel = t(SPACE_LABEL_KEYS[key])
+          const carriesAttention = key === 'conversations' && attentionIndicator.tone !== null
+          const labelWithAttention = carriesAttention && attentionSummary !== ''
+            ? `${spaceLabel} · ${attentionSummary}`
+            : spaceLabel
           return (
-            <Tooltip content={spaceLabel} side="right" key={key}>
+            <Tooltip content={labelWithAttention} side="right" key={key}>
               <button
                 type="button"
                 className={`rail-btn rail-space-btn${space === key ? ' rail-btn-active' : ''}`}
-                title={spaceLabel}
-                aria-label={spaceLabel}
+                title={labelWithAttention}
+                aria-label={labelWithAttention}
                 aria-current={space === key ? 'page' : undefined}
                 onClick={() => onOpenSpace(key)}
               >
                 <HelmxIcon name={SPACE_ICONS[key]} size={16} />
+                {carriesAttention && (
+                  <span className="rail-attention-badge" data-tone={attentionIndicator.tone}>
+                    {attentionIndicator.totalCount > 99 ? '99+' : attentionIndicator.totalCount}
+                  </span>
+                )}
               </button>
             </Tooltip>
           )
@@ -437,19 +448,17 @@ function SettingsNavGroup({ store, onNavigate }: { store: SidebarStoreView; onNa
 }
 
 export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
-  const { authenticated, sseConnected } = useAuthConnection()
+  const { sseConnected } = useAuthConnection()
   const { theme, themePreference, locale, quietNotifyEnabled } = useThemePreferencesState()
   const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
   const groupedUi = useGroupedUi()
   const plugins = usePlugins()
   const conversations = useConversations()
-  const pluginDocs = usePluginDocsState()
   const pendingAsks = usePendingAsks()
   const { profiles } = useProfilesSlice()
   const {
     openTarget,
     pushNotice,
-    ensurePluginDoc,
     openSpace,
     setQuietNotify,
     setActiveModal,
@@ -491,26 +500,10 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   // 该空间最近的主舞台目标，URL 即该空间真实锚点，刷新/前进/后退天然可还原。
   const space = spaceForTarget(primaryTarget)
 
-  // 后台在途摘要（纯推导，零插件 ID 特判）：workbench.panel badge 契约 → 按会话
-  // 索引；badge doc 的按需加载在下方 effect（纯函数内不做副作用）。插件停用后
-  // UI 贡献与 doc 均从 store 消失，摘要自然归零，指示立即消失。
-  const background = useMemo(
-    () =>
-      summarizeConversationBackgroundActivity({
-        panels: groupedUi.workbenchPanels,
-        conversations,
-        pluginDocs,
-      }),
-    [groupedUi.workbenchPanels, conversations, pluginDocs],
-  )
-  const badgeDocs = useMemo(
-    () => collectBackgroundBadgeDocs(groupedUi.workbenchPanels, conversations),
-    [groupedUi.workbenchPanels, conversations],
-  )
-  useEffect(() => {
-    if (!authenticated) return
-    for (const ref of badgeDocs) void ensurePluginDoc(ref.pluginId, ref.doc)
-  }, [badgeDocs, authenticated, ensurePluginDoc])
+  // 全局并发态势（跨角色平铺条目 + 汉堡/Rail 微标 + 后台在途索引）：badge doc
+  // 的按需加载内聚在 Hook（ensurePluginDoc 幂等，移动端合着抽屉也不漏后台任务）。
+  // 插件停用后其 UI 贡献与 doc 均从 store 消失，态势自然归零。
+  const { items: attentionItems, indicator: attentionIndicator, background } = useGlobalAttention()
 
   // 后台浏览器通知开关：权限现场读取（浏览器设置可随时收回），
   // 偏好开而权限未授予时如实提示，绝不静默装作已开启。
@@ -544,6 +537,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
         onOpenSpace={(nextSpace) => {
           openSpace(nextSpace)
         }}
+        attentionIndicator={attentionIndicator}
       />
       <div className="sidebar-context">
         <div className="sidebar-header">
@@ -611,6 +605,7 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
           {space === 'conversations' ? (
             <>
               <PendingAsksPanel store={sidebarStore} />
+              <SidebarAttentionGroup items={attentionItems} store={sidebarStore} onNavigate={onClose} />
               <AgentStandingsGroup store={sidebarStore} background={background} onNavigate={onClose} />
               <SidebarSectionGroups store={sidebarStore} background={background} />
               <ArchivedConversationsGroup background={background} onNavigate={onClose} />

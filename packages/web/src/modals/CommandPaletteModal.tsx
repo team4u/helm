@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { SearchHit } from '@helmx/protocol/browser'
+import type { ConversationSummary, SearchHit } from '@helmx/protocol/browser'
 import { searchApi } from '../lib/api.js'
 import { commandActionPluginId, commandHint, commandsForConversation } from '../lib/commands-model.js'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle } from '@helmx/plugin-client'
 import {
+  useAuthConnection,
   useConversations,
   useGroupedUi,
   useLocationTargets,
+  usePluginDocsState,
   usePlugins,
   useSidebarCollapsed,
   useStoreActions,
@@ -25,20 +27,27 @@ import {
   type HelmxShortcutDetail,
 } from '../shell/shortcuts-model.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
+import { ConversationStatusDot } from '../shell/SidebarPrimitives.js'
+import {
+  collectBackgroundBadgeDocs,
+  summarizeConversationBackgroundActivity,
+} from '../shell/background-activity-model.js'
 import type { CommandSpec } from '@helmx/protocol/browser'
 
 type PaletteRow =
   | { kind: 'command'; id: string; title: string; hint?: string; shortcut?: string; icon?: string; keywords?: string[]; run: () => void }
-  | { kind: 'search-hit'; id: string; hit: SearchHit }
+  | { kind: 'search-hit'; id: string; hit: SearchHit; conv?: ConversationSummary }
 
 export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
   const conversations = useConversations()
+  const { authenticated } = useAuthConnection()
   const { primaryTarget, splitTarget, focusedPanel } = useLocationTargets()
   const { workbenchOpen } = useWorkbenchState()
   const sidebarCollapsed = useSidebarCollapsed()
   const { themePreference, localePreference: storeLocalePref, quietNotifyEnabled } = useThemePreferencesState()
   const groupedUi = useGroupedUi()
   const plugins = usePlugins()
+  const pluginDocs = usePluginDocsState()
   const actions = useStoreActions()
   const { locale, t } = useWebLocale()
   const [query, setQuery] = useState('')
@@ -87,6 +96,27 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       )
       .slice(0, 6)
   }, [query, conversations])
+
+  // 会话行灯位与态势排序共享的后台在途索引（workbench badge 契约 + 上下文精简）；
+  // badge doc 的按需加载与侧栏同链路（ensurePluginDoc 幂等，不重复请求）。
+  const background = useMemo(
+    () =>
+      summarizeConversationBackgroundActivity({
+        panels: groupedUi.workbenchPanels,
+        conversations,
+        pluginDocs,
+        t,
+      }),
+    [groupedUi.workbenchPanels, conversations, pluginDocs, t],
+  )
+  const badgeDocs = useMemo(
+    () => collectBackgroundBadgeDocs(groupedUi.workbenchPanels, conversations),
+    [groupedUi.workbenchPanels, conversations],
+  )
+  useEffect(() => {
+    if (!authenticated) return
+    for (const ref of badgeDocs) void actions.ensurePluginDoc(ref.pluginId, ref.doc)
+  }, [badgeDocs, authenticated, actions.ensurePluginDoc])
 
   const close = () => onClose()
 
@@ -356,6 +386,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
       conversationMatches.map((conv) => ({
         kind: 'search-hit' as const,
         id: `conv:${conv.id}`,
+        conv,
         hit: {
           conversationId: conv.id,
           title: conv.title,
@@ -367,8 +398,14 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
   )
 
   const searchRows = useMemo<Array<PaletteRow>>(
-    () => hits.map((hit) => ({ kind: 'search-hit' as const, id: `hit:${hit.conversationId}/${hit.entryId}`, hit })),
-    [hits],
+    () =>
+      hits.map((hit) => ({
+        kind: 'search-hit' as const,
+        id: `hit:${hit.conversationId}/${hit.entryId}`,
+        hit,
+        conv: conversations.find((c) => c.id === hit.conversationId),
+      })),
+    [hits, conversations],
   )
 
   const pluginRows = useMemo<Array<PaletteRow>>(
@@ -400,9 +437,10 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
 
   const recentConversationRows = useMemo<Array<PaletteRow>>(
     () =>
-      selectRecentConversationsForPalette(conversations, paletteConversation?.id, 5).map((conv) => ({
+      selectRecentConversationsForPalette(conversations, paletteConversation?.id, 5, background).map((conv) => ({
         kind: 'search-hit' as const,
         id: `recent-conv:${conv.id}`,
+        conv,
         hit: {
           conversationId: conv.id,
           title: conv.title,
@@ -410,7 +448,7 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
           snippet: t('modals.palette.recentSnippet', { id: conv.id, profileId: conv.profileId }),
         },
       })),
-    [conversations, paletteConversation?.id, t],
+    [conversations, paletteConversation?.id, background, t],
   )
 
   const rows = useMemo<Array<PaletteRow>>(() => {
@@ -613,7 +651,13 @@ export function CommandPaletteModal({ onClose }: { onClose: () => void }) {
                 onMouseEnter={() => setSelectedIdx(idx)}
               >
                 <span className="nav-item-main">
-                  <HelmxIcon name="message-square" size={14} />
+                  <span className="nav-status-slot">
+                    {row.conv !== undefined ? (
+                      <ConversationStatusDot conv={row.conv} background={background.get(row.conv.id)} />
+                    ) : (
+                      <HelmxIcon name="message-square" size={14} />
+                    )}
+                  </span>
                   <span style={{ display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
                     <span className="nav-item-label">
                       {row.hit.title || t('shell.conversationFallback', { id: row.hit.conversationId })}

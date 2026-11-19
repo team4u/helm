@@ -176,6 +176,19 @@ export const shellMessages = {
     'zh-CN': '{base} · 后台任务: {summary}',
   },
 
+  // Global cross-agent attention (sidebar flat group, mobile hamburger badge, collapsed rail)
+  'shell.attention.groupTitle': { en: 'Attention', 'zh-CN': '态势' },
+  'shell.attention.collapseGroup': { en: 'Collapse attention group', 'zh-CN': '收起态势分组' },
+  'shell.attention.expandGroup': { en: 'Expand attention group', 'zh-CN': '展开态势分组' },
+  'shell.attention.openConversation': { en: 'Open conversation {id}', 'zh-CN': '打开会话 {id}' },
+  'shell.attention.descendantsActive': {
+    en: '{count} sub-conversations active',
+    'zh-CN': '{count} 个子会话运行中',
+  },
+  'shell.attention.needsCount': { en: '{count} need attention', 'zh-CN': '{count} 项待处理' },
+  'shell.attention.runningCount': { en: '{count} running', 'zh-CN': '{count} 项运行中' },
+  'shell.attention.unreadCount': { en: '{count} unread completed', 'zh-CN': '{count} 个未读完成' },
+
   // Batch archive/restore notices (verb interpolated: Archive/Restore, 归档/恢复)
   'shell.archive.verbArchive': { en: 'Archive', 'zh-CN': '归档' },
   'shell.archive.verbRestore': { en: 'Restore', 'zh-CN': '恢复' },
