@@ -609,7 +609,12 @@ export class PluginPackageManager {
   private async fetchLocal(source: Extract<PluginPackageSource, { kind: 'local' }>, staging: string): Promise<string> {
     const st = await stat(source.path).catch(() => undefined);
     if (st?.isDirectory() !== true) {
-      throw new HelmxError('plugin_package_install_failed', `local plugin path is missing or not a directory: ${source.path}`, 404, { path: source.path });
+      throw new HelmxError(
+        'plugin_package_install_failed',
+        `local plugin path is missing or not a directory on the Hub host (local sources resolve on the Hub, not the caller's machine): ${source.path}`,
+        404,
+        { path: source.path, raw: source.raw },
+      );
     }
     const rel = relative(resolve(this.pluginsDir()), resolve(source.path));
     const inside = !(rel === '' || rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel));

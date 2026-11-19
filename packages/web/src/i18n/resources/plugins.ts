@@ -200,8 +200,8 @@ export const pluginsMessages = {
 
   // PluginInstallModal
   'plugins.install.description': {
-    en: 'Install external plugins from an npm package, Git repository or local path',
-    'zh-CN': '从 npm 包、Git 仓库或本地路径安装外部插件',
+    en: 'Install external plugins from an npm package, Git repository or local path; local paths resolve on the Hub host filesystem, not this browser machine',
+    'zh-CN': '从 npm 包、Git 仓库或本地路径安装外部插件；本地路径在 Hub 宿主机文件系统上解析，不是当前浏览器所在机器',
   },
   'plugins.install.sourceLabel': { en: 'Install source', 'zh-CN': '安装来源' },
   'plugins.install.enableAfterInstall': {
