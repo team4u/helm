@@ -21,6 +21,7 @@ import type {
   ConversationSummary,
   ConversationWithdrawResponse,
   GuardedMutationExpectation,
+  HubActivityCounts,
   InputOrigin,
   WhenBusy,
 } from '@helm/protocol'
@@ -400,6 +401,16 @@ export class ConversationService {
 
   withOwnership(summary: ConversationSummary): ConversationSummary {
     return { ...summary, ownedBy: this.o.ownershipOf(summary.id) }
+  }
+
+  /** Aggregate activity snapshot (delegates to the tracker's mirror aggregation; Hub activity heartbeat source). */
+  activitySnapshot(): HubActivityCounts {
+    return this.tracker.activitySnapshot()
+  }
+
+  /** Register an idle→busy transition listener (the Hub activity heartbeat's synchronous rewrite trigger). */
+  onActivityBusyEntered(listener: () => void): () => void {
+    return this.tracker.onActivityBusyEntered(listener)
   }
 
   listConversations(filter?: ConversationListFilter): ConversationSummary[] {

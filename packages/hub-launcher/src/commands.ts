@@ -9,6 +9,7 @@ import { readLaunchConfig, resolveEffectiveLaunchConfig } from './records.js';
 import { readRunningHub, stopHub } from './process.js';
 import { checkHubUpgrade, performHubUpdate } from './update.js';
 import { runSupervised } from './run.js';
+import { describeActivityCounts } from './activity.js';
 import type { UpdateCore } from './update-core.js';
 import { UsageError, type LauncherIo } from './io.js';
 
@@ -121,6 +122,13 @@ export async function cmdUpdate(ctx: CommandContext, flags: CommandFlags): Promi
   });
   if (flagsAsJson(flags)) {
     ctx.io.out(`${JSON.stringify({ ok: true, ...outcome }, null, 2)}\n`);
+    return 0;
+  }
+  if (outcome.deferred !== undefined) {
+    ctx.io.out(
+      `update to ${outcome.targetVersion} deferred: hub is busy (${describeActivityCounts(outcome.deferred.counts)}); ` +
+        'nothing was stopped or changed and the current release keeps serving (pass --force to bypass)\n',
+    );
     return 0;
   }
   if (!outcome.changed) {

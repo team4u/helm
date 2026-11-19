@@ -3,6 +3,12 @@
  */
 
 export { KernelRuntime, type KernelRuntimeOptions } from './runtime.js'
+export {
+  startActivityHeartbeat,
+  hubActivityFilePath,
+  type ActivityHeartbeat,
+  type ActivityHeartbeatOptions,
+} from './activity-heartbeat.js'
 export { readWorkspaceFile, type ConversationFileContent } from './workspace-files.js'
 export {
   isStrictSemVer,

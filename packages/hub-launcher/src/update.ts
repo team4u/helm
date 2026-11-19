@@ -9,9 +9,13 @@
  *   `lifecycle.lock` so start/stop/update never interleave):
  *   resolve target (explicit --version | registry dist-tag) → blocked-cooldown gate
  *   → same-version no-op → downgrade guard
+ *   → busy gate round 1 (pre-staging; busy defers the cycle, unknown fails closed, --force skips)
  *   → stage candidate through the engine (SRI-verified download + safe unpack + offline npm
- *     install + `start.mjs check` + `manifest.nodeEngines` gate)
- *   → [if running] graceful stop (identity-verified; failure aborts before any state change)
+ *     install + `start.mjs check` + `manifest.nodeEngines` gate; the staged candidate is cached
+ *     content-addressedly and survives a deferral)
+ *   → [if running] busy gate round 2 (authoritative, inside the lifecycle lock, immediately
+ *     before the stop decision — see `activityGateOf`) → graceful stop (identity-verified;
+ *     failure aborts before any state change)
  *   → atomically commit `current.json` (engine state ops)
  *   → [if it was running / --start] start the candidate and gate on its own listen line
  *       └─ on failure: restore the previous `current.json` verbatim, restart the previous
@@ -38,11 +42,20 @@ import {
   type CurrentReleaseRecord,
 } from '@helm/update';
 import { defaultHubDataDir, pathsOf, resolveBlockedCooldownMs } from './layout.js';
-import { isBlockedActive, readLaunchConfig, readPidRecord, resolveEffectiveLaunchConfig, type LaunchConfig } from './records.js';
+import {
+  isBlockedActive,
+  readLaunchConfig,
+  readPidRecord,
+  resolveEffectiveLaunchConfig,
+  type HubPidRecord,
+  type LaunchConfig,
+} from './records.js';
 import { isAliveOf, UsageError, type LauncherIo } from './io.js';
 import { startHubLocked, stopHubLocked, withLifecycleLock } from './process.js';
 import { defaultUpdateCore, type UpdateCore } from './update-core.js';
+import { describeActivityCounts, readHubActivityGate, type HubActivityGate } from './activity.js';
 import { stageHubRelease } from './staging.js';
+import type { HubActivityCounts } from '@helm/protocol';
 
 export interface PerformUpdateOptions {
   io: LauncherIo;
@@ -97,6 +110,13 @@ export interface UpdateOutcome {
   restarted: boolean;
   /** True when the update started the Hub although it was not running before. */
   started: boolean;
+  /**
+   * Present when the update was deferred by the busy gate: the running hub's activity heartbeat
+   * reported live work (AI runs / compactions / queued input / settlement), so nothing was
+   * stopped, `current.json` and the release tree are untouched, no blocked marker was written,
+   * and the next cycle retries (the staged candidate stays cached for it).
+   */
+  deferred?: { reason: 'hub_busy'; counts: HubActivityCounts };
   pid?: number;
   url?: string;
 }
@@ -120,6 +140,49 @@ async function resolveTargetVersion(options: PerformUpdateOptions): Promise<stri
     throw new Error(`registry latest version is not strict SemVer: "${latest}"`);
   }
   return latest;
+}
+
+/** The running hub's pid record for the busy gate (written at readiness by every start path, launcher-driven or detached). */
+async function livePidRecordOf(options: PerformUpdateOptions): Promise<HubPidRecord | null> {
+  const record = await readPidRecord(options.root);
+  if (record === null) return null;
+  return isAliveOf(options.io)(record.pid) ? record : null;
+}
+
+/**
+ * The running hub's data directory as resolved at ITS spawn time: the pid record's explicit value
+ * (written whenever the data dir was configured), else the launcher env's `HELM_DATA_DIR`, else
+ * the `~/.helm` default — the same precedence the hub itself applied when it resolved its data
+ * dir. A mismatch (env changed between start and update) simply finds no heartbeat file and the
+ * gate fails closed; explicit `--data-dir` launch flags are deliberately NOT consulted because
+ * the running hub never received them (they shape the NEXT start).
+ */
+async function hubDataDirOf(options: PerformUpdateOptions, record: HubPidRecord): Promise<string> {
+  if (record.dataDir !== undefined) return record.dataDir;
+  const envDir = options.io.env.HELM_DATA_DIR;
+  if (envDir !== undefined && envDir !== '') return envDir;
+  return defaultHubDataDir(options.io.env);
+}
+
+/**
+ * Busy-gate evidence for the running hub: its process-private activity heartbeat file, bound to
+ * the recorded wrapper identity (see `readHubActivityGate` for the fail-closed chain). `null`
+ * when no live pid record exists (hub not running — nothing to protect).
+ */
+async function activityGateOf(options: PerformUpdateOptions): Promise<HubActivityGate | null> {
+  if (options.force === true) return null;
+  const record = await livePidRecordOf(options);
+  if (record === null) return null;
+  const dataDir = await hubDataDirOf(options, record);
+  return await readHubActivityGate(record, dataDir, options.io);
+}
+
+/** Fail-closed surfacing of an unverifiable activity signal: refuse the update, keep the hub serving. */
+function throwActivityUnverifiable(gate: HubActivityGate & { kind: 'unknown' }, phase: string): never {
+  throw new UsageError(
+    `cannot verify hub activity (${phase}): ${gate.detail}; refusing to update automatically while activity is unknown — the hub keeps serving, nothing was changed (pass --force to bypass explicitly)`,
+    'hub_activity_unverifiable',
+  );
 }
 
 export async function performHubUpdate(options: PerformUpdateOptions): Promise<UpdateOutcome> {
@@ -166,6 +229,28 @@ export async function performHubUpdate(options: PerformUpdateOptions): Promise<U
       env: io.env,
       saved: await readLaunchConfig(root),
     }).dataDir ?? defaultHubDataDir(io.env);
+
+    // Busy gate, round 1 (pre-staging, cost optimization): a hub reporting live AI work defers the
+    // whole cycle before any staging cost; an unverifiable signal rejects the update outright
+    // (fail-closed). The authoritative re-check runs inside the lifecycle section below, right
+    // before the stop — that one is what actually authorizes stopping the hub.
+    if (options.force !== true) {
+      const gate = await activityGateOf(options);
+      if (gate !== null) {
+        if (gate.kind === 'unknown') throwActivityUnverifiable(gate, 'pre-staging check');
+        if (gate.kind === 'busy') {
+          return {
+            previousVersion,
+            targetVersion,
+            changed: false,
+            restarted: false,
+            started: false,
+            deferred: { reason: 'hub_busy', counts: gate.counts },
+          };
+        }
+      }
+    }
+
     const staged = await stageHubRelease({
       io,
       core,
@@ -190,6 +275,30 @@ export async function performHubUpdate(options: PerformUpdateOptions): Promise<U
             const pidRecord = await readPidRecord(root);
             return pidRecord !== null && isAliveOf(io)(pidRecord.pid);
           })();
+      if (wasRunning && options.force !== true) {
+        // Busy gate, round 2 (authoritative): prove the hub is idle HERE, inside the lock and
+        // immediately before the stop decision, so the confirm-idle→stop window is as small as
+        // the process allows. Busy: release without touching anything (the staged candidate
+        // stays cached for the next cycle). Unknown: fail closed. Residual boundary: input
+        // admitted between this proof and SIGTERM delivery is interrupted like any restart —
+        // the kernel reverts in-flight runs to pending (durable) and they resume after the
+        // update; the heartbeat's synchronous idle→busy rewrite keeps that window to
+        // read+decide+signal latency rather than the heartbeat interval.
+        const gate = await activityGateOf(options);
+        if (gate !== null) {
+          if (gate.kind === 'unknown') throwActivityUnverifiable(gate, 'in-lock recheck before stop');
+          if (gate.kind === 'busy') {
+            return {
+              previousVersion,
+              targetVersion,
+              changed: false,
+              restarted: false,
+              started: false,
+              deferred: { reason: 'hub_busy', counts: gate.counts },
+            };
+          }
+        }
+      }
       if (wasRunning) {
         // Stop before any state changes: a failed stop aborts the update with current.json intact.
         if (options.driver !== undefined) await options.driver.stop();
