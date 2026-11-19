@@ -7,15 +7,15 @@
 | 组件 | 版本要求 | 说明 |
 | :--- | :--- | :--- |
 | Node.js | `>= 24.12.0` | 根 `package.json` 的 `engines` 字段强制约束 |
-| pnpm | `12.x` | 根 `package.json` 的 `packageManager` 固定为 `pnpm@12.16.1` |
-| Git | 已安装 | `builtin:workflow` 的 Worktree 隔离与代码门禁需要 Git |
-| 操作系统 | Linux / macOS / WSL2 | 主流 POSIX 环境 |
+| Git | 已安装 | `builtin:workflow` 与 `builtin:swarm` 的 Worktree 隔离与代码门禁需要 Git |
+| pnpm | `12.x`（仅源码开发） | 仅克隆仓库源码开发时需要；npm 制品模式无需 pnpm |
+| 操作系统 | Linux / macOS / Windows | 控制端与远端节点均跨平台支持（源码开发推荐 POSIX / WSL2） |
 
 ## 安装方式
 
-helmx 当前有两种安装方式：**npm 制品模式**（一次安装，推荐日常使用）与**源代码模式**（开发贡献）。npm 制品随 `v*` tag 的 release 工作流发布（见[发布流程](../releasing.md)）；在第一个正式版本发布之前，registry 上尚无制品，请先使用源代码模式。
+helmx 提供三种部署形态：**npm 制品模式**（60 秒一次安装，推荐日常使用）、**Docker 容器部署 Hub + 宿主机节点**（适合自举或局域网常驻）与**源代码开发模式**（贡献代码）。
 
-npm 侧共三个制品，按角色分工：`@helmx/cli`（控制 CLI，bin `helmx`）、`@helmx/hub`（Hub 发行 payload，由 `helmx update` 安装管理，一般不直接手动安装）与 `@helmx/node`（远端节点守护进程，bin `helmx-node`）。
+npm 侧已随 release 流水线发布三个按角色分工的制品（见[发布流程](../releasing.md)）：`@helmx/cli`（控制 CLI，bin `helmx`）、`@helmx/hub`（Hub 发行 payload，由 `helmx update` 自动安装管理，一般不直接手动安装）与 `@helmx/node`（远端节点守护进程，bin `helmx-node`）。
 
 ## npm 制品安装（一次安装）
 
@@ -107,18 +107,16 @@ pnpm dev:web                     # 窗口 2：仅前端（需 Hub 已在 3202 �
 
 ### 端口规划
 
-前端 dev 服务器固定占用 `3201`（`strictPort: true`），并把 `/api` 与 `/ws` 代理到 Hub；Hub 监听端口由 `HELMX_PORT` 控制，约定取 `3202`。
+开发模式下前端 Vite dev 服务器固定占用 `3201`（`strictPort: true`），并把 `/api` 与 `/ws` 代理到 Hub；Hub 监听端口由 `HELMX_PORT` 控制，默认 `3202`（生产 / npm 制品模式直接由 Hub 3202 端口统一托管 Web 静态资源与 API）。
 
 | 服务 | 端口 | 说明 |
 | :--- | :--- | :--- |
-| Web 前端（Vite dev） | `3201` | 代理 `/api` 与 `/ws` 到 Hub |
-| 内核 Hub | `3202` | `HELMX_PORT` 约定值，承载 HTTP API 与 WebSocket |
-
-以下端口为本机其他系统保留，Helmx 任何组件不得占用：`3000`（外部公共开发服务）、`3001` / `3002`（`botd`）、`3101` / `3102`（`botx`）。
+| Web 前端（仅 Vite dev） | `3201` | 代理 `/api` 与 `/ws` 到 Hub |
+| 内核 Hub | `3202` | `HELMX_PORT` 默认值，承载 HTTP API、WebSocket 与生产态 Web 静态资源 |
 
 ### 数据目录
 
-全部运行数据固定写入 `~/.helmx`，可用 `HELMX_DATA_DIR` 覆盖；该目录与旧系统 `~/.botx`、`~/.botd` 完全物理隔离，Helmx 任何组件不读写旧系统运行数据。卸载重装或排障时，清理该目录即可完全重置（开发阶段无数据迁移承诺）。
+全部运行数据固定写入 `~/.helmx`，可用 `HELMX_DATA_DIR` 覆盖。卸载重装或排障时，清理该目录即可完全重置（活跃开发阶段无数据迁移承诺）。
 
 ## Docker 容器部署 Hub 与宿主机节点接入
 
@@ -162,12 +160,12 @@ docker compose up -d --build
 
 ## 初始化管理员与登录
 
-首次部署需要初始化管理员密码（密码以 scrypt 哈希存储），随后登录 CLI 并检查状态：
+首次部署需要初始化管理员密码（密码以 scrypt 哈希存储），随后登录 CLI 并检查状态（源码仓未执行 `pnpm link:bins` 时，以下 `helmx` 可替换为 `pnpm helmx`）：
 
 ```bash
-pnpm helmx setup --password '<your-admin-password>'   # 初始化管理员并自动登录写入凭据
-pnpm helmx login --password '<your-admin-password>'   # 后续登录（凭据已存在时）
-pnpm helmx status --json                              # 验证：configured 与 authenticated 均为 true
+helmx setup --password '<your-admin-password>'   # 初始化管理员并自动登录写入凭据
+helmx login --password '<your-admin-password>'   # 后续登录（凭据已存在时）
+helmx status --json                              # 验证：configured 与 authenticated 均为 true
 ```
 
 `setup` 与 `login` 均会把 `{ hubUrl, token }` 写入 `<HELMX_DATA_DIR>/cli-token`（权限 `0600`），此后所有 `helmx` 命令自动携带该凭据。密码也可经 stdin 传入（`--password` 缺省且 stdin 非 TTY 时读一行），避免进入 shell 历史。
@@ -177,10 +175,10 @@ pnpm helmx status --json                              # 验证：configured 与 
 会话调用模型前，需要至少配置一个供应商的 API Key 并选定默认模型：
 
 ```bash
-pnpm helmx models providers --json                              # 查看支持的供应商与认证方式
-pnpm helmx credentials set <provider-id> --value '<api-key>'    # 写入 API Key（明文不回读）
-pnpm helmx models refresh --json                                # 刷新动态模型目录
-pnpm helmx models default --set '<provider>/<model>' --json     # 选定全局默认模型
+helmx models providers --json                              # 查看支持的供应商与认证方式
+helmx credentials set <provider-id> --value '<api-key>'    # 写入 API Key（明文不回读）
+helmx models refresh --json                                # 刷新动态模型目录
+helmx models default --set '<provider>/<model>' --json     # 选定全局默认模型
 ```
 
 凭据写入 `<HELMX_DATA_DIR>/credentials.json`，由 Hub 的 CredentialService 独占管理（见下节）。
@@ -192,7 +190,7 @@ pnpm helmx models default --set '<provider>/<model>' --json     # 选定全局�
 | `HELMX_PORT` | `3202` | `@helmx/hub` / `@helmx/kernel` / `@helmx/web` | Hub 监听端口（前端代理目标跟随该值） |
 | `HELMX_HOST` | `127.0.0.1` | `@helmx/hub` | Hub 绑定地址；远端节点接入需显式 `0.0.0.0` 或反代 |
 | `HELMX_WEB_DIST_DIR` | 产品入口旁的 `web/dist` | `@helmx/hub` | 显式指定 Web 产物目录；`false` / `0` / 空串关闭静态托管。直接嵌入内核时通过 `webDistDir` 参数指定 |
-| `HELMX_DATA_DIR` | `~/.helmx` | 全部包 | 数据与凭据主目录，与旧系统 `~/.botx`、`~/.botd` 完全隔离 |
+| `HELMX_DATA_DIR` | `~/.helmx` | 全部包 | 运行数据与凭据主目录 |
 | `HELMX_HUB_URL` | `http://127.0.0.1:3202` | `@helmx/cli`、`@helmx/node` | CLI 目标 Hub 地址；节点 CLI 用于指定连接目标 |
 | `HELMX_TOKEN` | 无 | `@helmx/cli` | 显式令牌，优先级高于磁盘凭据（不触碰磁盘） |
 | `HELMX_CONVERSATION_ID` | 无 | `@helmx/cli` | 供所有 `--current` 标志解析当前会话 |

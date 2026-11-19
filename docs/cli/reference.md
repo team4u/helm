@@ -217,7 +217,11 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | `helmx workflows save [nameOrFile]` / `delete <name>` | builtin:workflow | 保存 / 删除工作流定义（`save` 可 `--from-run-id` 固化既有运行；重复默认 409，`--overwrite` 覆盖） |
 | `helmx workflows steer <runId> --text "<指导>"` | builtin:workflow | 向运行中的后台子代理插话纠偏；原生执行按归属与 CAS 水位经内核 guarded 提交，外部执行按节点委托对应插件并如实返回守卫级别；插话成功不代表指导已执行 |
 | `helmx workflows detach <runId>` | builtin:workflow | 把运行中的前台同步运行转入后台（阻塞中的工具调用立即返回后台句柄）；仅前台同步标记且 running 的运行可转 |
+| `helmx workflows resume-failed [--conversation-id <id> \| --current \| --all]` | builtin:workflow | 批量续接指定会话或全局下所有可恢复的失败工作流与后台单子代理；不可恢复项如实记入 `skipped` |
 | `helmx worktrees list / inspect / cleanup` | builtin:workflow | 受管 Git 工作树登记、只读检视（含有上限 diff 预览）与清理（选择器三选一互斥，`--delete-branch` / `--force`） |
+| `helmx swarm create-group / update-group / channel / dispatch-worker` | builtin:swarm | Swarm 对等协同编组管理、子频道操作与具名成员派工（支持 `worktree` 隔离、分叉、换模） |
+| `helmx swarm board-post / board-read / board-status` | builtin:swarm | 序号黑板发帖（结构化 `to` + 正交 `wake`）、分页读取与实时态势快照 |
+| `helmx swarm abort-worker / switch-model / inspect-worker / archive-worker / close-group` | builtin:swarm | 成员原地刹停、空闲换模型续跑、只读检视、归档与两态结单（默认全清，`--keep-worktree` 保留待合入分支） |
 | `helmx memory get / set / configure` | builtin:memory | 长期记忆管理；均以 `--profile-id <id>` 或 `--current` 选目标，皆缺 `400 validation_error`；`set --text <str> [--mode replace\|append]`；`configure --enabled <bool> [--text <str>]` |
 | `helmx apps validate / publish / list / update_meta / remove` | builtin:apps | 全栈微应用生命周期（见[应用中心](../plugins/apps.md)） |
 | `helmx profile list_mentionable` | builtin:profile | 列出可 `@` 点名协作的 Profile 候选（`--current` / `--conversation-id` / `--profile-id` 选上下文） |
@@ -312,4 +316,5 @@ done
 
 - [安装与配置指南](../getting-started/installation.md)：三命令分工、端口与数据目录
 - [插件系统设计与契约](../plugins/overview.md)：动作五端映射与停用预检
+- [Swarm 对等协同](../plugins/swarm.md)：`helmx swarm` 动态命令与序号黑板语义
 - [工作流与子代理编排](../plugins/workflow.md)：`workflows` / `worktrees` 动态命令的语义

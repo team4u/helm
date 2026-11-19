@@ -25,6 +25,7 @@ flowchart TD
     end
     subgraph Plugins["插件生态"]
         Workflow["builtin:workflow 编排与 Worktree 租约"]
+        Swarm["builtin:swarm 对等协同黑板"]
         Profile["builtin:profile 角色技能底座"]
         Memory["builtin:memory 长期记忆"]
         Apps["builtin:apps 应用中心"]
@@ -115,7 +116,7 @@ flowchart TD
 `@helmx/hub` 的 `createHelmx()`（`packages/hub/src/app.ts`）只做三件事：
 
 1. **注入构建实现**：默认注入 `@helmx/plugin-build` 的 provider（client.tsx 编译 + 外部 TS 转译），调用方可整体替换；内核机制与构建工具分离。
-2. **注册内置插件并设定启停**：`builtin:profile`（locked 常驻）、`builtin:workflow`、`builtin:memory`、`builtin:json-render`、`builtin:mermaid`、`builtin:apps`、`builtin:triggers`、`builtin:magpie`、`builtin:token-speed` 九个默认启用；`builtin:herdr`、`builtin:superagent` 两个默认停用。随后从数据目录加载外部插件。
+2. **注册内置插件并设定启停**：`builtin:profile`（locked 常驻）、`builtin:workflow`、`builtin:swarm`、`builtin:memory`、`builtin:json-render`、`builtin:mermaid`、`builtin:apps`、`builtin:triggers`、`builtin:magpie`、`builtin:token-speed` 十个默认启用；`builtin:herdr`、`builtin:superagent` 两个默认停用。随后从数据目录加载外部插件。
 3. **统一启动**：全部插件注册后执行 `kernel.start()`——先按依赖拓扑对全体服务 `prepare()`，再依次 `start()`，最后恢复 SDK 调度器。
 
 直接使用 `KernelRuntime.open()` 时不隐式注册任何内置插件，可独立验证内核机制；使用 `createHelmx()` 得到完整产品。Web 静态目录托管属于产品层：直接使用内核 HTTP handler 时缺省只服务 API，提供 `webDistDir` 才启用静态托管。
@@ -163,6 +164,6 @@ flowchart LR
 
 1. **边界处强校验**：所有外部输入——HTTP body、插件产物、工作流 DSL、事件载荷、外部交接文件——在入口处执行类型/Schema 校验，非法输入显式拒绝而非静默降级；能力不支持、节点离线、交接失败必须显式报错并附诊断，绝不静默回退本机或编造数据。
 2. **公共接口消费方普查**：改动跨包类型或导出符号前先改契约所属包，再全仓搜索全部消费方并同步，漏改即事故。
-3. **开发阶段不兼容、不迁移**：允许对 helmx 代码、公共接口、配置、数据库结构和开发数据直接做破坏性修改；严禁编写向后兼容层、旧格式读取、迁移脚本或双写。旧开发数据按新结构重建，历史仓库（botx/botd/herdr）严格只读，运行数据仅限 `~/.helmx`。
+3. **活跃开发阶段不兼容、不迁移**：允许对 helmx 代码、公共接口、配置、数据库结构和开发数据直接做破坏性修改；严禁编写向后兼容层、旧格式读取、迁移脚本或双写。旧开发数据按新结构重建，运行数据固定位于 `~/.helmx`（或 `HELMX_DATA_DIR`）。
 
 验证覆盖两条路径：无默认插件打开 `KernelRuntime` 确认会话与节点机制可用、缺少构建端口时相关请求显式失败；使用 `createHelmx` 注册官方插件确认工具、动作、UI 与技能生效且停用后贡献消失。全量验收命令见根 [AGENTS.md](../../AGENTS.md)。

@@ -69,7 +69,7 @@
 ## 停用与失败语义
 
 - **liveTasks**：运行中 run 以 `workflow:<runId>` 标签声明——停用本插件时 `409 plugin_has_live_tasks` 硬阻断，不可 force；
-- **两阶段崩溃恢复**：阶段一 `prepareRecovery`（全局 prepare 屏障内，先于任何服务 start）只落持久 abort 标记，不唤醒 SDK 调度器、不提交输入；阶段二 `init`（全部插件 prepare 完成后）终止遗留子任务、把遗留 `running` 显式标 `failed(interrupted)`（subagent 类附 resume 提示、DSL 类附 `resumeFromRunId` 提示）、补发崩溃前未通知的父会话汇报；
+- **两阶段崩溃恢复（关闭自动恢复时） / Hub 重启无感原位恢复（默认开启）**：全局 `prepare` 屏障内阶段一 `prepareRecovery` 仅对不可原位恢复的遗留子会话（如关闭 `autoRecoverOnRestart`、触发 `crashRecoveries > 3` 熔断或 `actionUncertain`）经 `abortConversationGuarded` 落持久 abort 标记，健康 `running` 任务予以保留；阶段二 `init` 对优雅关停/异常崩溃后的健康后台子代理与 DSL 工作流执行原位重挂续跑（`subagent` / `SubagentWorkflow` 凭 `replay: 'safe'` 幂等接回），并补发崩溃前未送达的父会话汇报，详见[状态流水与故障恢复](../workflows/journaling-recovery.md#hub-重启恢复)；
 - **受控停用**：先置 stopping 拦截后台回调并停掉 `runs` / `run-badges` 瞬态投影更新，await 引擎 close 后 `await records.flush()`；持久层损坏时发显式 notification 后不阻断拆毁；
 - **级联取消**：`turn_settled`（outcome=aborted）取消该会话子树内在途 run；受管子会话中止一律经 `abortConversationGuarded` 内核原子复核（human 红线）；
 - **Worktree 租约 fail-closed**：分配路径在 `git worktree add` 副作用之前持久登记占位，崩溃后不能证明停止就阻塞清理（`worktree_execution_unknown`），一切未知状态保留租约。
@@ -86,6 +86,7 @@
 
 ## 相关文档
 
+- [Swarm 对等协同](swarm.md)：复用了本插件受管 Worktree 租约的横向对等协同黑板
 - [原生 JavaScript DSL 手册](../workflows/dsl-guide.md)：`agent` / `parallel` / `pipeline` / `phase` 语法与确定性约束
 - [Git Worktree 与代码门禁](../workflows/worktree-and-gate.md)：Worktree 生命周期、租约与 Gate 验收
 - [状态流水与故障恢复](../workflows/journaling-recovery.md)：journal 记账、前缀重放与断点续跑语义

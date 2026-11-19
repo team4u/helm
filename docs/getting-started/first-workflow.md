@@ -31,18 +31,20 @@ return { replies, summary }
 
 `parallel(thunks)` 并发执行无依赖任务：单个任务普通失败折叠为 `null` 不中断其余任务（因此脚本里 `replies.filter(r => r !== null)` 是惯用防御）。最终 `return` 的值经 JSON 边界校验后成为 run 的 `result`。
 
+**注意**：以下示例直接写 `helmx` 命令（适用于 `npm install -g @helmx/cli` 或源码模式执行 `pnpm link:bins` 之后；若在源码仓内未挂载全局命令，可替换为 `pnpm helmx`）。
+
 ## 运行前：确定目标会话
 
 新启动的工作流 run 必须显式指定所属会话，引擎不使用任何缺省路由策略。先查看现有会话：
 
 ```bash
-pnpm helmx conversations list --json
+helmx conversations list --json
 ```
 
 没有合适会话时创建一个：
 
 ```bash
-pnpm helmx conversations create --title "工作流试验场" --json
+helmx conversations create --title "工作流试验场" --json
 ```
 
 记下输出中的会话 ID（下文以 `1` 为例）。在受管环境（脚本已绑定会话上下文）中可设置 `HELMX_CONVERSATION_ID` 后用 `--current` 代替显式 ID。
@@ -50,7 +52,7 @@ pnpm helmx conversations create --title "工作流试验场" --json
 ## 运行与观察
 
 ```bash
-pnpm helmx workflows run demo/hello-orchestra.workflow.js \
+helmx workflows run demo/hello-orchestra.workflow.js \
   --args '{"word":"开源"}' --conversation-id 1 --wait --json
 ```
 
@@ -59,8 +61,8 @@ pnpm helmx workflows run demo/hello-orchestra.workflow.js \
 结束后检查执行记录与单个 run 的详情：
 
 ```bash
-pnpm helmx workflows runs                   # 列出运行记录（--json 取结构化输出）
-pnpm helmx workflows inspect <runId> --json # 查看节点状态流水、阶段、耗时与产出
+helmx workflows runs                   # 列出运行记录（--json 取结构化输出）
+helmx workflows inspect <runId> --json # 查看节点状态流水、阶段、耗时与产出
 ```
 
 `inspect` 的输出包含每个节点（`agent` / `action`）的状态、归属子会话 ID、token 消耗与结果预览，是排障的第一入口。也可以在 Web 控制台打开对应会话：时间线上的工作流卡片展示阶段胶囊进度，点击任一 `agent` 节点可在分屏中查看该子会话的完整交互。
@@ -70,7 +72,7 @@ pnpm helmx workflows inspect <runId> --json # 查看节点状态流水、阶段�
 当某一步因模型限流或环境问题失败时，不需要整体重跑。携带 `--resume-from-run-id` 重新启动，引擎会读取原 run 的 JSONL 流水账本，从第 0 位开始严格前缀匹配（调用位次 + 参数哈希 + 调用类型），已成功的前缀节点零 Token 复用，自首个失配点起转为实时执行：
 
 ```bash
-pnpm helmx workflows run demo/hello-orchestra.workflow.js \
+helmx workflows run demo/hello-orchestra.workflow.js \
   --args '{"word":"开源"}' --resume-from-run-id <failedRunId> --conversation-id 1 --wait
 ```
 
@@ -84,7 +86,7 @@ pnpm helmx workflows run demo/hello-orchestra.workflow.js \
 需要停止在途任务时：
 
 ```bash
-pnpm helmx workflows abort <runId>
+helmx workflows abort <runId>
 ```
 
 中止会优雅终止脚本 Worker、中止在途子会话并释放执行资源。
