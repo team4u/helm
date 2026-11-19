@@ -86,7 +86,7 @@ pnpm build && pnpm typecheck && pnpm lint && pnpm check:hygiene && pnpm test:all
 
 ## 7. 文档中心速查（按需深入阅读）
 
-- **总览与入门**：`docs/README.md` · `docs/getting-started/`（installation / first-workflow）· `docs/cli/reference.md`（全量命令字典）
+- **总览与入门**：`docs/README.md` · `docs/getting-started/`（installation / first-workflow）· `docs/cli/reference.md`（全量命令字典）· `docs/releasing.md`（发版流程：`pnpm release` 本地编排、三制品契约与 GitHub Release notes）
 - **架构机制**：`docs/architecture/overview.md`（微内核职责与单向包拓扑）· `extension-points.md`（Hook 与 16 个 UI 扩展点完整契约）· `envfabric.md`（反向 WS、隧道、文件互斥、自升级）· `pi-durable.md`（五态状态机、存储、机密、CAS 审批）
 - **编排引擎**：`docs/workflows/dsl-guide.md`（JS DSL 权威参考）· `worktree-and-gate.md`（Worktree 生命周期与 Gate 门禁）· `journaling-recovery.md`（账本重放与断点恢复）
 - **插件生态**：`docs/plugins/overview.md`（契约总纲）· `plugin-development.md`（外部插件开发实战）及各内置插件同名文档：`profile / workflow / swarm / memory / apps / herdr / superagent / triggers / magpie / json-render / mermaid / token-speed`

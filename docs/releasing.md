@@ -7,7 +7,7 @@
 | 工作流 | 触发 | 职责 |
 | :--- | :--- | :--- |
 | `ci.yml` | push / PR | 全仓验证：typecheck → lint → `check:hygiene` → build → POSIX 全量 `test:all`、Windows `test:unit` + 跨平台路径回归 |
-| `release.yml` | 仅 `v*` tag | 发布：verify → build → npm-publish（payload、CLI 与 node 三制品） |
+| `release.yml` | 仅 `v*` tag | 发布：verify → build → npm-publish（payload、CLI 与 node 三制品）→ notes（GitHub Release 发版记录） |
 
 `release.yml` 的 `build` 作业承担发布门槛（等价 ci.yml 的 ubuntu 通道 + npm 制品的网络验收，均在 `packages/payload/test/payload.test.ts` 单文件内执行——全部制品共享同一次组装）。
 
@@ -18,8 +18,9 @@
 | `verify` | 校验 tag 形态（`v<semver>`）与 dist-tag 归属（预发布 → `beta`）；探测 payload 组装器（占位可跳过）；**硬性要求 CLI 与 node 包存在** | 仅读仓库 |
 | `build` | ubuntu 全量构建与测试 + 制品网络验收（`PAYLOAD_NPM_SMOKE=1`：payload e2e（含 bundle CLI 真实 HTTP `status`）、CLI 真实 tarball 全局安装、黄金序列） | 仅读仓库 |
 | `npm-publish` | 三制品条件发布（共享一次 checkout/install/build，payload 先、CLI 次、node 后，各仅一次，provenance） | npm registry |
+| `notes` | 创建/刷新 GitHub Release：变更明细（上一 tag..本次 tag）+ 三制品真实发布状态；npm 发布未成功时显式失败不建 Release | GitHub Releases |
 
-依赖关系：`verify → build → npm-publish`。npm 发布必须等全量测试通过；CLI 在同作业内晚于 payload 发布（其默认更新路径从 registry 解析 payload）；node 晚于 CLI 发布。
+依赖关系：`verify → build → npm-publish → notes`。npm 发布必须等全量测试通过；CLI 在同作业内晚于 payload 发布（其默认更新路径从 registry 解析 payload）；node 晚于 CLI 发布；发版记录最后落账。
 
 ## npm 制品发布（每个制品一个 manifest 权威）
 
@@ -45,17 +46,45 @@ CLI 与 node 的附加门：
 
 ## 发布操作步骤
 
+推荐用本地发版编排脚本一条龙完成（守卫、变更明细预览、可选全量门禁、锁步 bump、提交、tag、推送）：
+
 ```bash
 # 0. 一次性前置：在 npmjs.com 为 @helmx/hub / @helmx/cli / @helmx/node 配置 Trusted
 #    Publisher（repository team4u/helmx、workflow release.yml、environment 留空），见上文；
+# 1. 预览（不修改任何文件）
+pnpm release --dry-run
+# 2. 正式发版：本地门禁 → 锁步 bump → chore(release) 提交 → 推送 main 与 tag
+pnpm release --patch --push        # 或 --minor / --major / --prerelease / 显式版本号
+# 3. 在 Actions 观察 verify → build → npm-publish → notes
+```
+
+等价的手动路径（脚本即上述步骤的自动化）：
+
+```bash
 # 1. 全量锁步 bump 版本（payload 版本单一来源需与 tag 一致；CLI 与 node 制品与 payload 同源）
 # 2. 提交变更
 git commit -am "chore(release): v0.1.0"
 # 3. 打 tag 并推送
 git tag v0.1.0
 git push origin v0.1.0
-# 4. 在 Actions 观察 verify → build → npm-publish
+# 4. 在 Actions 观察 verify → build → npm-publish → notes
 ```
+
+脚本细节（`pnpm release --help` 全量）：`--skip-verify` 跳过本地门禁（流水线仍会全量重验）；`--allow-dirty` / `--allow-non-main` 为边缘场景豁免，默认要求干净工作区与 main 分支；版本单一来源是 `packages/payload/package.json`，脚本锁步更新全部 `packages/*/package.json`。
+
+## 发版记录（GitHub Release notes）
+
+`notes` 作业在 `npm-publish` 成功结束后创建 GitHub Release，正文两部分（`scripts/lib/release-notes.mjs` 装配，本地 `scripts/release.mjs` 复用同一变更明细提炼逻辑）：
+
+- **变更明细**：上一 tag 至本次 tag 的提交列表（过滤 `chore(release):` 与 merge 提交）；
+- **制品发布状态**：三行状态原样渲染 `npm-publish` 作业的实际输出（发布成功 / 占位跳过 / 未完成），**绝不伪称已发布**。
+
+诚实约束与幂等行为：
+
+- `npm-publish` 未成功（失败或被前置作业截断）时，`notes` 作业**显式失败**、不创建任何可能被误读为发布成功的 Release；修复问题或删除 tag 后重试；
+- 同一 tag 重跑流水线时（workflow 级 concurrency 已按 tag 串行），已有 Release 会被就地刷新 notes，不会重复创建；
+- 预发布版本（版本核心含连字符）创建的 Release 自动带 prerelease 标记，与 verify 作业的 dist-tag 判定同源；
+- 个性化说明（产品解读等）可在发布后直接编辑 GitHub Release 正文，流水线只重跑时才会覆盖回自动装配内容。
 
 ## 本地校验
 

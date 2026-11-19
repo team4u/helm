@@ -1,6 +1,7 @@
 # Release pipeline: triggered only by v* tags, responsibility chain —
 #   verify → build (full build and tests on ubuntu) → npm-publish
-#   (all three artifacts publish once, on ubuntu, after all gates pass).
+#   (all three artifacts publish once, on ubuntu, after all gates pass) → notes
+#   (GitHub Release record with the changelog and the artifacts' actual publish results).
 #
 # npm publishing authority is per artifact, exactly one manifest each: the Hub payload's sole
 # authority is packages/payload/dist/package.json (a build artifact; default name @helmx/hub,
@@ -537,3 +538,66 @@ jobs:
           echo "cli status: $cli_line"
           echo "node published=$node_published"
           echo "node status: $node_line"
+
+  # ------------------------------------------------------------------
+  # Release record: create the GitHub Release (notes = changelog + the artifacts'
+  # actual publish results) only after npm publishing concluded. Never fakes a
+  # successful release: when npm-publish failed or was cut short, this job fails
+  # explicitly instead of creating a Release that could pass for a success. A
+  # re-run of the same tag updates the existing Release's notes in place (runs
+  # for one tag are serialized by the workflow-level concurrency group).
+  # ------------------------------------------------------------------
+  notes:
+    name: Release notes (GitHub Release)
+    needs: [verify, npm-publish]
+    if: always()
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse to record a release when publishing did not succeed
+        if: needs.npm-publish.result != 'success'
+        run: |
+          echo "::error::npm-publish job concluded '${{ needs.npm-publish.result }}' — refusing to create a GitHub Release that could pass for a successful publish. Inspect this run's logs, fix or delete the tag, then retry."
+          exit 1
+
+      - name: Checkout (full history for the changelog)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.12.0
+
+      - name: Assemble release notes
+        env:
+          HELMX_RELEASE_PAYLOAD_STATUS: ${{ needs.npm-publish.outputs.payload-status-line }}
+          HELMX_RELEASE_CLI_STATUS: ${{ needs.npm-publish.outputs.cli-status-line }}
+          HELMX_RELEASE_NODE_STATUS: ${{ needs.npm-publish.outputs.node-status-line }}
+        run: |
+          node scripts/lib/release-notes.mjs --tag "$GITHUB_REF_NAME" --out release-notes.md
+          echo '--- assembled release notes ---'
+          cat release-notes.md
+
+      - name: Create or update the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          tag="$GITHUB_REF_NAME"
+          args=(--title "Release ${tag#v}" --notes-file release-notes.md)
+          # Mirror the verify job's dist-tag policy: a hyphenated version core is a
+          # prerelease; build metadata (1.2.3+build-7) is not — strip it first.
+          version_core="${tag#v}"
+          version_core="${version_core%%+*}"
+          case "$version_core" in
+            *-*) args+=(--prerelease) ;;
+          esac
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "Release $tag already exists (serialized re-run); refreshing its notes."
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" "${args[@]}"
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" "${args[@]}"
+          fi
