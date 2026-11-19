@@ -47,6 +47,14 @@ export interface TaskSilenceState {
   lastError?: string
 }
 
+/** planFirst 方案审批事实（真实 AskDoc 决议，由后端记录）。 */
+export interface TaskPlanApproval {
+  decision: 'approved' | 'rejected'
+  askedAt: number
+  decidedAt: number
+  askId: string
+}
+
 export interface TaskRecord {
   id: string
   title: string
@@ -69,12 +77,21 @@ export interface TaskRecord {
   reworkCount: number
   lastReworkFeedback?: string
   mergePending?: boolean
+  planApproval?: TaskPlanApproval
+  /** 发起中的方案审批 Ask ID（审批在途）。 */
+  pendingPlanAskId?: string
   silenceState?: TaskSilenceState
   archived?: boolean
   createdAt: number
   updatedAt: number
   startedAt?: number
   completedAt?: number
+  /**
+   * 看板投影权威依赖真值（未 done 的前置 ID）：后端在投影时对全量 store 计算，
+   * 板书截断后前端无需自算。可选：旧版投影缺字段时消费方必须展示未知、
+   * 不得当作可开工。
+   */
+  blockedBy?: string[]
 }
 
 export interface TaskBoardDoc {
@@ -127,6 +144,16 @@ function parseSubmission(value: unknown): TaskSubmission | undefined {
     artifactIds,
     submittedAt: parseNumber(value['submittedAt']) ?? 0,
   })
+}
+
+function parsePlanApproval(value: unknown): TaskPlanApproval | undefined {
+  if (!isRecord(value)) return undefined
+  const decision = value['decision']
+  const askId = parseString(value['askId'])
+  const askedAt = parseNumber(value['askedAt'])
+  const decidedAt = parseNumber(value['decidedAt'])
+  if ((decision !== 'approved' && decision !== 'rejected') || askId === undefined) return undefined
+  return { decision, askId, askedAt: askedAt ?? 0, decidedAt: decidedAt ?? 0 }
 }
 
 function parseSilenceState(value: unknown): TaskSilenceState | undefined {
@@ -186,12 +213,15 @@ function parseTaskRecord(value: unknown): TaskRecord | undefined {
     reworkCount: parseNumber(value['reworkCount']) ?? 0,
     lastReworkFeedback: parseString(value['lastReworkFeedback']),
     mergePending: parseBoolean(value['mergePending']),
+    planApproval: parsePlanApproval(value['planApproval']),
+    pendingPlanAskId: parseString(value['pendingPlanAskId']),
     silenceState: parseSilenceState(value['silenceState']),
     archived: parseBoolean(value['archived']),
     createdAt: parseNumber(value['createdAt']) ?? 0,
     updatedAt: parseNumber(value['updatedAt']) ?? 0,
     startedAt: parseNumber(value['startedAt']),
     completedAt: parseNumber(value['completedAt']),
+    blockedBy: parseStringArray(value['blockedBy']),
   }) as TaskRecord
 }
 
@@ -288,12 +318,26 @@ export interface TaskLiveView {
   jumpConversationId: number | undefined
   /** task.project wins; otherwise the cwd basename (empty when neither is known). */
   projectLabel: string
-  /** dependsOn ids known (on the board) and not done yet. */
+  /**
+   * Authoritative not-done dependency ids: the per-card `blockedBy` projection
+   * (computed by the backend against the full store, truncation-safe). Empty on
+   * old boards lacking the field — see depsUnknown.
+   */
   blockedBy: string[]
-  /** dependsOn ids absent from the current board projection (done-truncated, archived, or deleted); never fabricated as blocking. */
+  /**
+   * true when the board projection carries NO authoritative blockedBy (old
+   * backend): dependency facts are unknowable — show unknown, never treat as
+   * startable.
+   */
+  depsUnknown: boolean
+  /** dependsOn ids absent from the current board projection (display-only context). */
   offBoardDeps: string[]
-  /** backlog with every known dependency done (off-board deps do not block — the backend start action is the authoritative gate). */
+  /** backlog with authoritative dependencies all done and facts known. */
   isReadyToStart: boolean
+  /** planFirst scheme approval decision (real AskDoc), when recorded. */
+  planApproval: 'approved' | 'rejected' | undefined
+  /** A plan approval Ask is currently pending on the execution conversation. */
+  planAskPending: boolean
   /** A subtree conversation waits on a human Ask (approval question), distinct from errors and sub-session confirmation. */
   approvalPending: boolean
   /** A background run is in flight for a subtree conversation (generic workbench badge facts, plugin-ID free). */
@@ -385,16 +429,15 @@ export function deriveTaskLiveView(
     }
   }
 
-  // Known-not-done dependencies block; off-board ids (done-truncated / archived / deleted)
-  // are surfaced separately and never fabricated as blocking — the backend start
-  // action re-validates authoritatively.
-  const blockedBy =
-    tasksById === undefined
-      ? []
-      : task.dependsOn.filter((depId) => {
-          const dep = tasksById.get(depId)
-          return dep !== undefined && dep.column !== 'done'
-        })
+  // Dependency truth: prefer the per-card authoritative `blockedBy` projection
+  // (backend-computed against the full store, truncation-safe). Old boards
+  // lacking the field are UNKNOWN — shown as such and never treated as startable;
+  // the local derivation is only a non-authoritative display fallback.
+  const hasAuthoritativeDeps = Array.isArray(task.blockedBy)
+  const depsUnknown = task.dependsOn.length > 0 && !hasAuthoritativeDeps
+  const blockedBy = hasAuthoritativeDeps
+    ? (task.blockedBy ?? []).filter((depId) => task.dependsOn.includes(depId))
+    : []
   const offBoardDeps = tasksById === undefined ? [] : task.dependsOn.filter((depId) => !tasksById.has(depId))
 
   // Stalled stays honest only when nothing else is provably in flight (a background run
@@ -433,8 +476,11 @@ export function deriveTaskLiveView(
     jumpConversationId,
     projectLabel: task.project !== undefined && task.project !== '' ? task.project : cwdBasename(task.cwd),
     blockedBy,
+    depsUnknown,
     offBoardDeps,
-    isReadyToStart: task.column === 'backlog' && blockedBy.length === 0,
+    isReadyToStart: task.column === 'backlog' && !depsUnknown && blockedBy.length === 0,
+    planApproval: task.planApproval?.decision,
+    planAskPending: task.pendingPlanAskId !== undefined && task.planApproval === undefined,
     approvalPending,
     backgroundActive,
     stalled: effectiveStalled !== undefined,
