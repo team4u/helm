@@ -21,6 +21,7 @@ import {
 } from '@helmx/protocol'
 import {
   extractWorkflowExecutionMeta,
+  extractWorktreeExecutionMeta,
   parseWorkflowSpawnMeta,
   withWorkflowSpawnMeta,
   type WorkflowNodeState,
@@ -124,8 +125,9 @@ function createSubagentSession(params: SubagentSessionParams) {
     }
     if (info.executionId !== undefined) node.executionId = info.executionId
     if (info.effectiveCwd !== undefined) node.effectiveCwd = info.effectiveCwd
+    const wtExecMeta = extractWorktreeExecutionMeta(info)
+    if (wtExecMeta.worktree !== undefined) node.worktree = wtExecMeta.worktree
     const wfExecMeta = extractWorkflowExecutionMeta(info)
-    if (wfExecMeta.worktree !== undefined) node.worktree = wfExecMeta.worktree
     if (wfExecMeta.controls !== undefined) node.controls = wfExecMeta.controls
     record.subagentMeta = {
       ...(agentType !== undefined && agentType !== '' ? { agentType } : {}),

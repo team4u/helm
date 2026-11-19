@@ -179,7 +179,7 @@ test('phase/log 与 onResolved 元数据立即推送：workflow.updated 携带 p
     async (request) => {
       request.onResolved?.({
         conversationId: 4242,
-        meta: { 'builtin:workflow': { worktree: { path: '/tmp/wt-iso', branch: 'helmx/wf-1' } } },
+        meta: { 'builtin:worktree': { worktree: { path: '/tmp/wt-iso', branch: 'helmx/wf-1' } } },
       })
       request.onGateResult?.({ ok: true, output: '' })
       return '完成结果'

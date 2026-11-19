@@ -1,7 +1,8 @@
 /**
  * builtin:workflow plugin managed worktree read-only change overview
  * component (collapsible): when expanded it runs real read-only git commands
- * on the target node via the inspect_worktree action, showing registration
+ * on the target node via the inspect_worktree action (owned by the sibling
+ * builtin:worktree plugin; calls address it cross-plugin), showing registration
  * metadata, status stats and a capped diff preview; "Ask the main
  * conversation to review and merge" only submits a review request text to
  * the parent conversation (the official submitInput capability) — the Web
@@ -83,7 +84,7 @@ export function WorktreeInspectSection(props: {
     setLoading(true)
     setError(undefined)
     try {
-      const raw = await ctx.callAction('inspect_worktree', buildWorktreeSelector(worktree, props.nodeId))
+      const raw = await ctx.callAction('inspect_worktree', buildWorktreeSelector(worktree, props.nodeId), { pluginId: 'builtin:worktree' })
       if (generation.current !== current) return
       const parsed = parseWorktreeInspectResult(raw)
       if (parsed === undefined) {

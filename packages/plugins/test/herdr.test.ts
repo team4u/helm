@@ -36,7 +36,7 @@ import { HelmxError, type AgentExecutionInfo } from '@helmx/protocol'
 import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { createHerdrPlugin } from '../src/herdr.js'
-import { extractWorkflowExecutionMeta } from '../src/contracts.js'
+import { extractWorktreeExecutionMeta } from '../src/contracts.js'
 import { EMPTY_MANAGED_DOC } from '../src/herdr/panes.js'
 import type { HerdrEvent, HerdrTarget, HerdrTransport } from '../src/herdr/contracts.js'
 import type { DiagnosticsCollection } from '../src/diagnostics.js'
@@ -471,8 +471,8 @@ test('Worktree 隔离: 两步建窗注入 env、关初始 tab、workspace.close 
     assert.equal(tabCreates.length, 1, '补建一个带 env 的 tab')
     assert.ok(tabCreates[0]!.params['workspace_id'])
     assert.ok(env.transport.calls.some((c) => c.method === 'tab.close'), '关闭初始空 tab')
-    // onResolved 回传 worktree 元数据（workflow 命名空间）+ effectiveCwd 为 worktree.path。
-    const wt = extractWorkflowExecutionMeta(resolved as AgentExecutionInfo).worktree
+    // onResolved 回传 worktree 元数据（'builtin:worktree' 命名空间）+ effectiveCwd 为 worktree.path。
+    const wt = extractWorktreeExecutionMeta(resolved as AgentExecutionInfo).worktree
     assert.ok(wt?.path.includes('.worktrees/'))
     assert.equal(resolved!['effectiveCwd'], wt!.path)
     // 父回合 settle -> workspace.close。

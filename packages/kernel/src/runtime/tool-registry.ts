@@ -102,7 +102,7 @@ export class RuntimeToolRegistry {
   /**
    * Install foundational kernel tools (`bash`/`read`/`write`/`edit`/`read_artifact`/`register_artifact` +
    * `run_action` meta-tool) under `helmx-core` (sharing the same registry and `wrapToolExecute` takeover path as
-   * plugins). `subagent` / `SubagentWorkflow` / `cleanup_worktree` are provided by `builtin:workflow`.
+   * plugins). `subagent` / `SubagentWorkflow` are provided by `builtin:workflow`; `cleanup_worktree` by `builtin:worktree`.
    */
   installKernelTools(): void {
     const { registry, toolDeps, getPluginHost, isArtifactAuthorized, redact, handledToolCalls, getConversation } = this.options

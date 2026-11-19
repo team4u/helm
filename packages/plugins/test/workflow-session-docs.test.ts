@@ -26,6 +26,7 @@ import { PluginHost } from '../../kernel/src/plugins/index.js'
 import { PluginHostBackendFixtureBase } from '../../kernel/test/helpers/plugin-host-backend.js'
 import type { WorkflowRunBadgesDocState, WorkflowRunSessionDocState, WorkflowRunSummary } from '../src/contracts.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
+import { createWorktreePlugin } from '../src/worktree.js'
 import { createRunsProjection, MAX_PROJECTED_RUNS_PER_CONVERSATION } from '../src/workflow/projection.js'
 import { createHelmx } from '../../hub/src/app.js'
 import { createPluginBuildProvider } from '@helmx/plugin-build'
@@ -572,12 +573,12 @@ test('增量投影与 100 条滑窗：upsertRun 零 listRuns 磁盘读，超出 
   assert.equal(latestSessionDoc.runs.some((r) => r.id === 'wf_done_10'), true)
 })
 
-test('conversation.deleted 同时清理受管子代理登记表与已移除 worktree 绑定元数据（保留 active worktree）', { timeout: 60_000 }, async () => {
+test('conversation.deleted 同时清理受管子代理登记表与已移除 worktree 绑定元数据（保留 active worktree；worktree 绑定归 builtin:worktree 裁剪）', { timeout: 60_000 }, async () => {
   backend.conversations.set(21, makeConversation(21, 1))
   docs.set('builtin:workflow:subagent-conversations', {
     '21': { depth: 1, parentConversationId: 1, maxSubagentDepth: 2, createdAt: 1 },
   })
-  docs.set('builtin:workflow:worktree-state', {
+  docs.set('builtin:worktree:worktree-state', {
     'worktree-agent-bindings': {
       'agent-21': { childId: 21, parentConversationId: 1 },
       'agent-keep': { childId: 22, parentConversationId: 1 },
@@ -615,6 +616,7 @@ test('conversation.deleted 同时清理受管子代理登记表与已移除 work
   })
   const host = makeHost()
   await host.register(createWorkflowPlugin())
+  await host.register(createWorktreePlugin())
   const beforeGc = docs.get<Record<string, unknown>>('builtin:workflow:subagent-conversations', {})
   assert.ok('21' in beforeGc, '派生子会话 21 已存在于 subagent-conversations')
 
@@ -624,7 +626,7 @@ test('conversation.deleted 同时清理受管子代理登记表与已移除 work
 
   const afterGc = docs.get<Record<string, unknown>>('builtin:workflow:subagent-conversations', {})
   assert.equal('21' in afterGc, false, '会话删除后必须回收 subagent-conversations 中的孤儿条目')
-  const wtAfter = docs.get<Record<string, unknown>>('builtin:workflow:worktree-state', {})
+  const wtAfter = docs.get<Record<string, unknown>>('builtin:worktree:worktree-state', {})
   const bindingsAfter = wtAfter['worktree-agent-bindings'] as Record<string, unknown>
   assert.equal('agent-21' in bindingsAfter, false, '会话删除后必须回收 worktree-agent-bindings 中指向 21 的绑定')
   assert.equal('agent-keep' in bindingsAfter, true, '无关会话绑定保持不变')

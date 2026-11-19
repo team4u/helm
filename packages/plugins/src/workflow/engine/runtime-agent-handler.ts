@@ -12,7 +12,7 @@
  * runtime.ts's runWorkflow); this module holds no worker or run terminal state -- fatal always flows
  */
 
-import { extractWorkflowExecutionMeta } from '../../contracts.js'
+import { extractWorktreeExecutionMeta } from '../../contracts.js'
 import type { AgentExecutionInfo } from '@helmx/protocol'
 import type { WorkflowEntry } from './progress.js'
 import type { JournalReplay } from './replay.js'
@@ -81,8 +81,8 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
     if (info.conversationId !== undefined) base.conversationId = info.conversationId
     if (info.executionId !== undefined) base.executionId = info.executionId
     if (info.effectiveCwd !== undefined) base.effectiveCwd = info.effectiveCwd
-    const wfExecMeta = extractWorkflowExecutionMeta(info)
-    if (wfExecMeta.worktree !== undefined) base.worktree = wfExecMeta.worktree
+    const wtExecMeta = extractWorktreeExecutionMeta(info)
+    if (wtExecMeta.worktree !== undefined) base.worktree = wtExecMeta.worktree
   }
 
   for (;;) {
@@ -117,8 +117,8 @@ export async function handleAgentCall(ctx: AgentCallContext, callId: number, pay
       if (info.conversationId !== undefined) base.conversationId = info.conversationId
       if (info.executionId !== undefined) base.executionId = info.executionId
       if (info.effectiveCwd !== undefined) base.effectiveCwd = info.effectiveCwd
-      const wfExecMeta = extractWorkflowExecutionMeta(info)
-      if (wfExecMeta.worktree !== undefined) base.worktree = wfExecMeta.worktree
+      const wtExecMeta = extractWorktreeExecutionMeta(info)
+      if (wtExecMeta.worktree !== undefined) base.worktree = wtExecMeta.worktree
       if (info.modelName !== undefined) base.model = info.modelName
       if (info.thinking !== undefined) base.thinking = info.thinking
       if (info.requestedThinking !== undefined) base.requestedThinking = info.requestedThinking

@@ -15,7 +15,7 @@ import {
 } from '@helmx/protocol'
 import { randomUUID } from 'node:crypto'
 import {
-  extractWorkflowExecutionMeta,
+  extractWorktreeExecutionMeta,
   type ManagedWorktreeHold,
   type ManagedWorktreeRecord,
 } from '../contracts.js'
@@ -486,7 +486,7 @@ export class WorktreeStore {
       return record.nodeId === nodeId ? record.path : undefined
     }
     if (lease.info.nodeId === nodeId) {
-      return lease.info.effectiveCwd ?? extractWorkflowExecutionMeta(lease.info).worktree?.path
+      return lease.info.effectiveCwd ?? extractWorktreeExecutionMeta(lease.info).worktree?.path
     }
     return undefined
   }
@@ -495,7 +495,7 @@ export class WorktreeStore {
     for (const info of this.host?.listActiveSpawnExecutions() ?? []) {
       if (info.nodeId !== nodeId) continue
       if (info.effectiveCwd !== undefined && this.containsPath(path, info.effectiveCwd)) return true
-      const wt = extractWorkflowExecutionMeta(info).worktree
+      const wt = extractWorktreeExecutionMeta(info).worktree
       if (wt !== undefined && this.containsPath(path, wt.path)) return true
     }
     for (const lease of this.listLeases().values()) {
@@ -686,7 +686,7 @@ export class WorktreeStore {
       const leasePath = this.leasePathOf(lease, info.nodeId)
       if (leasePath === undefined) continue
       if (info.effectiveCwd !== undefined && this.containsPath(leasePath, info.effectiveCwd)) return true
-      const wt = extractWorkflowExecutionMeta(info).worktree
+      const wt = extractWorktreeExecutionMeta(info).worktree
       if (wt !== undefined && this.containsPath(leasePath, wt.path)) return true
     }
     return false
@@ -717,7 +717,7 @@ export class WorktreeStore {
             stopped = true
           } else {
             process.stderr.write(
-              `builtin:workflow reconcileStoppedNativeLeases: skip lease ${lease.worktreeId} (conv ${lease.info.conversationId} lookup failed): ${
+              `builtin:worktree reconcileStoppedNativeLeases: skip lease ${lease.worktreeId} (conv ${lease.info.conversationId} lookup failed): ${
                 error instanceof Error ? error.message : String(error)
               }\n`,
             )

@@ -2,6 +2,7 @@ import { KernelRuntime, loadExternalPlugins } from '@helmx/kernel';
 import { createPluginBuildProvider } from '@helmx/plugin-build';
 import { createProfilePlugin } from '@helmx/plugins/profile';
 import { createWorkflowPlugin } from '@helmx/plugins/workflow';
+import { createWorktreePlugin } from '@helmx/plugins/worktree';
 import { createSwarmPlugin } from '@helmx/plugins/swarm';
 import { createMemoryPlugin } from '@helmx/plugins/memory';
 import { createJsonRenderPlugin } from '@helmx/plugins/json-render';
@@ -26,9 +27,14 @@ export async function createHelmx(options: HelmxOptions = {}) {
     autoResume: false,
   });
   try {
-    // Default-enabled (10): profile (locked), workflow, swarm, memory, json-render, mermaid, apps, triggers, magpie, token-speed.
+    // Default-enabled (11): profile (locked), workflow, worktree, swarm, memory, json-render, mermaid, apps, triggers, magpie, token-speed.
     await kernel.plugins.register(createProfilePlugin());
+    // Registration-order invariant: workflow MUST be registered before worktree. KernelRuntime.start() awaits
+    // runtime.started listeners in registration order: workflow first converges leftover child conversations to
+    // idle (awaitPreparedChildrenSettled), only then worktree reconciles crashed native leases (otherwise
+    // still-settling children would be misjudged as stopped and their leases wrongly reclaimed).
     await kernel.plugins.register(createWorkflowPlugin());
+    await kernel.plugins.register(createWorktreePlugin());
     await kernel.plugins.register(createSwarmPlugin());
     await kernel.plugins.register(createMemoryPlugin());
     await kernel.plugins.register(createJsonRenderPlugin());

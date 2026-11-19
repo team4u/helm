@@ -24,6 +24,6 @@ Use the workflow steer action or `helmx workflows steer <runId> --text <guidance
 
 ## Worktree cleanup
 
-After inspecting or merging a child worktree, call the model tool `cleanup_worktree({ worktreeId: execution.worktree.id })` with the real execution metadata. This is a conversation tool, not a DSL function.
+After inspecting or merging a child worktree, call the model tool `cleanup_worktree({ worktreeId: execution.worktree.id })` with the real execution metadata. This is a conversation tool (registered by the `builtin:worktree` plugin), not a DSL function.
 
 The equivalent CLI is `helmx worktrees cleanup --worktree-id <id> --json`. Cleanup refuses dirty, unmerged, occupied, locked, or uncertain worktrees by default. `force` only addresses the dirty/unmerged protection and never bypasses the other safety checks.

@@ -259,7 +259,7 @@ function WorkflowNodeDetail({ node }: { node: WorkflowNodeState }): ReactNode {
             if (cleaning) return
             setCleaning(true)
             ctx
-              .callAction('cleanup_worktree', buildWorktreeSelector(node.worktree!, node.nodeId))
+              .callAction('cleanup_worktree', buildWorktreeSelector(node.worktree!, node.nodeId), { pluginId: 'builtin:worktree' })
               .then(() => ctx.notify(actionCleanupDone(node.worktree!.branch, locale)))
               .catch((err: unknown) =>
                 ctx.notify(actionCleanupFailed(err instanceof Error ? err.message : String(err), locale), 'error'),

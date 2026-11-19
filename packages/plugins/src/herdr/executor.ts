@@ -31,7 +31,7 @@
 
 import { setTimeout as delay } from 'node:timers/promises'
 import { HelmxError, targetPlatformOf, type AgentExecutionInfo, type AgentSpawnRequest, type TargetPlatform } from '@helmx/protocol'
-import { parseWorkflowSpawnMeta, workflowExecutionMeta } from '../contracts.js'
+import { parseWorkflowSpawnMeta, workflowExecutionMeta, worktreeExecutionMeta } from '../contracts.js'
 import type { CreateAskResultLike, CreateAskSpecLike, HerdrPluginDependencies, HerdrTarget } from './contracts.js'
 import { targetNodeId } from './contracts.js'
 import { AskCoordinator, backoffForDuplicateBlocked, type AskEntry } from './asks.js'
@@ -858,19 +858,25 @@ export class HerdrExecutor {
   }
 
   private executionInfoOf(pane: ManagedPane): AgentExecutionInfo {
+    // Business extensions ride in the orchestration-namespace meta (the kernel envelope does not interpret them):
+    // the control reference lands in the 'builtin:workflow' slot so the orchestration layer (builtin:workflow.steer)
+    // can dynamically delegate to this plugin's steer action (zero hardcoding; carries no callbacks or policy);
+    // the worktree descriptor lands in the orthogonal 'builtin:worktree' slot for the isolation layer's lease
+    // registration. The two writes compose (each merge preserves the other's namespace).
+    const withControls = workflowExecutionMeta({
+      controls: { steer: { pluginId: HERDR_STEER_CONTROLS.pluginId, actionId: HERDR_STEER_CONTROLS.actionId } },
+    })
     return {
       nodeId: nodeIdOf(pane) ?? 'local',
       executionId: pane.paneId,
       effectiveCwd: pane.effectiveCwd,
-      // Business extensions ride in the orchestration-namespace meta (the kernel envelope does not interpret them): the control reference lets
-      // the orchestration layer (builtin:workflow.steer) dynamically delegate to this plugin's steer action (zero hardcoding;
-      // carries no callbacks or policy); worktree is for the isolation layer's lease registration.
-      meta: workflowExecutionMeta({
-        controls: { steer: { pluginId: HERDR_STEER_CONTROLS.pluginId, actionId: HERDR_STEER_CONTROLS.actionId } },
-        ...(pane.worktree !== undefined
-          ? { worktree: { path: pane.worktree.path, branch: pane.worktree.branch ?? '' } }
-          : {}),
-      }),
+      meta:
+        pane.worktree !== undefined
+          ? worktreeExecutionMeta(
+              { worktree: { path: pane.worktree.path, branch: pane.worktree.branch ?? '' } },
+              withControls,
+            )
+          : withControls,
     }
   }
 

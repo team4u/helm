@@ -40,6 +40,7 @@ import assert from 'node:assert/strict'
 import { createHelmx } from '../../hub/src/app.js'
 import { KernelRuntime } from '../../kernel/src/runtime/index.js'
 import { createWorkflowPlugin } from '../src/workflow.js'
+import { createWorktreePlugin } from '../src/worktree.js'
 import { buildManagedEnv, runShell } from '../../kernel/src/runtime/tools.js'
 import type { HelmxToolDeps } from '../../kernel/src/runtime/tool-deps.js'
 import { SecretStash } from '../../kernel/src/services/index.js'
@@ -329,7 +330,8 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
     })
     try {
       await kernel.plugins.register(createWorkflowPlugin())
-      // 外部后端语义（如 builtin:herdr）：接管执行并经 onResolved 回传元数据。
+      await kernel.plugins.register(createWorktreePlugin())
+      // 外部后端语义（如 builtin:herdr）：接管执行并经 onResolved 回传元数据（worktree 登记与租约由 builtin:worktree 统一包襄）。
       await kernel.plugins.register({
         id: 'test:external-backend',
         name: '外部后端',
@@ -340,7 +342,7 @@ describe('subagent 工具完整入参与执行元数据', { timeout: 60_000 }, (
               nodeId: 'local',
               executionId: 'pane-9',
               effectiveCwd: '/srv/wt/helmx-42',
-              meta: { 'builtin:workflow': { worktree: { path: '/srv/wt/helmx-42', branch: 'helmx/wf-run-1' } } },
+              meta: { 'builtin:worktree': { worktree: { path: '/srv/wt/helmx-42', branch: 'helmx/wf-run-1' } } },
             })
             return { action: 'handled', result: { external: 'done', detail: 7 } }
           })
@@ -913,7 +915,7 @@ test('外部子代理执行元数据的工具正文与持久结果统一脱敏',
             nodeId: 'local',
             executionId: 'pane-9',
             effectiveCwd: `/srv/${secret}/task`,
-            meta: { 'builtin:workflow': { worktree: { path: `/srv/${secret}/task`, branch: `helmx/${secret}/task` } } },
+            meta: { 'builtin:worktree': { worktree: { path: `/srv/${secret}/task`, branch: `helmx/${secret}/task` } } },
           })
           return { action: 'handled', result: { answer: 42 } }
         })

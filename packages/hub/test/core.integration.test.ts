@@ -748,7 +748,7 @@ test('核心闭环 5：agent_spawn 外部后端 handled 接管（onResolved / on
           nodeId: 'local',
           executionId: execId,
           effectiveCwd: execDir,
-          meta: { 'builtin:workflow': { worktree: { path: execDir, branch: 'align-wt' } } },
+          meta: { 'builtin:worktree': { worktree: { path: execDir, branch: 'align-wt' } } },
         })
         if (request.gate !== undefined) {
           const result = await kernel.runGate(request.gate, { cwd: execDir, conversationId: request.parentConversationId })

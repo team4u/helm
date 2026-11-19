@@ -264,7 +264,7 @@ test('canReplayWorkflowRun：非 subagent 的 completed run（含内联）可重
 // ---------------------------------------------------------------------------
 
 interface RecordingCtx extends PluginClientContextType {
-  calls: Array<{ action: string; input: unknown }>
+  calls: Array<{ action: string; input: unknown; pluginId?: string }>
   submissions: Array<{ text: string; options?: Record<string, unknown> }>
   notices: string[]
   drawerCalls: number[]
@@ -279,8 +279,8 @@ function makeRecordingCtx(actionResults: Record<string, unknown>): RecordingCtx 
   const screenCalls: string[] = []
   return {
     pluginId: 'builtin:workflow',
-    callAction: async (action: string, input?: unknown) => {
-      calls.push({ action, input })
+    callAction: async (action: string, input?: unknown, options?: { pluginId?: string }) => {
+      calls.push({ action, input, pluginId: options?.pluginId })
       if (action in actionResults) return actionResults[action]
       return undefined
     },
@@ -516,6 +516,7 @@ test('节点卡改动概览：检视渲染与审阅；completed run 提供「重
     })
     const inspectCalls = ctx.calls.filter((c) => c.action === 'inspect_worktree')
     assert.equal(inspectCalls.length, 1)
+    assert.equal(inspectCalls[0]!.pluginId, 'builtin:worktree', 'workflow 客户端必须跨插件寻址 builtin:worktree')
     assert.deepEqual(inspectCalls[0]!.input, { worktreeId: 'local:/repo/.helmx-worktrees/app-ab12cd34' })
     assert.match(host.textContent!, /Uncommitted changes/)
     assert.match(host.textContent!, /2 files/)
@@ -704,12 +705,15 @@ test('独立子代理卡检视：有工作树时提供入口；点击不触发�
       toggle.click()
     })
     assert.deepEqual(ctx.calls.find((c) => c.action === 'inspect_worktree')!.input, { worktreeId: 'local:/wt/x' })
+    assert.equal(ctx.calls.find((c) => c.action === 'inspect_worktree')!.pluginId, 'builtin:worktree')
     assert.deepEqual(ctx.drawerCalls, [], '展开检视不得触发整卡打开抽屉')
 
     await act(async () => {
       buttonByText(host, 'Clean up worktree').click()
     })
-    assert.deepEqual(ctx.calls.find((c) => c.action === 'cleanup_worktree')!.input, { worktreeId: 'local:/wt/x' })
+    const cleanupCall = ctx.calls.find((c) => c.action === 'cleanup_worktree')!
+    assert.deepEqual(cleanupCall.input, { worktreeId: 'local:/wt/x' })
+    assert.equal(cleanupCall.pluginId, 'builtin:worktree', '清理动作必须跨插件寻址 builtin:worktree')
     assert.deepEqual(ctx.drawerCalls, [], '动作按钮点击不得触发整卡导航')
   } finally {
     unmount()

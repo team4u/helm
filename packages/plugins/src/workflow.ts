@@ -1,5 +1,7 @@
 /**
- * builtin:workflow: the subagent / SubagentWorkflow / cleanup_worktree orchestration plugin.
+ * builtin:workflow: the subagent / SubagentWorkflow orchestration plugin (managed Git worktrees
+ * live in the sibling builtin:worktree plugin; both communicate only via shared contracts and
+ * the execution-meta namespaces, zero static dependency).
  *
  * Responsibilities:
  * - Wrap the orchestration engine (engine/: DSL runtime + journal replay + WorkflowService);
@@ -47,10 +49,11 @@
  * - ./workflow/background.ts: background default policy and background settle report delivery
  * - ./workflow/engine-host.ts: HelmxHostApi ports -> WorkflowServiceHost adaptation
  *   (two safety disciplines: guarded aborts / emitEvent convergence)
- * - ./workflow/hooks.ts: the dual agent_spawn hooks (depth guard 300 / worktree isolation 200),
- *   before_turn tool stripping, turn_settled cascade cancellation and host event subscriptions
- * - ./workflow/tools.ts: the subagent / SubagentWorkflow / cleanup_worktree tools
- * - ./workflow/actions.ts: the 13 actions (reused across five ends)
+ * - ./workflow/hooks.ts: the agent_spawn depth guard (300), before_turn tool stripping,
+ *   turn_settled cascade cancellation and host event subscriptions (worktree isolation's
+ *   agent_spawn around hook 200 moved to the builtin:worktree plugin)
+ * - ./workflow/tools.ts: the subagent / SubagentWorkflow tools (cleanup_worktree moved to builtin:worktree)
+ * - ./workflow/actions.ts: the 11 actions (reused across five ends; the worktrees family moved to builtin:worktree)
  * - ./workflow/ui.ts: frontend UI extension point declarations
  */
 import type { PluginDefinition } from '@helmx/protocol'
@@ -64,7 +67,6 @@ import {
   type WorkflowRunSessionDocState,
 } from './contracts.js'
 import { WorkflowService } from './workflow/engine/index.js'
-import { WorktreeIsolation } from './workflow/isolation.js'
 import {
   isEffectiveAutoRecover,
   readAutoRecoverOnRestart,
@@ -89,8 +91,8 @@ export function createWorkflowPlugin(): PluginDefinition {
     id: WORKFLOW_PLUGIN_ID,
     name: { en: 'Workflows & Subagents', 'zh-CN': '工作流与子代理' },
     description: {
-      en: 'Deterministic multi-agent orchestration: subagent / SubagentWorkflow tools, managed Git worktrees, run records and the task panel.',
-      'zh-CN': '确定性多智能体编排：subagent / SubagentWorkflow 工具、受管 Git 工作树、运行记录与任务面板。',
+      en: 'Deterministic multi-agent orchestration: subagent / SubagentWorkflow tools, run records and the task panel (managed Git worktrees live in builtin:worktree).',
+      'zh-CN': '确定性多智能体编排：subagent / SubagentWorkflow 工具、运行记录与任务面板（受管 Git 工作树由 builtin:worktree 提供）。',
     },
     icon: 'workflow',
     version: '0.1.0',
@@ -115,22 +117,6 @@ export function createWorkflowPlugin(): PluginDefinition {
       // ---- Engine-private records doc (key-value store: run index + per-run records) ----
       // Private doc: not in public snapshots/events; the engine persists through it, and restart recovery reads the same namespace.
       const records = ctx.doc<Record<string, unknown>>('records', {})
-
-      // ---- Worktree isolation asset doc (managed registry + durable leases; kept on disable for re-reading) ----
-      // Same layer as records: the allocator registry + lease table + agentId binding table. Not cleared
-      // while the plugin is disabled; after re-enable, cleanup can still locate them (no metadata loss).
-      const worktreeDocs = ctx.doc<Record<string, unknown>>('worktree-state', {})
-      const worktreeDocStore = {
-        get<T>(key: string, initial: T): T {
-          const all = worktreeDocs.get()
-          const raw = all[key]
-          return raw === undefined ? initial : (structuredClone(raw) as T)
-        },
-        set<T>(key: string, value: T): void {
-          worktreeDocs.update((current) => ({ ...current, [key]: structuredClone(value) }))
-        },
-        flush: (): Promise<void> => worktreeDocs.flush(),
-      }
 
       // ---- Managed-subagent registry (private doc; the persistent source of facts across restarts) ----
       const subagentConvDoc = ctx.doc<Record<string, ManagedSubagentEntry>>('subagent-conversations', {})
@@ -184,33 +170,6 @@ export function createWorkflowPlugin(): PluginDefinition {
         flush: (): Promise<void> => records.flush(),
       }
 
-      // ---- Worktree isolation lifecycle (this plugin's own Git capability) ----
-      // The agent_spawn around (continuation) wrapper wraps the whole derivation: allocation/resume/occupancy/lease;
-      // priority 200 (running before external-runtime takers like herdr's 100 = the outer layer),
-      // ensuring external executions are also wrapped by leases and registration; Git commands run via
-      // ctx.host.execEnv (direct argv) on the real final node.
-      const isolation = new WorktreeIsolation({
-        host: {
-          resolveSpawnTarget: (input) => ctx.host.resolveSpawnTarget(input),
-          execEnv: (req, opts) => ctx.host.execEnv(req, opts),
-          executionEnv: (nodeId, cwd) => ctx.host.executionEnv(nodeId, cwd),
-          inspectNodePathUsage: (input) => ctx.host.inspectNodePathUsage(input),
-          listActiveSpawnExecutions: () => ctx.host.listActiveSpawnExecutions(),
-          redact: (text) => ctx.host.redact(text),
-          getConversation: (id) => {
-            const conv = ctx.host.getConversation(id)
-            return { cwd: conv.cwd, nodeId: conv.nodeId, status: conv.status, profileId: conv.profileId }
-          },
-          profiles: {
-            get: (id) => ctx.host.profiles.get(id),
-          },
-          get isClosing() {
-            return ctx.host.isClosing
-          },
-        },
-        docStore: worktreeDocStore,
-      })
-
       // ---- WorkflowService instance (all host capabilities go through the ctx.host trusted channel) ----
       const workflows = new WorkflowService({
         dataDir: ctx.dataDir,
@@ -246,7 +205,7 @@ export function createWorkflowPlugin(): PluginDefinition {
 
       // ---- Lifecycle hooks and host event subscriptions (agent_spawn 300/200, before_turn,
       //      turn_settled cascade cancellation, conversation re-projection, diagnostics probes) ----
-      registerWorkflowHooks(ctx, { registry, isolation, workflows, projection })
+      registerWorkflowHooks(ctx, { registry, workflows, projection })
 
       // ---- service: the workflow-engine lifecycle ----
       ctx.service({
@@ -285,22 +244,11 @@ export function createWorkflowPlugin(): PluginDefinition {
             .filter((r) => r.status === 'running')
             .map((r) => `workflow:${r.id}`)
         },
-        inUse() {
-          return isolation.allocator
-            .list()
-            .filter((r) => r.status === 'active' && r.hold !== undefined)
-            .map((r) => ({
-              kind: 'worktree_hold',
-              id: r.id,
-              label: `worktree "${ctx.host.redact(r.path)}" held by ${r.hold!.pluginId} (${ctx.host.redact(r.hold!.label)})`,
-            }))
-        },
       })
 
-      // ---- Model tools: subagent / SubagentWorkflow / cleanup_worktree ----
+      // ---- Model tools: subagent / SubagentWorkflow (cleanup_worktree moved to builtin:worktree) ----
       registerWorkflowTools(ctx, {
         workflows,
-        isolation,
         assertCanSpawn: (conversationId) => registry.assertCanSpawn(conversationId),
         resolveBackground: (conversationId, explicit) => backgroundPolicy.resolveBackground(conversationId, explicit),
         syncRunsDoc: () => projection.sync(),
@@ -309,7 +257,6 @@ export function createWorkflowPlugin(): PluginDefinition {
       // ---- Actions (reused across five ends: HTTP / CLI / run_action / Workflow / Web UI) ----
       registerWorkflowActions(ctx, {
         workflows,
-        isolation,
         assertCanSpawn: (conversationId) => registry.assertCanSpawn(conversationId),
         syncRunsDoc: () => projection.sync(),
       })

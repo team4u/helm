@@ -573,9 +573,9 @@ test('workflow run 动作：input.conversationId 与调用上下文冲突显式�
 // 6. cleanup_worktree 工具错误信封诚实性（真实插件路径：WorktreeAllocator 自有 Git 能力）
 // ---------------------------------------------------------------------------
 
-/** 预置一条 active 受管 worktree 登记（插件私有 doc 键为 `builtin:workflow:worktree-state`）。 */
+/** 预置一条 active 受管 worktree 登记（插件私有 doc 键为 `builtin:worktree:worktree-state`）。 */
 function seedManagedWorktree(docStore: MemoryDocStore): void {
-  docStore.set('builtin:workflow:worktree-state', {
+  docStore.set('builtin:worktree:worktree-state', {
     'runtime/worktrees': {
       version: 1,
       records: [{
@@ -593,7 +593,9 @@ test('cleanup_worktree 工具：错误分支仅 ok:false+error，绝不伪造空
   const host = makeHost()
   seedManagedWorktree(docs)
   const { createWorkflowPlugin } = await import('../src/workflow.js')
+  const { createWorktreePlugin } = await import('../src/worktree.js')
   await host.register(createWorkflowPlugin())
+  await host.register(createWorktreePlugin())
   const raw = (await host.executeTool('cleanup_worktree', { conversationId: 1 }, {
     conversationId: 1,
     callId: 'call-1',
@@ -609,8 +611,8 @@ test('cleanup_worktree 工具：错误分支仅 ok:false+error，绝不伪造空
 test('cleanup_worktree 工具错误信封：structuredOutput 仅 { ok:false, error }，无伪造 metadata', { timeout: 60_000 }, async () => {
   // 无登记选择器未命中：not_found 诊断同样只走 ok:false+error 信封。
   const host = makeHost()
-  const { createWorkflowPlugin } = await import('../src/workflow.js')
-  await host.register(createWorkflowPlugin())
+  const { createWorktreePlugin } = await import('../src/worktree.js')
+  await host.register(createWorktreePlugin())
   const raw = (await host.executeTool('cleanup_worktree', { conversationId: 2 }, toolContext())) as {
     output: Array<{ type: string; text: string }>
     isError?: boolean

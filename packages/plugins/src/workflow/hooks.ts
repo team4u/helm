@@ -2,9 +2,8 @@
  * builtin:workflow 生命周期 Hook 与宿主事件订阅（自 workflow.ts 入口拆出）。
  *
  * 注册面（与入口组装顺序一致）：
- * - agent_spawn 深度守卫（priority 300 = 最外层，先于 worktree 分配拒绝）；
- * - agent_spawn around（continuation）：worktree 隔离完整生命周期
- *   （priority 200，先于外部运行时接管器如 herdr 的 100）；
+ * - agent_spawn 深度守卫（priority 300 = 最外层，先于 worktree 分配拒绝；
+ *   worktree 隔离的 around 200 归 builtin:worktree 插件注册）；
  * - before_turn：达到子树上限的受管子代理回合剥离派工工具（防线一）；
  * - turn_settled（outcome=aborted）：级联取消该会话子树内属于它的 run；
  * - 宿主事件：conversation.upsert / conversation.deleted 触发 runs 重投影；
@@ -13,7 +12,6 @@
 import { HelmxError, type HelmxPluginContext } from '@helmx/protocol'
 import { HARD_MAX_SUBAGENT_DEPTH, parseWorkflowSpawnMeta } from '../contracts.js'
 import { DIAGNOSTICS_COLLECT_EVENT, appendProbes, parseCollection } from '../diagnostics.js'
-import type { WorktreeIsolation } from './isolation.js'
 import type { WorkflowService } from './engine/index.js'
 import type { ManagedSubagentRegistry } from './depth.js'
 import type { RunsProjection } from './projection.js'
@@ -21,7 +19,6 @@ import { depthExceededError } from './depth.js'
 
 interface WorkflowHookDeps {
   registry: ManagedSubagentRegistry
-  isolation: WorktreeIsolation
   workflows: WorkflowService
   projection: RunsProjection
 }
@@ -36,11 +33,11 @@ function extractDeletedConversationId(payload: unknown): number | undefined {
 }
 
 export function registerWorkflowHooks(ctx: HelmxPluginContext, deps: WorkflowHookDeps): void {
-  const { registry, isolation, workflows, projection } = deps
+  const { registry, workflows, projection } = deps
 
   // ---- agent_spawn 深度守卫（兜底防线；priority 300 = 最外层） ----
-  // 先于 isolation（200）执行：受管子代理的派生请求在 worktree 分配之前
-  // 显式拒绝；成功派生（onResolved 回传 conversationId）登记进事实表——
+  // 先于 builtin:worktree 的隔离 around（200）执行：受管子代理的派生请求在
+  // worktree 分配之前显式拒绝；成功派生（onResolved 回传 conversationId）登记进事实表——
   // 任何入口（同步工具 / 后台 run / 引擎节点 / 未来调用方）派生的子会话
   // 都被记账，重启后依旧生效。
   ctx.hook.onAgentSpawn(async (request, next) => {
@@ -95,13 +92,6 @@ export function registerWorkflowHooks(ctx: HelmxPluginContext, deps: WorkflowHoo
     })
   }, { priority: 300 })
 
-  // ---- agent_spawn around（continuation）：worktree 隔离完整生命周期 ----
-  // priority 200：先于外部运行时接管器（如 herdr 的 100）执行 = 更外层，
-  // 外部执行同样被租约与登记包襄；不调 next 的接管器（handled）不受影响。
-  ctx.hook.onAgentSpawn(async (request, next) => {
-    await isolation.aroundSpawn(request, next)
-  }, { priority: 200 })
-
   // ---- before_turn：达到子树上限的受管子代理回合剥离派工工具（防线一） ----
   // 一层子代理默认未达上限（depth=1 < 2），保留 subagent / SubagentWorkflow
   // 可继续派二层；仅叶子（depth ≥ 子树上限）剥离。默认优先级先于 profile
@@ -152,20 +142,19 @@ export function registerWorkflowHooks(ctx: HelmxPluginContext, deps: WorkflowHoo
       const deletedId = extractDeletedConversationId(raw)
       if (deletedId !== undefined) {
         registry.pruneConversation(deletedId)
-        isolation.pruneConversation(deletedId)
       }
     }
     projection.reprojectOnConversationDeleted()
   })
 
-  // ---- 启动后收敛遗留原生子会话与已停止原生 Worktree 崩溃租约 ----
+  // ---- 启动后收敛遗留原生子会话 ----
   // KernelRuntime.start() 在 pluginHost.start() -> harness.resume() -> started=true
-  // 之后发送进程内 runtime.started；先等恢复收集的遗留子会话收敛 idle，
-  // 再回收可证明已无执行的原生 Worktree 崩溃租约。
+  // 之后按监听器注册顺序逐个 await 发送进程内 runtime.started；本插件先等
+  // 恢复收集的遗留子会话收敛 idle（组合根保证 builtin:worktree 在本插件之后
+  // 注册，其崩溃租约回收监听器随后执行，见 worktree.ts 的顺序约束注释）。
   ctx.host.onEvent('runtime.started', async () => {
     workflows.startDeferredReattaches()
     await workflows.awaitPreparedChildrenSettled()
-    await isolation.reconcileStoppedNativeLeases()
   })
 
   // 只把账本已证明可安全续跑的后台失败 Run 交给 Watchdog。

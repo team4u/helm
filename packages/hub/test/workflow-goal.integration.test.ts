@@ -432,7 +432,7 @@ describe('T3 3-level nested identical plan labels and resumeFromRunId checkpoint
       'if (!merge.ok) throw new Error("mod-a merge failed: " + merge.output)\n' +
       'let cleaned = null\n' +
       'if (args.linux) {\n' +
-      '  const c = await action("builtin:workflow.cleanup_worktree", { worktreeId: g.execution.worktree.id, deleteBranch: true }, { idempotent: true, label: "cleanup-a" })\n' +
+      '  const c = await action("builtin:worktree.cleanup_worktree", { worktreeId: g.execution.worktree.id, deleteBranch: true }, { idempotent: true, label: "cleanup-a" })\n' +
       '  cleaned = c.removed === true\n' +
       '}\n' +
       'const signal = await action("env.exec", { command: ' +

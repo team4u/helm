@@ -1,5 +1,5 @@
 /**
- * Integration tests for `builtin:workflow` read-only managed worktree inspection (`list_worktrees` /
+ * Integration tests for `builtin:worktree` read-only managed worktree inspection (`list_worktrees` /
  * `inspect_worktree` actions).
  *
  * Covers (via real `createHelmx` + faux model + temp real Git repo + public plugin actions):
@@ -15,7 +15,7 @@
  *    files preserve the true `dirtyFileCount`.
  *
  * Contract discipline: read-only inspection never mutates the worktree; everything runs against real
- * `createHelmx` + `builtin:workflow` public actions without mocking git.
+ * `createHelmx` + `builtin:worktree` public actions without mocking git.
  *
  * Runner: `tsx --test`; every test declares `{ timeout: 60_000 }`.
  */
@@ -28,7 +28,7 @@ import { join } from 'node:path'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import { HelmxError } from '@helmx/protocol'
-import { extractWorkflowExecutionMeta } from '@helmx/plugins/contracts'
+import { extractWorktreeExecutionMeta } from '@helmx/plugins/contracts'
 import {
   createGitTemplate,
   createHubTestApp,
@@ -37,9 +37,9 @@ import {
   type HubTestApp,
 } from './helpers/hub-test-env.js'
 
-/** Extracts managed worktree metadata from execution info (namespaced by workflow). */
+/** Extracts managed worktree metadata from execution info (namespaced by builtin:worktree). */
 function worktreeOf(info: AgentExecutionInfo | undefined) {
-  return info === undefined ? undefined : extractWorkflowExecutionMeta(info).worktree
+  return info === undefined ? undefined : extractWorktreeExecutionMeta(info).worktree
 }
 
 /**
@@ -85,15 +85,15 @@ async function openRuntime(dataDir: string, cwd: string): Promise<RuntimeEnv> {
     faux,
     invoke: {
       listWorktrees: async (): Promise<Array<Record<string, unknown>>> => {
-        const result = (await kernel.plugins.invokeAction('builtin:workflow', 'list_worktrees', {})) as {
+        const result = (await kernel.plugins.invokeAction('builtin:worktree', 'list_worktrees', {})) as {
           worktrees: Array<Record<string, unknown>>
         }
         return result.worktrees
       },
       inspectWorktree: (input) =>
-        kernel.plugins.invokeAction('builtin:workflow', 'inspect_worktree', input) as never,
+        kernel.plugins.invokeAction('builtin:worktree', 'inspect_worktree', input) as never,
       cleanupWorktree: (input) =>
-        kernel.plugins.invokeAction('builtin:workflow', 'cleanup_worktree', input) as never,
+        kernel.plugins.invokeAction('builtin:worktree', 'cleanup_worktree', input) as never,
     },
     async close() {
       await app.close().catch(() => {})
@@ -122,7 +122,7 @@ async function spawnCleanWorktree(env: RuntimeEnv): Promise<{ worktreeId: string
   }
 }
 
-describe('builtin:workflow managed worktree read-only inspection actions', { timeout: 60_000 }, () => {
+describe('builtin:worktree managed worktree read-only inspection actions', { timeout: 60_000 }, () => {
   it('lists real metadata after spawn and inspects real git state (dirty files, commits, diff)', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't1')
     const repo = gitTemplate.cloneTo(join(dir, 'repo'))

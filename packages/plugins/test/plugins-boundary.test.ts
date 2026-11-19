@@ -66,7 +66,7 @@ describe('@helmx/plugins 架构边界守护', () => {
     const files = collectSourceFiles(pluginsSrc)
     // 防呆：扫描必须有实质产出（防路径错误导致零扫描静默通过）。
     assert.ok(files.length >= 20, `plugins 源码文件数异常（${files.length} < 20），扫描可能指向了错误目录`)
-    for (const known of ['workflow.ts', 'superagent.ts', 'profile.ts', join('workflow', 'worktree.ts')]) {
+    for (const known of ['workflow.ts', 'worktree.ts', 'superagent.ts', 'profile.ts', join('worktree', 'worktree.ts'), join('worktree', 'isolation.ts'), join('workflow', 'engine', 'index.ts')]) {
       assert.ok(files.some((f) => f === join(pluginsSrc, known)), `未扫描到已知源码文件 ${known}（扫描器异常）`)
     }
 
