@@ -24,6 +24,7 @@
 | :--- | :--- |
 | `#/c/<id>` | 会话 |
 | `#/a/<profileId>` | 智能体待命页 |
+| `#/overview` | 会话总览（只读宿主视图，对话空间：根会话树卡片网格 + 筛选，卡面/后代芯片复用既有会话抽屉直达） |
 | `#/views/<pluginId>/<screenId>` | 插件全屏视图 |
 | `#/settings/profiles[/<profileId>]` | 角色中心 |
 | `#/settings/models[/<providerId> \| /defaults \| /<providerId>/defaults]` | 模型中心（`defaults` 保留段 = 全局默认 Tab） |

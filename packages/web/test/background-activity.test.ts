@@ -435,10 +435,24 @@ function renderSidebar(store: HelmxExternalStore): string {
   return renderToString(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
 }
 
+/**
+ * Drop the cross-agent attention flat group before counting standings/section
+ * rows and lights: its rows intentionally add one more single-light row per
+ * qualifying tree (covered by attention-model.test.ts); stripping keeps these
+ * assertions scoped to the agent-standings/sidebar-section row semantics.
+ */
+function withoutAttentionGroup(html: string): string {
+  const start = html.indexOf('sidebar-attention-group')
+  if (start < 0) return html
+  const standings = html.indexOf('agent-standing-group', start)
+  if (standings < 0) return html.slice(0, start)
+  return html.slice(0, start) + html.slice(standings)
+}
+
 /** Count conversation status lights (excluding the ActivityRail SSE status-dot-connected dot). */
 function countStatusLights(html: string): number {
   return (
-    html.match(/class="status-dot(?: status-dot-(?:working|blocked|done|error|background))?"/g) ?? []
+    withoutAttentionGroup(html).match(/class="status-dot(?: status-dot-(?:working|blocked|done|error|background))?"/g) ?? []
   ).length
 }
 
@@ -554,9 +568,9 @@ test('expanded state: the standing row does not duplicate the indicator; each ch
   // each of the three child rows carries one light (done green dot / background hollow ring / error status light); the standing row duplicates none
   assert.equal(countStatusLights(html), 3, 'expanded state: exactly one light per child row, none on the standing row')
   assert.equal(
-    (html.match(/status-dot-background/g) ?? []).length,
+    (withoutAttentionGroup(html).match(/status-dot-background/g) ?? []).length,
     1,
-    'the background hollow ring appears exactly once on its own child row',
+    'the background hollow ring appears exactly once on its own child row (attention rows excluded)',
   )
 })
 
@@ -589,7 +603,7 @@ test('collapsed standing row: non-primary background in flight + representative 
       'builtin:workflow/run-badges': badgesDoc({ '2': { count: 4, tone: 'accent', footerText: '4 Running' } }),
     },
   })
-  const blockedHtml = renderSidebar(blockedStore)
+  const blockedHtml = withoutAttentionGroup(renderSidebar(blockedStore))
   assert.ok(blockedHtml.includes('class="status-dot status-dot-blocked"'), 'the representative blocked status light surfaces')
   assert.ok(!blockedHtml.includes('status-dot-background'), 'with the representative blocked, the whole standing background ring hides')
   assert.ok(!blockedHtml.includes('background task'), 'the tooltip shows only the representative status')
@@ -729,9 +743,10 @@ test('leading fixed light slot: working/done/idle+background lights all sit befo
     'the idle row keeps its empty slot (no light renders, the slot remains)',
   )
   // slot count matches row count: every conversation row (nav-item-sub) and every standing row carries exactly one nav-status-slot
-  const subRows = (html.match(/class="nav-item nav-item-sub/g) ?? []).length
-  const standingRows = (html.match(/class="nav-item agent-standing-row/g) ?? []).length
-  const slots = (html.match(/class="nav-status-slot"/g) ?? []).length
+  const scoped = withoutAttentionGroup(html)
+  const subRows = (scoped.match(/class="nav-item nav-item-sub/g) ?? []).length
+  const standingRows = (scoped.match(/class="nav-item agent-standing-row/g) ?? []).length
+  const slots = (scoped.match(/class="nav-status-slot"/g) ?? []).length
   assert.equal(subRows, 4, 'all four conversation child rows render')
   assert.equal(slots, subRows + standingRows, 'every conversation row has a light slot (idle empty slots count too); standing rows have slots as well')
 })

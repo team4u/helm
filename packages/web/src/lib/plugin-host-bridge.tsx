@@ -10,6 +10,11 @@ import { PluginClientHostContext } from '@helmx/plugin-client'
 import { createLocaleTranslator } from '@helmx/protocol/browser'
 import type { HelmxExternalStore } from './helmx-store.js'
 import { createPluginClientHostPort } from './plugin-client-host.js'
+import { createWebTranslator } from '../i18n/catalog.js'
+import {
+  collectBackgroundBadgeDocs,
+  summarizeConversationBackgroundActivity,
+} from '../shell/background-activity-model.js'
 
 export function PluginClientHostBridge({ store, children }: { store: HelmxExternalStore; children: React.ReactNode }) {
   const subscribe = useCallback((listener: () => void) => store.subscribeDomain('pluginHostPort', listener), [store])
@@ -41,6 +46,19 @@ export function PluginClientHostBridge({ store, children }: { store: HelmxExtern
       }),
       locale: slice.locale,
       translate: createLocaleTranslator(slice.locale),
+      // 插件 SDK 共享的宿主标准后台在途快照（与侧栏灯环同一聚合口径）：
+      // badge doc 尚未首次加载时 unknown=true，插件必须渲染「未知」而非「无后台任务」。
+      conversationBackground: {
+        unknown: collectBackgroundBadgeDocs(slice.groupedUi.workbenchPanels, slice.conversations).some((ref) =>
+          Object.hasOwn(slice.pluginDocs, `${ref.pluginId}/${ref.doc}`) === false,
+        ),
+        byConversation: summarizeConversationBackgroundActivity({
+          panels: slice.groupedUi.workbenchPanels,
+          conversations: slice.conversations,
+          pluginDocs: slice.pluginDocs,
+          t: createWebTranslator(slice.locale),
+        }),
+      },
     }),
     [slice, store],
   )

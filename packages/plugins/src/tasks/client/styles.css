@@ -1,0 +1,688 @@
+/* builtin:tasks task board styles (host CSS variables adapt to dark/light themes, zero Emoji).
+   Only task-board-specific layout lives here: the four-column grid, cards, the
+   submission summary block, the mobile clear-down flow and the centered create /
+   rework modals. Generic primitives (search box, drawer shell, buttons, badges,
+   status dots, trace rows) reuse the host design-system classes. */
+
+.task-board {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+  /* Container queries make the column grid adapt to the REAL pane width (split
+     view / narrow windows), which viewport media queries cannot see. */
+  container-type: inline-size;
+}
+
+/* ---- Top bar & toolbar ---- */
+
+.task-board-topbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.task-board-title-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.task-board-title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+.task-board-subtitle {
+  font-size: 12px;
+}
+
+.task-board-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px 10px;
+  flex-wrap: wrap;
+}
+
+.task-board-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.task-board-filter {
+  width: 150px;
+}
+
+.task-board-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+/* ---- Desktop four-column board ---- */
+
+.task-board-desktop {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.task-board-columns {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(220px, 1fr));
+  gap: 10px;
+  align-items: start;
+}
+
+@media (max-width: 1080px) {
+  .task-board-columns {
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+  }
+}
+
+/* Narrow containers (split panes, half-width windows): same degradation driven by
+   the actual board width; one column below the mobile breakpoint so cards never
+   overflow horizontally. */
+@container (max-width: 1080px) {
+  .task-board-columns {
+    grid-template-columns: repeat(2, minmax(180px, 1fr));
+  }
+}
+
+@container (max-width: 720px) {
+  .task-board-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
+.task-column {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-column-header {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 2px 2px 0;
+}
+
+.task-column-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-column-header .badge {
+  flex-shrink: 0;
+}
+
+.task-column-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-column-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 14px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  color: var(--fg-subtle);
+  font-size: 11.5px;
+  text-align: center;
+}
+
+/* ---- Task card ---- */
+
+.task-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  cursor: pointer;
+  position: relative;
+}
+
+.task-card:hover {
+  border-color: var(--fg-muted);
+}
+
+.task-card.is-attention {
+  border-color: var(--warn);
+}
+
+.task-card.is-clickless {
+  cursor: default;
+}
+
+.task-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.task-card-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+
+.task-card-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.task-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
+.task-card-id {
+  font-size: 10.5px;
+  color: var(--fg-muted);
+  font-family: var(--font-mono, monospace);
+  flex-shrink: 0;
+}
+
+.task-card-tools {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.task-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.task-card-meta .mono {
+  font-family: var(--font-mono, monospace);
+}
+
+.task-card-live {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+  line-height: 1.4;
+}
+
+.task-card-live-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-card-live.is-error .task-card-live-text {
+  color: var(--err);
+}
+
+.task-card-live.is-attention .task-card-live-text {
+  color: var(--warn);
+}
+
+.task-card-elapsed {
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+  font-family: var(--font-mono, monospace);
+  flex-shrink: 0;
+}
+
+.task-card-flags {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.task-card-flags .badge {
+  font-size: 10px;
+}
+
+/* Submission summary block (In Review cards) */
+
+.task-card-submission {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+.task-card-submission-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+.task-card-submission-summary {
+  font-size: 11.5px;
+  color: var(--fg-secondary);
+  line-height: 1.45;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+.task-card-submission-facts {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  font-size: 10.5px;
+  color: var(--fg-muted);
+}
+
+.task-card-submission-facts .mono {
+  font-family: var(--font-mono, monospace);
+}
+
+/* Dependency row (Backlog cards) */
+
+.task-card-deps {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+.task-card-deps .badge {
+  font-size: 10px;
+}
+
+.task-card-deps-waiting {
+  color: var(--warn);
+}
+
+/* Current rework context line (reworked in-progress cards). */
+.task-card-rework {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  min-width: 0;
+}
+
+.task-card-rework-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Card footer actions */
+
+.task-card-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  margin-top: auto;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+
+.task-card-footer-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ---- Mobile clear-down flow (<=680px) ---- */
+
+.task-board-mobile {
+  display: none;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.task-board-mobile-tabs {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+}
+
+/* Five label+count capsules must fit narrow viewports (~375px): equal flex
+   shrink, compact padding, single-line ellipsized labels and shrunken badges. */
+@media (max-width: 680px) {
+  .task-board-mobile-tabs .segmented-control-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    padding: 0 6px;
+    gap: 4px;
+  }
+
+  .task-board-mobile-tabs .segmented-control-btn > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .task-board-mobile-tabs .segmented-control-btn .badge {
+    flex-shrink: 0;
+    padding: 0 4px;
+    font-size: 10px;
+  }
+}
+
+.task-board-mobile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+@media (max-width: 680px) {
+  .task-board-desktop {
+    display: none;
+  }
+
+  .task-board-mobile {
+    display: flex;
+  }
+
+  .task-board-toolbar {
+    width: 100%;
+  }
+
+  .task-board-filter {
+    width: 100%;
+  }
+
+  .task-board-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+
+  .task-board-actions .btn {
+    flex: 1;
+  }
+
+  /* Necessary card actions stay thumb-reachable: full-width wrapped rows. */
+  .task-card-footer-actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .task-card-footer-actions .btn {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  /* Detail drawer footer actions reach full width on phones. */
+  .task-detail-drawer .primary-drawer-footer {
+    flex-wrap: wrap;
+  }
+
+  .task-detail-drawer .primary-drawer-footer .btn {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+}
+
+/* ---- Board empty & loading states ---- */
+
+.task-board-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 48px 16px;
+  color: var(--fg-muted);
+}
+
+.task-board-empty-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+.task-board-empty-hint {
+  font-size: 12px;
+  text-align: center;
+  max-width: 420px;
+  line-height: 1.5;
+}
+
+/* ---- Centered create / rework modals (host .modal shell + task-specific form) ---- */
+
+.task-modal {
+  width: min(560px, 100vw);
+}
+
+.task-modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.task-form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.task-form-label {
+  font-size: 12px;
+  color: var(--fg-secondary);
+}
+
+.task-form-field input,
+.task-form-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 13px;
+  padding: 7px 9px;
+  outline: none;
+}
+
+.task-form-field textarea {
+  min-height: 72px;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.task-form-field input:focus,
+.task-form-field textarea:focus {
+  border-color: var(--accent);
+}
+
+.task-form-field-error {
+  font-size: 11.5px;
+  color: var(--err);
+}
+
+.task-form-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+@media (max-width: 680px) {
+  .task-form-grid-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.task-form-switches {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
+.task-form-switch-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.task-form-switch-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.task-form-switch-label {
+  font-size: 12.5px;
+  color: var(--fg);
+}
+
+.task-form-switch-desc {
+  font-size: 11px;
+  color: var(--fg-subtle);
+}
+
+.task-modal-error {
+  font-size: 12px;
+  color: var(--err);
+}
+
+.task-modal-footer {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+}
+
+/* ---- Detail drawer (shell reuses .primary-drawer-*) ---- */
+
+.task-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-detail-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+.task-detail-brief {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--fg-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+.task-detail-deps {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.task-detail-dep-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+}
+
+.task-detail-dep-row .mono {
+  font-family: var(--font-mono, monospace);
+}
+
+.task-detail-delete-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  justify-content: flex-end;
+}
+
+.task-detail-delete-confirm span {
+  margin-right: auto;
+  font-size: 12.5px;
+}
+
+/* ---- Tool-trace receipt extras (base row reuses the host .trace-row) ---- */
+
+.task-trace-summary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-trace-error {
+  color: var(--err);
+}

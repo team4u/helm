@@ -13,6 +13,7 @@ import { createTriggersPlugin } from '@helmx/plugins/triggers';
 import { createMagpiePlugin } from '@helmx/plugins/magpie';
 import { createAppsPlugin } from '@helmx/plugins/apps';
 import { createTokenSpeedPlugin } from '@helmx/plugins/token-speed';
+import { createTasksPlugin } from '@helmx/plugins/tasks';
 
 export type HelmxOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'>;
 
@@ -27,7 +28,7 @@ export async function createHelmx(options: HelmxOptions = {}) {
     autoResume: false,
   });
   try {
-    // Default-enabled (11): profile (locked), workflow, worktree, swarm, memory, json-render, mermaid, apps, triggers, magpie, token-speed.
+    // Default-enabled (12): profile (locked), workflow, worktree, swarm, memory, json-render, mermaid, apps, triggers, magpie, token-speed, tasks.
     await kernel.plugins.register(createProfilePlugin());
     // Registration-order invariant: workflow MUST be registered before worktree. KernelRuntime.start() awaits
     // runtime.started listeners in registration order: workflow first converges leftover child conversations to
@@ -43,6 +44,7 @@ export async function createHelmx(options: HelmxOptions = {}) {
     await kernel.plugins.register(createTriggersPlugin());
     await kernel.plugins.register(createMagpiePlugin());
     await kernel.plugins.register(createTokenSpeedPlugin());
+    await kernel.plugins.register(createTasksPlugin());
     // Default-disabled (2, opt-in): herdr, superagent.
     await kernel.plugins.register(createHerdrPlugin(), { enabled: false });
     await kernel.plugins.register(createSuperAgentPlugin(), { enabled: false });

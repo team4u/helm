@@ -688,3 +688,43 @@
 
 /* 话题切换已回归左栏手风琴（仅展开当前智能体），顶栏恢复单行标题。 */
 
+
+/* 态势平铺分组（跨角色活跃/待关注）：行结构与插件分组行同构的单灯位行，
+ * 标题下挂一行极简副信息（角色名 + 真实动作/子任务数，muted 单行省略），
+ * 不与下方智能体站位分组重复占位——空时整组不渲染。 */
+.sidebar-attention-group .attention-row {
+  min-height: 32px;
+}
+
+.attention-row-body {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.attention-row-sub {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+  line-height: 1.35;
+}
+
+.sidebar-attention-header-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--fg-muted);
+}
+
+.sidebar-attention-header-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}

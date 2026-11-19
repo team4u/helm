@@ -68,7 +68,7 @@ export type HookName =
 
 | 方法 | surface | 说明 |
 | :--- | :--- | :--- |
-| `sidebarItem(spec)` | `sidebar.item` | 左栏导航项；`target` 如 `'conversation:1'`、`'screen:builtin:superagent/recall-graph'` |
+| `sidebarItem(spec)` | `sidebar.item` | 左栏导航项；`target` 如 `'conversation:1'`、`'screen:builtin:superagent/recall-graph'`；`quickEntry: true` 且目标为 screen 时，宿主在折叠 Rail / 移动抽屉常驻一键入口（目标 screen 必须实际存在，插件停用后随贡献即时消失） |
 | `sidebarSection(spec)` | `sidebar.section` | 可折叠分组；`filterTag` 过滤会话（如已归档 worker 分组） |
 | `screen(spec)` | `screen` | 全屏自定义视图，支持左右 Split View 并排展示 |
 | `timelineRenderer(spec)` | `timeline.renderer` | 按 `kinds`（entry kind 列表）与 `matchMeta`（`data.renderer` 匹配，AND 组合）接管时间线条目 |

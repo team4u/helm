@@ -34,4 +34,21 @@ export { createMagpiePlugin, MAGPIE_PLUGIN_ID } from './magpie.js';
 export { MAGPIE_PROVIDER_ID, type MagpiePluginConfig, type MagpieStatusDoc } from './magpie/contracts.js';
 export { createTokenSpeedPlugin, TOKEN_SPEED_PLUGIN_ID } from './token-speed.js';
 export { TOKEN_SPEED_DOC, type TokenSpeedStatus } from './token-speed/contracts.js';
+export {
+  createTasksPlugin,
+  TASKS_PLUGIN_ID,
+  TASKS_SKILL_ID,
+  TASK_ACTIVE_TAG,
+  TASK_ARCHIVED_TAG,
+  ACTIVE_TASK_SECTION_ID,
+  type TaskColumn,
+  type TaskRecord,
+  type TaskSubmission,
+  type TaskSilenceState,
+  type TaskPlanApproval,
+  type TaskBoardDoc,
+  type TaskBoardEntry,
+  type TasksConfig,
+} from './tasks.js';
+export { resolveTasksConfig, detectDependencyCycle, projectBoardDoc } from './tasks/contracts.js';
 export type { HerdrPluginDependencies, HerdrTransport, HerdrTarget, HerdrEvent } from './herdr/contracts.js';

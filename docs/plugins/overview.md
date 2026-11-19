@@ -4,7 +4,7 @@
 
 ## 当前状态
 
-插件系统是 Helmx 的核心生产能力：内核（`@helmx/kernel`）只保留持久会话、跨节点执行底座、Model/Auth 与插件宿主四块通用机制，其余一切业务能力由插件承载。官方插件实现与资产位于 `packages/plugins`，由产品组合根 `packages/hub/src/app.ts` 的 `createHelmx` 注册，共 13 个内置插件：
+插件系统是 Helmx 的核心生产能力：内核（`@helmx/kernel`）只保留持久会话、跨节点执行底座、Model/Auth 与插件宿主四块通用机制，其余一切业务能力由插件承载。官方插件实现与资产位于 `packages/plugins`，由产品组合根 `packages/hub/src/app.ts` 的 `createHelmx` 注册，共 14 个内置插件：
 
 | 插件 ID | 名称 | 职责一句话 | 默认状态 | locked |
 | :--- | :--- | :--- | :--- | :--- |
@@ -21,6 +21,7 @@
 | `builtin:superagent` | SuperAgent 中枢 | 双层中枢（总控路由 + 驻留 Worker）与两层巡检看门狗 | 停用 | 否 |
 | `builtin:magpie` | Magpie 网关 | 动态模型网关接入：目录、配额与路由组诊断 | 启用 | 否 |
 | `builtin:token-speed` | Token 速率 | 输入区状态行实时解码速率（只读展示，内核零速率计算） | 启用 | 否 |
+| `builtin:tasks` | 任务看板 | 把工作单元派发到独立顶层执行会话并在四列看板上跟踪：依赖链自动接棒、交卷/验收/返工闭环与事件驱动防沉默 | 启用 | 否 |
 
 内核包自身不注册任何插件；同一注册点还会调用 `loadExternalPlugins` 从 `<dataDir>/plugins/` 目录加载用户放入的外部插件（默认停用）。各插件的深度文档见文末「相关文档」。
 
@@ -121,7 +122,7 @@
 
 ## 相关文档
 
-- 各内置插件深度文档：[workflow](workflow.md) · [worktree](worktree.md) · [swarm](swarm.md) · [profile](profile.md) · [memory](memory.md) · [apps](apps.md) · [herdr](herdr.md) · [superagent](superagent.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md)
+- 各内置插件深度文档：[workflow](workflow.md) · [worktree](worktree.md) · [swarm](swarm.md) · [profile](profile.md) · [memory](memory.md) · [apps](apps.md) · [herdr](herdr.md) · [superagent](superagent.md) · [triggers](triggers.md) · [magpie](magpie.md) · [json-render](json-render.md) · [mermaid](mermaid.md) · [token-speed](token-speed.md) · [tasks](tasks.md)
 - [插件开发实战](plugin-development.md)：从 `helmx plugins init` 到 doctor / rescan / enable / reload 的完整闭环
 - [生命周期 Hook 与全界面扩展点](../architecture/extension-points.md)：7 个 Hook 与 16 个 UI surface 的逐项契约
 - [微内核架构总览](../architecture/overview.md)：内核四块机制与包依赖方向

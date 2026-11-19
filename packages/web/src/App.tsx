@@ -23,6 +23,8 @@ import { HelmxStoreProvider } from './lib/HelmxStoreProvider.js'
 import {
   useActiveModal,
   useAuthConnection,
+  useConversations,
+  useGroupedUi,
   useLocationTargets,
   useProfilesSlice,
   useSidebarCollapsed,
@@ -36,6 +38,7 @@ import {
   type WorkspaceLocationState,
 } from './lib/url-hash-model.js'
 import { ScreenHost } from './screens/ScreenHost.js'
+import { ConversationOverview } from './overview/ConversationOverview.js'
 import { AuthGate } from './shell/AuthGate.js'
 import { Sidebar } from './shell/Sidebar.js'
 import { ToastOverlay } from './shell/ToastOverlay.js'
@@ -43,6 +46,9 @@ import { TooltipProvider } from './ui/Tooltip.js'
 import { useQuietNotifier } from './shell/use-quiet-notifier.js'
 import { useVersionWatcher } from './shell/use-version-watcher.js'
 import { versionDeferHint } from './shell/version-watch-model.js'
+import { useGlobalAttention } from './shell/use-attention-indicator.js'
+import { extractRailQuickEntries } from './shell/sidebar-model.js'
+import { MobileQuickNav } from './shell/MobileQuickNav.js'
 
 /** SSE 断线横幅展示防抖：短于 1500ms 的瞬断或页面初始握手不闪现重连提示。 */
 const CONNECTION_BANNER_DELAY_MS = 1500
@@ -183,7 +189,7 @@ function HelmxShellInner() {
   const { workbenchOpen, workbenchTab } = useWorkbenchState()
   const activeModal = useActiveModal()
   const { setActiveModal, setFocusedPanel, checkAuth, closeSplit } = useStoreActions()
-  const { t } = useWebLocale()
+  const { locale, t } = useWebLocale()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [showConnectionBanner, setShowConnectionBanner] = useState(false)
   const [bootLanding] = useState<{ needsHomeLanding: boolean; initialLocation: WorkspaceLocationState | null }>(() => {
@@ -201,6 +207,16 @@ function HelmxShellInner() {
 
   // Version awareness and auto refresh: mounted once globally (sleeps when no production entry is detected).
   const versionWatch = useVersionWatcher()
+  // 全局并发态势（与桌面折叠 Rail 同源 indicator；排除正在查看的根树）。
+  // 抽屉关闭时也保持计算——badge doc 的发现与按需加载内聚在 Hook；移动端
+  // 快捷导航簇与 Rail 微标共用同一 indicator。
+  const attention = useGlobalAttention()
+  const groupedUi = useGroupedUi()
+  const conversations = useConversations()
+  // 首个插件全局快捷入口（sidebar.item quickEntry，仅认当前启用插件真实存在
+  // 的 screen）：移动端免开汉堡一键直达（如任务看板）。
+  const firstQuickEntry =
+    extractRailQuickEntries(groupedUi.sidebarItems, groupedUi.screens, conversations, locale)[0] ?? null
   const closeModal = useCallback(() => setActiveModal(null), [setActiveModal])
   const focusPrimary = useCallback(() => setFocusedPanel?.('primary'), [setFocusedPanel])
   const focusSplit = useCallback(() => setFocusedPanel?.('split'), [setFocusedPanel])
@@ -277,7 +293,7 @@ function HelmxShellInner() {
   return (
     <LazyRetryContext.Provider value={versionWatch.clearPreloadError}>
       <div
-        className={`helmx-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}`}
+        className={`helmx-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}${firstQuickEntry !== null ? ' mq-quick-on' : ''}`}
         onClick={(event) => {
           const target = event.target as HTMLElement
           if (target.closest('.nav-item')) {
@@ -293,6 +309,9 @@ function HelmxShellInner() {
         >
           <HelmxIcon name="menu" />
         </button>
+        {/* 移动端免开汉堡的一键直达：首个 quickEntry 插件视图 + 会话总览
+            （态势微标独立可按）；桌面由折叠 Rail 承担同源入口，此处渲染 null。 */}
+        <MobileQuickNav indicator={attention.indicator} quickEntry={firstQuickEntry} />
         {sidebarOpen && (
           <button
             type="button"
@@ -361,6 +380,8 @@ function HelmxShellInner() {
                         pluginId={primaryTarget.pluginId}
                         screenId={primaryTarget.screenId}
                       />
+                    ) : primaryTarget.kind === 'overview' ? (
+                      <ConversationOverview key="primary-overview" />
                     ) : primaryTarget.kind === 'plugins' ? (
                       <PluginCenter key="primary-plugins" />
                     ) : primaryTarget.kind === 'profiles' ? (
@@ -410,6 +431,8 @@ function HelmxShellInner() {
                       isSplit
                       onCloseSplit={closeSplit}
                     />
+                  ) : splitTarget.kind === 'overview' ? (
+                    <ConversationOverview key="split-overview" isSplit onCloseSplit={closeSplit} />
                   ) : splitTarget.kind === 'plugins' ? (
                     <PluginCenter key="split-plugins" isSplit onCloseSplit={closeSplit} />
                   ) : splitTarget.kind === 'profiles' ? (

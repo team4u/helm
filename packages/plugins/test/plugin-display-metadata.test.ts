@@ -7,7 +7,7 @@
  *   promptGuidelines、cli.description 与 input/outputSchema 内全部
  *   description 机器描述）固定英文：类型为纯 string（不得变 LocalizedText）
  *   且不含中文字符；
- * - 采集方式：对 13 个内置插件工厂以全透传录制 ctx 执行 definePlugin，
+ * - 采集方式：对 14 个内置插件工厂以全透传录制 ctx 执行 definePlugin，
  *   只读登记事实，不 mock 行为（getConfig 返回空对象触发缺省路径）。
  */
 import { test } from 'node:test'
@@ -32,6 +32,7 @@ import { createHerdrPlugin } from '../src/herdr.js'
 import { createSuperAgentPlugin } from '../src/superagent.js'
 import { createMagpiePlugin } from '../src/magpie.js'
 import { createTokenSpeedPlugin } from '../src/token-speed.js'
+import { createTasksPlugin } from '../src/tasks.js'
 
 const timeout = { timeout: 60_000 } as const
 
@@ -50,6 +51,7 @@ const FACTORIES: ReadonlyArray<() => PluginDefinition> = [
   createSuperAgentPlugin,
   createMagpiePlugin,
   createTokenSpeedPlugin,
+  createTasksPlugin,
 ]
 
 interface RecordedAction {
@@ -160,7 +162,7 @@ function assertEnglishSchemaDescriptions(where: string, node: unknown): void {
 
 test('显示元数据：全部内置插件 name/description 与 UI/configSchema 文案为 en+zh-CN 双语资源', timeout, () => {
   const registrations = recordAllPlugins()
-  assert.equal(registrations.length, 13, '内置插件工厂数量')
+  assert.equal(registrations.length, 14, '内置插件工厂数量')
   for (const { definition, ui, configSchema } of registrations) {
     assertFullyLocalized(`${definition.id} definition.name`, definition.name)
     assertFullyLocalized(`${definition.id} definition.description`, definition.description)

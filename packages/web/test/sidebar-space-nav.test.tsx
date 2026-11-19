@@ -115,6 +115,7 @@ function describeTarget(target: ResolvedTarget): string {
     case 'conversation': return `c/${target.conversationId}`
     case 'agent': return `a/${target.profileId}`
     case 'screen': return `views/${target.pluginId}/${target.screenId}`
+    case 'overview': return 'overview'
     case 'profiles': return target.profileId !== undefined ? `settings/profiles/${target.profileId}` : 'settings/profiles'
     case 'models': return target.providerId !== undefined ? `settings/models/${target.providerId}` : 'settings/models'
     case 'skills': return target.skillId !== undefined ? `settings/skills/${target.skillId}` : 'settings/skills'

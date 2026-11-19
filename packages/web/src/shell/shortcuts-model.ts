@@ -5,6 +5,7 @@
  */
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { isConversationArchived } from '../conversation/archive-model.js'
+import type { ConversationBackgroundIndex } from './background-activity-model.js'
 import type { ActiveModal, FocusedPanel, ResolvedTarget } from '../lib/types.js'
 
 export const SIDEBAR_COLLAPSED_STORAGE_KEY = 'helmx:sidebar-collapsed'
@@ -125,15 +126,33 @@ export function formatModShortcut(key: string): string {
   return isApplePlatform() ? `⌘${upper}` : `Ctrl+${upper}`
 }
 
-/** Pick the first N non-archived conversations by recent activity for an empty search term (excluding the currently viewed one). */
+/**
+ * Pick the first N non-archived conversations for an empty search term
+ * (excluding the currently viewed one).
+ *
+ * Attention-first ordering (shares the global attention verdict, zero
+ * re-implementation): conversations that need attention (error / blocked)
+ * outrank running ones (working or background in flight, when the background
+ * index is provided), which outrank unread completions (done && unread); the
+ * rest keep the updatedAt-descending recency order. Existing callers without
+ * a background index keep working — background in-flight simply cannot be
+ * detected there and falls through to the base five-state verdicts.
+ */
 export function selectRecentConversationsForPalette(
   conversations: ReadonlyArray<ConversationSummary>,
   activeConversationId: number | undefined,
   limit = 5,
+  background?: ConversationBackgroundIndex,
 ): ConversationSummary[] {
+  const attentionTier = (conversation: ConversationSummary): number => {
+    if (conversation.status === 'error' || conversation.status === 'blocked') return 0
+    if (conversation.status === 'working' || background?.get(conversation.id)?.active === true) return 1
+    if (conversation.status === 'done' && conversation.unread === true) return 2
+    return 3
+  }
   return conversations
     .filter((c) => !isConversationArchived(c) && c.id !== activeConversationId)
     .slice()
-    .sort((a, b) => b.updatedAt - a.updatedAt || b.id - a.id)
+    .sort((a, b) => attentionTier(a) - attentionTier(b) || b.updatedAt - a.updatedAt || b.id - a.id)
     .slice(0, limit)
 }

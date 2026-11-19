@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { AskSpec, ConversationDetail, ConversationLive, ConversationSummary, UsePluginsResult } from '@helmx/protocol/browser'
 import { usePluginClientHost } from './host-port.js'
+import type { ConversationBackgroundSnapshot } from './host-port.js'
 import { usePluginContext } from './plugin-context.js'
 
 const EMPTY_PLUGIN_CONFIG: Readonly<Record<string, unknown>> = Object.freeze({})
@@ -13,6 +14,26 @@ const EMPTY_PLUGIN_CONFIG: Readonly<Record<string, unknown>> = Object.freeze({})
 /** All conversation summaries (live-synced over SSE; same data source as the host left sidebar). */
 export function useConversations(): ConversationSummary[] {
   return usePluginClientHost().conversations
+}
+
+/** Stable empty index for the unknown fallback (never a fresh Map per render). */
+const EMPTY_CONVERSATION_BACKGROUND: ConversationBackgroundSnapshot = Object.freeze({
+  unknown: true,
+  byConversation: new Map(),
+}) as ConversationBackgroundSnapshot
+
+/**
+ * Host-standard conversation background in-flight snapshot (workbench badge
+ * aggregation + context compaction — the exact facts the host sidebar ring
+ * renders), so plugin views (task boards, coordination desks) never
+ * re-aggregate the same docs per tree. Honest unknown gate: while
+ * `unknown === true` (badge docs still loading, or the host provides no
+ * aggregation) background facts are unknowable — render an unknown state,
+ * never "no background work".
+ */
+export function useConversationBackground(): ConversationBackgroundSnapshot {
+  const port = usePluginClientHost()
+  return port.conversationBackground ?? EMPTY_CONVERSATION_BACKGROUND
 }
 
 /**
