@@ -1,6 +1,6 @@
 /**
- * Build-time helper for pnpm installed dependency closure (shared by payload build and desktop assemble-hub;
- * used only by build scripts and never included in runtime artifacts).
+ * Build-time helper for pnpm installed dependency closure (shared by the payload, CLI, and node
+ * artifact assemblers; used only by build scripts and never included in runtime artifacts).
  *
  * Mechanism: pnpm attaches each package's resolved dependencies (including peer matches) as symlinks
  * under the real package directory's node_modules — walking dependency realpaths from any package
