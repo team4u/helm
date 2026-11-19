@@ -192,6 +192,41 @@ test('usePluginDoc / useConversations / usePlugins fetch through the port; first
   void host
 })
 
+test('useConversationBackground reads the derived port slice; absence stays undefined (never fabricated)', { timeout: 60_000 }, () => {
+  let wired: unknown = 'unset'
+  let absent: unknown = 'unset'
+  function WiredProbe(): React.ReactNode {
+    wired = SDK.useConversationBackground()
+    return e('div', null, 'wired')
+  }
+  function AbsentProbe(): React.ReactNode {
+    absent = SDK.useConversationBackground()
+    return e('div', null, 'absent')
+  }
+  const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
+  const withFacts = Object.assign(makePort(log), {
+    conversationBackground: { 7: { active: true, summary: '2 Running' } },
+  })
+  const first = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: withFacts },
+      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(withFacts, 'p1', 7) },
+        e(WiredProbe))),
+  )
+  assert.deepEqual(wired, { 7: { active: true, summary: '2 Running' } }, 'background facts come from the port slice verbatim')
+  act(() => { void first.root.unmount() })
+  void first.host
+
+  const plain = makePort(log)
+  const second = mount(
+    e(SDK.PluginClientHostContext.Provider, { value: plain },
+      e(SDK.PluginClientContext.Provider, { value: SDK.createPluginClientContext(plain, 'p1', 7) },
+        e(AbsentProbe))),
+  )
+  assert.equal(absent, undefined, 'an unwired host honestly yields undefined, not a fabricated index')
+  act(() => { void second.root.unmount() })
+  void second.host
+})
+
 test('usePluginDoc auto-triggers ensurePluginDoc for a missing key (port forwarding)', { timeout: 60_000 }, () => {
   const log: PortLog = { actions: [], inputs: [], targets: [], drawers: [], artifacts: [], workbench: [], notices: [], docs: [] }
   const port = makePort(log)

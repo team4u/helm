@@ -48,6 +48,10 @@ export { useConversation, useConversations, usePluginConfig, usePlugins, useShar
 export { ToolActivityContext, useToolActivity } from './tool-activity.js'
 export type { ToolActivityRegistry } from './tool-activity.js'
 
+// ---- Background in-flight facts (generic workbench badge derivation, plugin-ID-free) ----
+export { useConversationBackground } from './background.js'
+export type { PluginClientBackgroundFact } from './host-port.js'
+
 // ---- Accessibility base components (Radix wrappers) ----
 export { Switch } from './ui/Switch.js'
 export type { SwitchProps } from './ui/Switch.js'

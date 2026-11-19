@@ -15,6 +15,10 @@
  * 6. TaskToolView 聊天内活体回执（实时列徽标 + 指示灯联动 board doc 与会话摘要、
  *    点击开抽屉或跳看板深链、错误首行如实、看板外任务诚实标注）；
  * 7. 移动端四胶囊「需我处理 / 待验收 / 进行中 / 待办」(+已完成) 过滤与 tab 参数联动；
+ * 7.5 审阅修订：非法 doc 显式无效面板与重载、通用后台徽标事实驱动 background 灯
+ *     （停滞不误报）、看板外依赖不伪造阻塞、停滞任务显式继续（submitInput 人工触发）、
+ *     mergePending 待验收互斥禁用、历史深链看板外任务显式提示 + inspect 加载完整记录、
+ *     哈希派生工具名动词族解析；
  * 8. tasks/client 全目录静态铁律：零 Emoji、零原生 select、零 history.*、
  *    客户端导出仅含 PascalCase 组件。
  */
@@ -172,6 +176,7 @@ const EMPTY_SESSION_DOC_STATE = Object.freeze({
 
 let stubConversations: ConversationSummary[] = []
 let stubBoard: unknown = undefined
+let stubBackground: Record<number, { active: boolean; summary: string }> | undefined = undefined
 
 /** Failed tests leak mounted roots (and the shared now-ticker keeps the loop alive); drain them after the run. */
 const cleanups: Array<() => void> = []
@@ -179,9 +184,15 @@ after(() => {
   while (cleanups.length > 0) cleanups.pop()?.()
 })
 
-function setStubState(options: { conversations?: ConversationSummary[]; board?: unknown }): void {
+function setStubState(options: {
+  conversations?: ConversationSummary[]
+  board?: unknown
+  background?: Record<number, { active: boolean; summary: string }>
+}): void {
   if (options.conversations !== undefined) stubConversations = options.conversations
   if ('board' in options) stubBoard = options.board
+  // 后台事实切片每次显式覆盖（缺省复位为未接线），避免跨测试泄漏
+  stubBackground = options.background
 }
 
 async function mount(
@@ -224,6 +235,7 @@ function boardHostPort(): PluginClientHostPort {
     plugins: [{ id: 'builtin:tasks', enabled: true, publicConfig: { defaultPlannerProfile: 'planner' } }],
     screens: [],
     pluginDocs: stubBoard === undefined ? {} : { 'builtin:tasks/board': stubBoard },
+    ...(stubBackground !== undefined ? { conversationBackground: stubBackground } : {}),
     ensurePluginDoc: async () => undefined,
     subscribeSessionDoc: () => () => {},
     getSessionDocState: () => EMPTY_SESSION_DOC_STATE,
@@ -360,10 +372,10 @@ function standardConversations(): ConversationSummary[] {
 // 1. Pure model functions
 // ---------------------------------------------------------------------------
 
-test('parseTaskBoardDoc：非法载荷诚实空板，合法字段宽松解析', { timeout: 60_000 }, () => {
-  assert.deepEqual(parseTaskBoardDoc(undefined), { tasks: [], updatedAt: 0 })
-  assert.deepEqual(parseTaskBoardDoc({ nope: 1 }), { tasks: [], updatedAt: 0 })
-  assert.deepEqual(parseTaskBoardDoc({ tasks: 'nope' }), { tasks: [], updatedAt: 0 })
+test('parseTaskBoardDoc：非法载荷显式无效（undefined），合法字段宽松解析', { timeout: 60_000 }, () => {
+  assert.equal(parseTaskBoardDoc(undefined), undefined)
+  assert.equal(parseTaskBoardDoc({ nope: 1 }), undefined)
+  assert.equal(parseTaskBoardDoc({ tasks: 'nope' }), undefined)
   const parsed = parseTaskBoardDoc({
     tasks: [
       { id: 'T-1', title: 'ok', brief: 'b', column: 'in_progress', dependsOn: ['T-9'], extra: 1 },
@@ -441,11 +453,55 @@ test('deriveTaskLiveView：error > blocked > 主 working > 后代在途 > done >
   assert.equal(stalled.needsAttention, true)
   assert.equal(stalled.liveSummary, 'Turn settled, not submitted yet')
 
-  // 依赖：blockedBy 只统计未完成前置；backlog 全部完成 → ready
+  // 依赖：blockedBy 只统计已知未完成前置；看板外依赖不伪造阻塞
   const depTask = task('T-5', { dependsOn: ['T-1', 'T-2'] })
   assert.deepEqual(deriveTaskLiveView(depTask, [], undefined, byId).blockedBy, ['T-2'])
   assert.equal(deriveTaskLiveView(depTask, [], undefined, byId).isReadyToStart, false)
   assert.equal(deriveTaskLiveView(task('T-6', { dependsOn: ['T-1'] }), [], undefined, byId).isReadyToStart, true)
+  const offBoard = deriveTaskLiveView(task('T-7', { dependsOn: ['T-1', 'T-99'] }), [], undefined, byId)
+  assert.deepEqual(offBoard.blockedBy, [])
+  assert.deepEqual(offBoard.offBoardDeps, ['T-99'])
+  assert.equal(offBoard.isReadyToStart, true, '看板外依赖（完成截断）不伪造为阻塞，后端 start 为权威门禁')
+
+  // 等待审批 vs 等待子会话确认：文案区分，直达 Ask 现场
+  const approval = mk({ conversationId: 10 }, [conv(10, 'main', { status: 'blocked', pendingAskCount: 1, doing: 'ask: pick plan' })])
+  assert.equal(approval.approvalPending, true)
+  assert.equal(approval.liveSummary, 'Waiting for approval — ask: pick plan')
+  const subConfirm = mk({ conversationId: 10 }, [
+    conv(10, 'main', { status: 'idle' }),
+    conv(11, 'sub', { parentConversationId: 10, status: 'blocked' }),
+  ])
+  assert.equal(subConfirm.approvalPending, false)
+  assert.equal(subConfirm.liveSummary, 'Waiting for sub-session confirmation')
+
+  // 失败现场直达：子树 error 优先于主会话跳转
+  const errorSite = mk({ conversationId: 10 }, [
+    conv(10, 'main', { status: 'idle' }),
+    conv(11, 'sub', { parentConversationId: 10, status: 'error', lastError: 'boom', createdAt: 2000 }),
+  ])
+  assert.equal(errorSite.jumpConversationId, 11)
+
+  // 通用后台徽标事实：主会话空闲但后台 run 在途 → background 灯 + 真实摘要，停滞不被误报
+  const withBackground = deriveTaskLiveView(
+    task('T-8', { column: 'in_progress', conversationId: 10, silenceState: { nudgedAt: 1, stalledAt: 2 } }),
+    [conv(10, 'main', { status: 'idle' })],
+    undefined,
+    byId,
+    'en',
+    { 10: { active: true, summary: '2 Running' } },
+  )
+  assert.equal(withBackground.lightStatus, 'background')
+  assert.equal(withBackground.backgroundActive, true)
+  assert.equal(withBackground.liveSummary, '2 Running')
+  assert.equal(withBackground.stalled, false, '后台在途时不得误报「回合已停 · 未交卷」')
+  assert.equal(withBackground.needsAttention, false)
+  // 未接线（undefined）时零推断：保持原停滞语义
+  const noFacts = deriveTaskLiveView(
+    task('T-9', { column: 'in_progress', conversationId: 10, silenceState: { nudgedAt: 1, stalledAt: 2 } }),
+    [conv(10, 'main', { status: 'idle' })],
+  )
+  assert.equal(noFacts.stalled, true)
+  assert.equal(noFacts.liveSummary, 'Turn settled, not submitted yet')
 })
 
 test('parseTaskToolFacts：宽松提取任务指针（结果优先，输入兜底）', { timeout: 60_000 }, () => {
@@ -492,7 +548,7 @@ test('四列分桶与双轨实时状态灯：needsAttention 置顶、真实 doin
   assert.ok(t2, 'T-2 卡片应存在')
   assert.ok(t2.classList.contains('is-attention'))
   assert.equal(toneOf(t2), 'blocked')
-  assert.match(t2.textContent ?? '', /Waiting for input/)
+  assert.match(t2.textContent ?? '', /Waiting for approval — ask: confirm plan/)
 
   // T-3 in_review：交付摘要 + 分支 + 改动数 + 通过/合并/返工按钮
   const t3 = columnCards('in_review')[0]
@@ -911,6 +967,17 @@ test('TaskToolView 活体回执：实时列徽标与灯、点击开抽屉、看�
   assert.equal(row3.querySelector('.helmx-status-light')?.getAttribute('data-tone'), 'failed')
   third.unmount()
 
+  // 哈希派生工具名（exposeAsTool 形如 tasks_create_ab12cd34）同样解析动词族
+  const hashed = await mount(ctx, e(components.TaskToolView, toolProps({
+    toolName: 'tasks_create_ab12cd34',
+    input: { title: 'Fix auth' },
+    structuredOutput: { task: { id: 'T-1', title: 'Fix auth', column: 'in_progress', conversationId: 10 } },
+  })))
+  const hashedRow = hashed.host.querySelector('.task-trace-row')
+  assert.ok(hashedRow)
+  assert.match(hashedRow.textContent ?? '', /Create task/, '哈希工具名应回落到动词族标题')
+  hashed.unmount()
+
   // 看板外任务：诚实标注（不伪造运行态）
   const fourth = await mount(ctx, e(components.TaskToolView, toolProps({
     toolName: 'task_approve',
@@ -983,6 +1050,161 @@ test('移动端四胶囊清零流：attention 聚合、tab 切换 setParams 联�
     ['T-6'],
   )
   deep.unmount()
+})
+
+// ---------------------------------------------------------------------------
+// 7.5 Review fixes: invalid doc / off-board deps & deep link / background / continue / mergePending
+// ---------------------------------------------------------------------------
+
+test('非法 board doc：显式无效面板与重载入口，不伪装成空看板', { timeout: 60_000 }, async (t) => {
+  setStubState({ conversations: [], board: { tasks: 'corrupted' } })
+  const ctx = makeSpyCtx()
+  const { host, unmount } = await mountBoard(ctx, mutableScreenProps().props)
+  t.after(unmount)
+  assert.match(host.textContent ?? '', /Task board data is invalid/)
+  const reload = [...host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Reload board'))
+  assert.ok(reload, '应提供重载入口')
+  assert.equal(host.querySelectorAll('.task-card').length, 0, '不得渲染任何任务卡（不伪造空板任务）')
+  await click(reload ?? null)
+  assert.equal(ctx.actionCalls.length, 0, '重载走 getPluginDoc，不触发动作')
+  unmount()
+})
+
+test('后台 run 在途：通用徽标事实驱动 background 灯与真实摘要，停滞不误报', { timeout: 60_000 }, async (t) => {
+  setStubState({
+    conversations: [conv(10, 'T-1 exec', { status: 'idle' })],
+    board: {
+      tasks: [task('T-1', { column: 'in_progress', conversationId: 10, silenceState: { nudgedAt: 1, stalledAt: 2 }, createdAt: 100 })],
+      updatedAt: 1,
+    },
+    background: { 10: { active: true, summary: '2 Running' } },
+  })
+  const { host, unmount } = await mountBoard(makeSpyCtx(), mutableScreenProps().props)
+  t.after(unmount)
+  const card = host.querySelector('[data-task-id="T-1"]')
+  assert.ok(card)
+  assert.match(card.textContent ?? '', /2 Running/)
+  assert.equal(card.querySelector('.helmx-status-light')?.getAttribute('data-tone'), 'working')
+  assert.doesNotMatch(card.textContent ?? '', /Turn settled/)
+  assert.ok(!card.classList.contains('is-attention'), '后台在途不算需处理')
+  unmount()
+})
+
+test('看板外依赖：Ready 不被伪造阻塞并明示看板外计数', { timeout: 60_000 }, async (t) => {
+  setStubState({
+    conversations: [],
+    board: {
+      tasks: [
+        task('T-1', { column: 'done', createdAt: 100 }),
+        task('T-5', { dependsOn: ['T-1', 'T-99'], createdAt: 500 }),
+      ],
+      updatedAt: 1,
+    },
+  })
+  const { host, unmount } = await mountBoard(makeSpyCtx(), mutableScreenProps().props)
+  t.after(unmount)
+  const t5 = host.querySelector('[data-task-id="T-5"]')
+  assert.ok(t5)
+  assert.match(t5.textContent ?? '', /Ready/)
+  assert.match(t5.textContent ?? '', /1 off-board dependency/)
+  assert.ok([...(t5.querySelectorAll('button') ?? [])].some((b) => b.textContent?.includes('Start')), '看板外依赖不阻断开工入口')
+  unmount()
+})
+
+test('停滞任务显式继续：按钮触发 submitInput 到执行会话（人工显式，非自动轻推）', { timeout: 60_000 }, async (t) => {
+  const submitCalls: Array<{ text: string; conversationId?: number }> = []
+  const ctx = makeSpyCtx({
+    submitInput: async (text, options) => {
+      submitCalls.push({ text, conversationId: options?.conversationId })
+    },
+  })
+  setStubState({
+    conversations: [conv(10, 'T-1 exec', { status: 'idle' })],
+    board: {
+      tasks: [task('T-1', { column: 'in_progress', conversationId: 10, silenceState: { nudgedAt: 1, stalledAt: 2 }, createdAt: 100 })],
+      updatedAt: 1,
+    },
+  })
+  const { host, unmount } = await mountBoard(ctx, mutableScreenProps().props)
+  t.after(unmount)
+  const card = host.querySelector('[data-task-id="T-1"]')
+  assert.ok(card)
+  assert.match(card.textContent ?? '', /Turn settled, not submitted yet/)
+  const continueBtn = [...(card.querySelectorAll('button') ?? [])].find((b) => b.textContent?.includes('Continue'))
+  assert.ok(continueBtn, '停滞卡应直出「继续」按钮')
+  await click(continueBtn ?? null)
+  assert.equal(submitCalls.length, 1)
+  assert.equal(submitCalls[0]?.conversationId, 10)
+  assert.match(submitCalls[0]?.text ?? '', /task_submit/)
+  unmount()
+})
+
+test('mergePending 互斥：待验收卡禁用通过/合并/返工并说明原因', { timeout: 60_000 }, async (t) => {
+  setStubState({
+    conversations: [conv(30, 'T-3 exec')],
+    board: {
+      tasks: [
+        task('T-3', {
+          column: 'in_review',
+          conversationId: 30,
+          mergePending: true,
+          submission: { summary: 'merging', branch: 'feat/x', submittedAt: 1 },
+          createdAt: 300,
+        }),
+      ],
+      updatedAt: 1,
+    },
+  })
+  const ctx = makeSpyCtx()
+  const { host, unmount } = await mountBoard(ctx, mutableScreenProps().props)
+  t.after(unmount)
+  const t3 = host.querySelector('[data-task-id="T-3"]')
+  assert.ok(t3)
+  assert.match(t3.textContent ?? '', /Merge in progress/)
+  for (const label of ['Approve', 'Merge & close', 'Rework']) {
+    const btn = [...(t3.querySelectorAll<HTMLButtonElement>('button') ?? [])].find((b) => b.textContent?.includes(label))
+    assert.ok(btn, `${label} 按钮应存在`)
+    assert.equal(btn.disabled, true, `${label} 在合并收尾中应禁用`)
+    assert.match(btn.title, /Merge finishing in progress/)
+  }
+  assert.equal(ctx.actionCalls.length, 0)
+  unmount()
+})
+
+test('历史深链看板外任务：显式提示 + inspect 加载完整记录', { timeout: 60_000 }, async (t) => {
+  const ctx = makeSpyCtx({
+    callAction: async (actionId, input) => {
+      assert.equal(actionId, 'inspect')
+      assert.deepEqual(input, { taskId: 'T-77' })
+      return {
+        task: {
+          id: 'T-77',
+          title: 'Archived work',
+          brief: 'old brief',
+          column: 'done',
+          assigneeProfileId: 'assistant',
+          dependsOn: [],
+          reworkCount: 1,
+          createdAt: 1,
+          updatedAt: 2,
+          submission: { summary: 'shipped long ago', branch: 'feat/old', submittedAt: 3 },
+        },
+      }
+    },
+  })
+  setStubState({ conversations: [], board: { tasks: [], updatedAt: 1 } })
+  const { host, unmount } = await mountBoard(ctx, mutableScreenProps({ task: 'T-77' }).props)
+  t.after(unmount)
+  assert.match(host.textContent ?? '', /T-77 is not on the current board/, '深链到看板外任务必须显式提示，不得静默空白')
+  const inspectBtn = [...host.querySelectorAll<HTMLButtonElement>('[data-off-board-task="T-77"] button')].find((b) =>
+    b.textContent?.includes('inspect'),
+  )
+  assert.ok(inspectBtn)
+  await click(inspectBtn ?? null)
+  assert.match(host.textContent ?? '', /Archived work/)
+  assert.match(host.textContent ?? '', /shipped long ago/)
+  assert.match(host.textContent ?? '', /feat\/old/)
+  unmount()
 })
 
 // ---------------------------------------------------------------------------

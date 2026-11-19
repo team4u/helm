@@ -89,15 +89,34 @@ export function taskLightLabel(status: TaskLightStatus, locale: HelmxLocale = DE
   return resolveLocalizedText(TASK_LIGHT_LABELS[status], locale)
 }
 
+/** Card light label that keeps approval waits distinct from generic blocked (errors already have their own tone). */
+export function taskCardLightLabel(
+  status: TaskLightStatus,
+  approvalPending: boolean,
+  locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
+): string {
+  if (status === 'blocked' && approvalPending) return resolveLocalizedText({ en: 'Waiting for approval', 'zh-CN': '等待审批' }, locale)
+  return taskLightLabel(status, locale)
+}
+
 export function taskLiveErrorLine(error: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText({ en: `Error: ${error}`, 'zh-CN': `出错：${error}` }, locale)
 }
 
-export function taskLiveBlockedAsks(doing: string | undefined, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+/** Waiting for a human approval Ask (distinct from errors and sub-session confirmation). */
+export function taskLiveWaitingApproval(doing: string | undefined, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   if (doing !== undefined && doing !== '') {
-    return resolveLocalizedText({ en: `Waiting for input — ${doing}`, 'zh-CN': `等待处理 — ${doing}` }, locale)
+    return resolveLocalizedText({ en: `Waiting for approval — ${doing}`, 'zh-CN': `等待审批 — ${doing}` }, locale)
   }
-  return resolveLocalizedText({ en: 'Waiting for input', 'zh-CN': '等待处理' }, locale)
+  return resolveLocalizedText({ en: 'Waiting for approval', 'zh-CN': '等待审批' }, locale)
+}
+
+/** Blocked on a sub-session terminal confirmation (no human Ask pending). */
+export function taskLiveSubSessionConfirm(doing: string | undefined, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  if (doing !== undefined && doing !== '') {
+    return resolveLocalizedText({ en: `Waiting for sub-session confirmation — ${doing}`, 'zh-CN': `等待子会话确认 — ${doing}` }, locale)
+  }
+  return resolveLocalizedText({ en: 'Waiting for sub-session confirmation', 'zh-CN': '等待子会话确认' }, locale)
 }
 
 export function taskLiveSubSessions(count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
@@ -123,6 +142,19 @@ export function taskLiveConversationMissing(locale: HelmxLocale = DEFAULT_HELMX_
 export function taskWaitingForDeps(ids: readonly string[], locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(
     { en: `Waiting for ${ids.join(', ')}`, 'zh-CN': `等待 ${ids.join('、')}` },
+    locale,
+  )
+}
+
+/** Off-board dependency chip (done-truncated / archived / deleted; never fabricated as blocking). */
+export const TASK_DEP_OFF_BOARD: LocalizedText = L('Off board', '看板外')
+export const TASK_DEP_OFF_BOARD_TITLE: LocalizedText = L(
+  'Not on the current board projection (likely done and archived); the start action re-validates',
+  '不在当前看板投影（可能已完成归档）；开工动作会重新核验',
+)
+export function taskOffBoardDeps(count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(
+    { en: `${count} off-board ${count === 1 ? 'dependency' : 'dependencies'}`, 'zh-CN': `${count} 个看板外依赖` },
     locale,
   )
 }
@@ -280,6 +312,50 @@ export function taskConversationJumpTitle(conversationId: number, locale: HelmxL
 }
 
 // ---------------------------------------------------------------------------
+// Invalid board doc, explicit continue, mergePending mutual exclusion
+// ---------------------------------------------------------------------------
+
+export const TASK_BOARD_INVALID: LocalizedText = L('Task board data is invalid', '任务看板数据无效')
+export const TASK_BOARD_INVALID_HINT: LocalizedText = L(
+  'The board projection failed validation; reloading may recover it.',
+  '看板投影校验失败；重新加载可能恢复。',
+)
+export const TASK_BOARD_RETRY: LocalizedText = L('Reload board', '重新加载')
+export const TASK_BOARD_RELOADING: LocalizedText = L('Reloading…', '正在重新加载…')
+
+/** Explicit user-initiated continue for a stalled (settled, not submitted) task — never an automated nudge. */
+export const TASK_ACTION_CONTINUE: LocalizedText = L('Continue', '继续')
+export const TASK_ACTION_CONTINUE_TITLE: LocalizedText = L(
+  'Send an explicit continue message to the execution conversation',
+  '向执行会话发送明确的继续消息',
+)
+export const TASK_CONTINUE_SENDING: LocalizedText = L('Sending…', '正在发送…')
+
+/** The submit prompt is model-facing execution copy (English only, per the display-metadata conventions). */
+export const TASK_CONTINUE_PROMPT =
+  'The task turn has settled without a submission. Please continue the work (or report what you need) and call task_submit when done.'
+
+export const TASK_MERGE_PENDING_DISABLED_TITLE: LocalizedText = L(
+  'Merge finishing in progress: wait for the executor to resubmit before reviewing',
+  '合并收尾进行中：等待执行会话再次交卷后再验收',
+)
+
+// ---------------------------------------------------------------------------
+// Off-board task deep link (inspect affordance)
+// ---------------------------------------------------------------------------
+
+export function taskOffBoardNotice(taskId: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(
+    { en: `Task ${taskId} is not on the current board (archived, done-truncated, or deleted)`, 'zh-CN': `任务 ${taskId} 不在当前看板（已归档、完成截断或已删除）` },
+    locale,
+  )
+}
+export const TASK_OFF_BOARD_INSPECT: LocalizedText = L('Load full record (inspect)', '加载完整记录 (inspect)')
+export const TASK_OFF_BOARD_INSPECTING: LocalizedText = L('Loading…', '正在加载…')
+export const TASK_OFF_BOARD_INSPECT_FAILED: LocalizedText = L('Inspect failed', 'inspect 调用失败')
+export const TASK_OFF_BOARD_CLOSE: LocalizedText = L('Dismiss', '关闭提示')
+
+// ---------------------------------------------------------------------------
 // Empty states
 // ---------------------------------------------------------------------------
 
@@ -296,18 +372,19 @@ export const TASK_EMPTY_LOADING: LocalizedText = L('Loading task board…', '正
 // Tool-trace receipts (TaskToolView)
 // ---------------------------------------------------------------------------
 
-export const TASK_TOOL_TITLES: Readonly<Record<string, LocalizedText>> = {
-  task_create: L('Create task', '创建任务'),
-  task_start: L('Start task', '开工'),
-  task_submit: L('Submit task', '交卷'),
-  task_approve: L('Approve task', '验收通过'),
-  task_rework: L('Rework task', '打回返工'),
+/** Verb-keyed titles (verbs are extracted leniently from both short and hashed tool names). */
+export const TASK_TOOL_TITLES: Readonly<Record<'create' | 'start' | 'submit' | 'approve' | 'rework', LocalizedText>> = {
+  create: L('Create task', '创建任务'),
+  start: L('Start task', '开工'),
+  submit: L('Submit task', '交卷'),
+  approve: L('Approve task', '验收通过'),
+  rework: L('Rework task', '打回返工'),
 }
 
 export const TASK_TOOL_UNKNOWN: LocalizedText = L('Task', '任务')
 
-export function taskToolTitle(toolName: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
-  const entry = TASK_TOOL_TITLES[toolName]
+export function taskToolTitle(verb: 'create' | 'start' | 'submit' | 'approve' | 'rework' | undefined, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  const entry = verb !== undefined ? TASK_TOOL_TITLES[verb] : undefined
   return entry !== undefined ? resolveLocalizedText(entry, locale) : resolveLocalizedText(TASK_TOOL_UNKNOWN, locale)
 }
 

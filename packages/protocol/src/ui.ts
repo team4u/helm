@@ -532,7 +532,9 @@ export interface PluginClientContext {
  *
  * The single source of truth of exported symbols is PLUGIN_CLIENT_SHARED_EXPORTS:
  * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc / usePluginSessionDoc /
- *   useToolActivity / useConversations / useConversation / usePlugins;
+ *   useToolActivity / useConversations / useConversation / usePlugins / useConversationBackground
+ *   (read-only per-conversation background in-flight facts derived by the host from the
+ *   generic workbench badge contract, plugin-ID-free);
  * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
  *   SegmentedControl / HelmxIcon / ViewBoundary / Callout;
  * - StatusLight: unified status light (visually dot-only; the localized label
@@ -608,6 +610,7 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'useConversation',
   'usePlugins',
   'usePluginConfig',
+  'useConversationBackground',
   'PluginSlot',
   'Switch',
   'Select',
