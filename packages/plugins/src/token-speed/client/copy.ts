@@ -46,8 +46,8 @@ export function tokenSpeedSettledTitle(parts: {
 }, locale: HelmxLocale): string {
   return resolveLocalizedText(
     {
-      en: `Last turn decode ≈${parts.tps} tok/s (settled total ${parts.tokens} tok, observed net decode time ${parts.decode}, basis ${parts.source}; rate only counts responses whose token counts and durations can be paired; time is a throttled-frame approximation, not exact server decode time; excludes TTFT and tool execution${parts.ttft})`,
-      'zh-CN': `最近回合解码 ≈${parts.tps} tok/s（对账累计 ${parts.tokens} tok，观测解码净耗时 ${parts.decode}，口径 ${parts.source}；速率仅统计计数与时长可配对的响应；时间为节流帧观测近似，非服务器精确解码时间；不含首字延迟与工具执行${parts.ttft}）`,
+      en: `Last turn decode ${parts.tps} tok/s (settled total ${parts.tokens} tok, observed net decode time ${parts.decode}, basis ${parts.source}; rate only counts responses whose token counts and durations can be paired; time is a throttled-frame approximation, not exact server decode time; excludes TTFT and tool execution${parts.ttft})`,
+      'zh-CN': `最近回合解码 ${parts.tps} tok/s（对账累计 ${parts.tokens} tok，观测解码净耗时 ${parts.decode}，口径 ${parts.source}；速率仅统计计数与时长可配对的响应；时间为节流帧观测近似，非服务器精确解码时间；不含首字延迟与工具执行${parts.ttft}）`,
     },
     locale,
   )
@@ -63,8 +63,8 @@ export function tokenSpeedToolsTitle(parts: {
 }, locale: HelmxLocale): string {
   return resolveLocalizedText(
     {
-      en: `Timer paused during tools · latest decode ≈${parts.tps} tok/s (basis ${parts.source}; tool execution time is not counted as decode time; ${parts.tokens} tok generated / ${parts.decode} observed decode${parts.ttft})`,
-      'zh-CN': `工具执行暂停计时 · 最近解码 ≈${parts.tps} tok/s（口径 ${parts.source}；工具执行耗时不计入解码时间；已生成 ${parts.tokens} tok / 观测解码 ${parts.decode}${parts.ttft}）`,
+      en: `Timer paused during tools · latest decode ${parts.tps} tok/s (basis ${parts.source}; tool execution time is not counted as decode time; ${parts.tokens} tok generated / ${parts.decode} observed decode${parts.ttft})`,
+      'zh-CN': `工具执行暂停计时 · 最近解码 ${parts.tps} tok/s（口径 ${parts.source}；工具执行耗时不计入解码时间；已生成 ${parts.tokens} tok / 观测解码 ${parts.decode}${parts.ttft}）`,
     },
     locale,
   )
@@ -81,8 +81,8 @@ export function tokenSpeedLiveTitle(parts: {
 }, locale: HelmxLocale): string {
   return resolveLocalizedText(
     {
-      en: `Live decode ≈${parts.tps} tok/s (${parts.window}s sliding-window streaming rate, basis ${parts.source}; time is a throttled-frame approximation, not exact server decode time; excludes TTFT and tool execution; ${parts.tokens} tok generated / ${parts.decode} observed decode${parts.ttft})`,
-      'zh-CN': `实时解码 ≈${parts.tps} tok/s（${parts.window}s 滑动窗口流式观测速率，口径 ${parts.source}；时间为节流帧观测近似，非服务器精确解码时间；不含首字延迟与工具执行；已生成 ${parts.tokens} tok / 观测解码 ${parts.decode}${parts.ttft}）`,
+      en: `Live decode ${parts.tps} tok/s (${parts.window}s sliding-window streaming rate, basis ${parts.source}; time is a throttled-frame approximation, not exact server decode time; excludes TTFT and tool execution; ${parts.tokens} tok generated / ${parts.decode} observed decode${parts.ttft})`,
+      'zh-CN': `实时解码 ${parts.tps} tok/s（${parts.window}s 滑动窗口流式观测速率，口径 ${parts.source}；时间为节流帧观测近似，非服务器精确解码时间；不含首字延迟与工具执行；已生成 ${parts.tokens} tok / 观测解码 ${parts.decode}${parts.ttft}）`,
     },
     locale,
   )
