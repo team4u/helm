@@ -51,6 +51,27 @@ export interface PluginSlotPortItem {
   spec: PluginSlotContributionSpec
 }
 
+/** One conversation's background in-flight entry (same verdict as the host sidebar ring). */
+export interface ConversationBackgroundEntry {
+  /** A background task is in flight (workbench badge tone = 'accent', or context compaction). */
+  active: boolean
+  /** Run summary copy (badge footerText / compaction copy, deduplicated; may be empty). */
+  summary: string
+}
+
+/**
+ * Host-standard conversation background snapshot: the per-conversation
+ * in-flight index plus an honest unknown gate — while any needed badge doc has
+ * not produced its first load, background facts are unknowable and consumers
+ * must render "unknown", never "no background work".
+ */
+export interface ConversationBackgroundSnapshot {
+  /** true while needed badge docs are still loading (or the host provides no aggregation): facts are unknown. */
+  unknown: boolean
+  /** Per-conversation in-flight index (key: conversationId). */
+  byConversation: ReadonlyMap<number, ConversationBackgroundEntry>
+}
+
 /** SDK MarkdownViewProps (the props contract the host MarkdownView implementation must satisfy). */
 export interface MarkdownViewProps {
   text: string
@@ -67,14 +88,6 @@ export interface MarkdownViewProps {
 export interface CodeBlockViewProps {
   code: string
   language: string
-}
-
-/** One conversation's background in-flight fact (generic workbench badge derivation, plugin-ID-free). */
-export interface PluginClientBackgroundFact {
-  /** A background task is in flight for this conversation (e.g. a background workflow run). */
-  active: boolean
-  /** Honest summary copy joined by the host (may be empty). */
-  summary: string
 }
 
 /**
@@ -112,14 +125,14 @@ export interface PluginClientHostPort {
   /** Screen contributions registered by enabled plugins (disabled plugin contributions are removed immediately). */
   screens: Array<{ pluginId: string; spec: ScreenSpec }>
   /**
-   * Derived per-conversation background in-flight facts (key: conversationId),
-   * aggregated by the host from the generic workbench.panel badge contract
-   * (tone = 'accent' entries + context compaction) — zero plugin IDs baked in.
-   * Optional and additive: absent until the host wires it; consumers must
-   * treat absence honestly as "no background facts available" (never
-   * fabricate in-flight states).
+   * Host-standard conversation background in-flight snapshot (the same
+   * aggregation the host sidebar ring consumes: workbench panel per-
+   * conversation badges with tone = 'accent' plus context compaction), shared
+   * so plugin views never re-aggregate the same docs per tree. Optional and
+   * additive: an absent host reports `unknown: true` (background facts are
+   * unknown, never fabricated as "no work").
    */
-  conversationBackground?: Readonly<Record<number, PluginClientBackgroundFact>>
+  conversationBackground?: ConversationBackgroundSnapshot
 
   // ---- Plugin docs ----
   /** key: `${pluginId}/${docName}`. */

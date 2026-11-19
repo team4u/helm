@@ -47,6 +47,15 @@ export interface SidebarItemSpec extends UiSpecBase {
   /** Click target, e.g. 'conversation:1', 'conversation:profile:superagent', 'screen:builtin:superagent/recall-graph'. */
   target?: string
   order?: number
+  /**
+   * Global quick entry: the host surfaces this item (screen targets) as a
+   * one-tap entry in the collapsed activity rail / mobile drawer regardless of
+   * the active sidebar space — no new sidebar space, no plugin-id special
+   * casing. Rendering still requires the referenced screen to exist among the
+   * enabled plugin's contributions (a disabled plugin's items vanish with its
+   * contributions), and the click goes through the standard host navigation.
+   */
+  quickEntry?: boolean
 }
 
 export interface SidebarSectionSpec extends UiSpecBase {
@@ -532,9 +541,7 @@ export interface PluginClientContext {
  *
  * The single source of truth of exported symbols is PLUGIN_CLIENT_SHARED_EXPORTS:
  * - hooks: usePluginContext / usePluginLocale / usePluginTranslator / usePluginDoc / usePluginSessionDoc /
- *   useToolActivity / useConversations / useConversation / usePlugins / useConversationBackground
- *   (read-only per-conversation background in-flight facts derived by the host from the
- *   generic workbench badge contract, plugin-ID-free);
+ *   useToolActivity / useConversations / useConversation / useConversationBackground / usePlugins;
  * - accessibility base components: Switch / Select / MultiSelect / Checkbox / Tabs family /
  *   SegmentedControl / HelmxIcon / ViewBoundary / Callout;
  * - StatusLight: unified status light (visually dot-only; the localized label
@@ -608,9 +615,9 @@ export const PLUGIN_CLIENT_SHARED_EXPORTS = [
   'useToolActivity',
   'useConversations',
   'useConversation',
+  'useConversationBackground',
   'usePlugins',
   'usePluginConfig',
-  'useConversationBackground',
   'PluginSlot',
   'Switch',
   'Select',
