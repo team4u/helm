@@ -268,18 +268,20 @@ test('展示模型：实时/工具暂停/终态口径区分与诚实标注；无
   assert.equal(tokenSpeedLabelOf({ ...base, phase: 'tools' }), null)
   assert.equal(tokenSpeedLabelOf({ ...base, phase: 'decoding', tps: 0 }), null)
   assert.equal(tokenSpeedLabelOf({ ...base, phase: 'settled', tps: Number.NaN }), null)
+  // 正的低速率四舍五入后钳到 1，绝不渲染 "0 tok/s"（0 = 无可测量速率，应返回 null）。
+  assert.equal(tokenSpeedLabelOf({ ...base, phase: 'decoding', tps: 0.3 })!.text, '1 tok/s')
   // 工具暂停期保留最近有效速率，并在 tooltip 如实标注暂停计时。
   const tools = tokenSpeedLabelOf({ ...base, phase: 'tools', tps: 52.35, ttftMs: 640 })!
-  assert.equal(tools.text, '≈52.4 tok/s')
-  assert.match(tools.title, /Timer paused during tools · latest decode ≈52\.4 tok\/s/)
+  assert.equal(tools.text, '52 tok/s')
+  assert.match(tools.title, /Timer paused during tools · latest decode 52 tok\/s/)
   assert.match(tools.title, /tool execution time is not counted as decode time/)
   assert.match(tools.title, /provider usage \+ char estimate mixed/)
   assert.match(tools.title, /TTFT 640ms/)
-  // 实时：滑动窗口口径 + 口径标注 + TTFT 首次观测声明；一切速率均 ≈ 观测估算
-  //（文本前缀即可见，移动端不依赖 title）。
+  // 实时：滑动窗口口径 + 口径标注 + TTFT 首次观测声明；徽标为四舍五入整数（无 ≈/小数），
+  // 近似性披露由 tooltip 文本承担。
   const live = tokenSpeedLabelOf({ ...base, phase: 'decoding', tps: 52.35, ttftMs: 640 })!
-  assert.equal(live.text, '≈52.4 tok/s')
-  assert.match(live.title, /Live decode ≈52\.4 tok\/s/)
+  assert.equal(live.text, '52 tok/s')
+  assert.match(live.title, /Live decode 52 tok\/s/)
   assert.match(live.title, /1\.0s sliding-window streaming rate/)
   assert.match(live.title, /provider usage \+ char estimate mixed/)
   assert.match(live.title, /time is a throttled-frame approximation, not exact server decode time/)
@@ -287,8 +289,8 @@ test('展示模型：实时/工具暂停/终态口径区分与诚实标注；无
   assert.match(live.title, /TTFT 640ms \(first observed by the plugin, not the exact request start\)/)
   // 终态：对账口径（不再提滑动窗口）；时间仍为帧观测近似。
   const settled = tokenSpeedLabelOf({ ...base, phase: 'settled', tps: 125 })!
-  assert.equal(settled.text, '≈125.0 tok/s')
-  assert.match(settled.title, /Last turn decode ≈125\.0 tok\/s \(settled/)
+  assert.equal(settled.text, '125 tok/s')
+  assert.match(settled.title, /Last turn decode 125 tok\/s \(settled/)
   assert.match(settled.title, /observed net decode time/)
   assert.doesNotMatch(settled.title, /sliding-window/)
   // 无 TTFT（中途接入）：tooltip 不编造首字延迟测量值。
@@ -298,7 +300,7 @@ test('展示模型：实时/工具暂停/终态口径区分与诚实标注；无
 test('展示模型：文案随显式 locale 切换（zh-CN 走中文口径，默认 en）', { timeout: 60_000 }, () => {
   const base = { outputTokens: 500, decodeMs: 4_000, source: 'provider', windowMs: 1000 }
   const zh = tokenSpeedLabelOf({ ...base, phase: 'decoding', tps: 52.35 }, 'zh-CN')!
-  assert.match(zh.title, /实时解码 ≈52\.4 tok\/s（1\.0s 滑动窗口流式观测速率，口径 供应商 usage；/)
+  assert.match(zh.title, /实时解码 52 tok\/s（1\.0s 滑动窗口流式观测速率，口径 供应商 usage；/)
   assert.match(zh.title, /时间为节流帧观测近似，非服务器精确解码时间；不含首字延迟与工具执行；已生成 500 tok \/ 观测解码 4\.0s）$/)
   const en = tokenSpeedLabelOf({ ...base, phase: 'decoding', tps: 52.35 })!
   assert.match(en.title, /\(1\.0s sliding-window streaming rate, basis provider usage; time is a throttled-frame approximation, not exact server decode time; excludes TTFT and tool execution; 500 tok generated \/ 4\.0s observed decode\)$/)

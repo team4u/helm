@@ -6,8 +6,10 @@
  * - Every rate is an approximation observed from throttled live frames (75ms
  *   frames × 100ms partial commits) — even when the settled token count is
  *   reconciled against provider usage, the timing is still a frame-level
- *   approximation, so the badge text always carries the ≈ prefix (mobile users
- *   cannot hover the title) and never implies exact server decode timing;
+ *   approximation, so the badge shows a plain rounded integer (product copy:
+ *   no ≈ prefix, no decimals) and the approximation disclosure lives in the
+ *   tooltip prose ("throttled-frame approximation, not exact server decode
+ *   time") — never implying exact server decode timing;
  * - Tool pauses and streaming gaps keep the last valid rate of the turn (tool
  *   execution is not counted as decode time, and the tooltip says the timer is
  *   paused); when nothing measurable has accumulated yet, render nothing at
@@ -32,7 +34,7 @@ import {
 } from './copy.ts'
 
 interface SpeedLabel {
-  /** Compact read-only text (mono/tabular, e.g. `52.4 tok/s`). */
+  /** Compact read-only text (mono/tabular, e.g. `52 tok/s`). */
   text: string
   /** Hover explanation (discloses the accounting basis). */
   title: string
@@ -66,22 +68,23 @@ export function tokenSpeedLabelOf(
     typeof status.ttftMs === 'number' && Number.isFinite(status.ttftMs) && status.ttftMs >= 0
       ? tokenSpeedTtftSuffix(Math.round(status.ttftMs), locale)
       : ''
-  const tpsText = tps.toFixed(1)
+  // 整数展示：四舍五入后下限钳到 1 —— 正实测速率绝不渲染成 "0 tok/s"（0 意味着没有可测量速率，那应返回 null）。
+  const tpsText = String(Math.max(1, Math.round(tps)))
   if (status.phase === 'settled') {
     return {
-      text: `≈${tpsText} tok/s`,
+      text: `${tpsText} tok/s`,
       title: tokenSpeedSettledTitle({ tps: tpsText, tokens, decode, source, ttft }, locale),
     }
   }
   if (status.phase === 'tools') {
     return {
-      text: `≈${tpsText} tok/s`,
+      text: `${tpsText} tok/s`,
       title: tokenSpeedToolsTitle({ tps: tpsText, source, tokens, decode, ttft }, locale),
     }
   }
   const windowSeconds = status.windowMs / 1000
   return {
-    text: `≈${tpsText} tok/s`,
+    text: `${tpsText} tok/s`,
     title: tokenSpeedLiveTitle(
       {
         tps: tpsText,
