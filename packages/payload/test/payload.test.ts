@@ -19,20 +19,25 @@
  *    (dependency resolution + node:sqlite + a real esbuild exercise) → start.mjs start really launches
  *    the Hub and HTTP-probes /api/auth/status → clean SIGTERM exit. Never fixture-only.
  *
- * The same assembly also produces the stable launcher artifact (dist-launcher/, a zero-dependency
- * single-file bundle of helm-hub-launcher + @helm/update):
- * 6. launcher assembly contract: shebang single-file bundle, bin/name/version/engines, an empty
- *    dependency set (no unpublished private workspace packages), exact files whitelist;
- * 7. launcher bundle runs for real (`status --json` on an empty install root) and installs from a
- *    real tarball via `npm install -g` into an isolated prefix (the one-shot install story);
- * 8. golden sequence (PAYLOAD_NPM_SMOKE=1): the globally installed launcher installs a real Hub
- *    payload tarball (`update --tarball --start`), the health gate passes, `status` reports the
- *    running hub, and `stop` shuts it down cleanly — the only place the launcher and the real
- *    payload artifact meet before a release ships.
+ * The same assembly also produces the stable CLI artifact (dist-cli/, a zero-dependency
+ * single-file bundle of the complete control CLI: packages/cli/dist/index.js with the
+ * @helm/hub-launcher update-path closure inlined):
+ * 6. cli assembly contract: shebang single-file bundle, bin/name/version/engines (name
+ *    overridable via HELM_CLI_PACKAGE, bin single-sourced from packages/cli/package.json), an
+ *    empty dependency set (no unpublished private workspace packages), exact files whitelist;
+ *    the Hub payload's cli/dist/index.js is the exact same bundle bytes;
+ * 7. cli bundle runs for real (`helm --help` on an isolated data dir; `status --json` against a
+ *    guaranteed-dead endpoint reports an honest error envelope) and installs from a real tarball
+ *    via `npm install -g` into an isolated prefix (the one-shot install story);
+ * 8. golden sequence (PAYLOAD_NPM_SMOKE=1): the globally installed `helm` installs a real Hub
+ *    payload tarball (`update --tarball --version`: unpack → candidate-root npm install → check →
+ *    commit → launch → health gate), `update --status` reports the running hub, and `update --stop`
+ *    shuts it down cleanly — the only place the CLI artifact and the real payload artifact meet
+ *    before a release ships.
  *
  * These live in this single file on purpose: the runner executes test files as separate concurrent
  * processes, and both artifact suites share the one build.mjs run (which wipes and rebuilds
- * packages/payload/dist and dist-launcher) performed by the first test below.
+ * packages/payload/dist and dist-cli) performed by the first test below.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -49,8 +54,8 @@ import { createPluginHostBackendFixture } from '../../kernel/test/helpers/plugin
 const payloadPkgRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(payloadPkgRoot, '../..');
 const stagingDir = path.join(payloadPkgRoot, 'dist');
-const launcherStagingDir = path.join(payloadPkgRoot, 'dist-launcher');
-const launcherPackageName = process.env.HELM_LAUNCHER_PACKAGE ?? '@team4u/helm-hub-launcher';
+const cliStagingDir = path.join(payloadPkgRoot, 'dist-cli');
+const cliPackageName = process.env.HELM_CLI_PACKAGE ?? '@team4u/helm';
 
 /** Minimal type shape of the manifest contract (validated isomorphically on the start.mjs side). */
 interface PayloadManifest {
@@ -359,94 +364,117 @@ test('start.mjs without arguments: usage error exits with code 1', { timeout: 60
 });
 
 // ---------------------------------------------------------------------------
-// Stable launcher artifact (dist-launcher): the zero-dependency helm-hub-launcher bundle.
+// Stable CLI artifact (dist-cli): the zero-dependency single-file bundle of the complete helm CLI.
 // ---------------------------------------------------------------------------
 
-test('launcher assembly contract: dist-launcher is a zero-dependency publish package with a shebang single-file bundle', { timeout: 60_000 }, () => {
-  const pkg = JSON.parse(readFileSync(path.join(launcherStagingDir, 'package.json'), 'utf-8'));
-  assert.equal(pkg.name, launcherPackageName);
+test('cli artifact assembly contract: dist-cli is a zero-dependency publish package with a shebang single-file bundle', { timeout: 60_000 }, () => {
+  const pkg = JSON.parse(readFileSync(path.join(cliStagingDir, 'package.json'), 'utf-8'));
+  assert.equal(pkg.name, cliPackageName);
   const payloadPkg = JSON.parse(readFileSync(path.join(payloadPkgRoot, 'package.json'), 'utf-8'));
-  assert.equal(pkg.version, payloadPkg.version, 'launcher artifact version shares the payload single source');
-  assert.deepEqual(pkg.dependencies ?? {}, {}, 'the launcher artifact must declare zero dependencies (one-step npm install -g)');
+  assert.equal(pkg.version, payloadPkg.version, 'cli artifact version shares the payload single source');
+  assert.deepEqual(pkg.dependencies ?? {}, {}, 'the cli artifact must declare zero dependencies (one-step npm install -g)');
   assert.equal(pkg.type, 'module');
   const rootPkg = JSON.parse(readFileSync(path.join(repoRoot, 'package.json'), 'utf-8'));
   assert.equal(pkg.engines.node, rootPkg.engines?.node ?? '>=24.12.0');
+  // the bin name is single-sourced from the CLI workspace package (exactly one entry: helm)
+  const cliPkg = JSON.parse(readFileSync(path.join(repoRoot, 'packages/cli/package.json'), 'utf-8'));
+  assert.deepEqual(Object.keys(cliPkg.bin ?? {}), ['helm'], 'the workspace CLI package must declare exactly one bin entry: helm');
   const bin = pkg.bin;
-  assert.deepEqual(Object.keys(bin), ['helm-hub-launcher'], 'the bin name is single-sourced from the launcher package');
-  const bundle = readFileSync(path.join(launcherStagingDir, bin['helm-hub-launcher']), 'utf-8');
+  assert.deepEqual(Object.keys(bin), ['helm'], 'the bin name is single-sourced from the CLI package');
+  const bundle = readFileSync(path.join(cliStagingDir, bin['helm']), 'utf-8');
   assert.ok(bundle.startsWith('#!/usr/bin/env node'), 'the bundle must keep the shebang to work as a bin target');
-  assert.ok(!/from\s+['"]@helm\//.test(bundle), 'the bundle must not carry unresolved @helm/* imports');
+  // The authoritative zero-dependency gate runs build-side on esbuild's metafile (external @helm/*
+  // imports fail the assembly): text-scanning the bundle would false-positive on scaffold-template
+  // sample code that legitimately embeds `from '@helm/...'` inside string literals. Text-level here:
+  // no workspace: specifiers and no literal dynamic imports of workspace packages may remain (a
+  // non-inlined lazy import would crash at global-install time where no @helm/* package exists).
   assert.ok(!/workspace:/.test(bundle), 'the bundle must not carry workspace: specifiers');
-  assert.deepEqual(pkg.files.slice().sort(), ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'main.js']);
-  for (const file of pkg.files) {
-    assert.ok(existsSync(path.join(launcherStagingDir, file)), `files whitelist entry missing on disk: ${file}`);
+  for (const match of bundle.matchAll(/import\(\s*['"](@helm\/[^'"]+)['"]/g)) {
+    assert.fail(`the bundle must not carry a literal dynamic import of an unpackaged workspace package: ${match[1]}`);
   }
+  assert.deepEqual(pkg.files.slice().sort(), ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'index.js']);
+  for (const file of pkg.files) {
+    assert.ok(existsSync(path.join(cliStagingDir, file)), `files whitelist entry missing on disk: ${file}`);
+  }
+  // one esbuild output, two consumers: the Hub payload's cli entry must be the exact same bundle
+  // bytes as the publish artifact (both artifacts run one identical helm CLI).
+  const payloadCliEntry = path.join(stagingDir, 'cli', 'dist', 'index.js');
+  assert.ok(existsSync(payloadCliEntry), 'the payload must ship cli/dist/index.js');
+  assert.equal(sha256Of(payloadCliEntry), sha256Of(path.join(cliStagingDir, 'index.js')), 'payload cli/dist/index.js must be the same bundle as dist-cli/index.js');
 });
 
-test('launcher bundle: status --json answers honestly on an empty install root', { timeout: 60_000 }, () => {
-  const installRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-launcher-empty-'));
+test('cli bundle: help and honest error paths run for real from the single file', { timeout: 60_000 }, () => {
+  const dataDir = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-cli-bundle-'));
   try {
-    const res = spawnSync(process.execPath, [path.join(launcherStagingDir, 'main.js'), 'status', '--json'], {
-      cwd: installRoot,
+    // isolated data dir + dead endpoint: help must never fail on Hub/credential issues (core help
+    // prints with a separate diagnostic line), and exit 0.
+    const help = spawnSync(process.execPath, [path.join(cliStagingDir, 'index.js'), '--help'], {
+      cwd: dataDir,
       encoding: 'utf8',
       timeout: 50_000,
-      env: { ...process.env, HELM_HUB_INSTALL_ROOT: installRoot },
+      env: { ...process.env, HELM_DATA_DIR: dataDir, HELM_HUB_URL: 'http://127.0.0.1:1' },
     });
-    assert.equal(res.status, 0, `status --json expected exit 0, got ${res.status}\nstdout: ${res.stdout}\nstderr: ${res.stderr}`);
-    const payload = JSON.parse(res.stdout);
-    assert.equal(payload.installRoot, installRoot);
-    assert.equal(payload.current, null, 'an empty install root must report no current release');
-    assert.equal(payload.running, null, 'an empty install root must report no running hub');
+    assert.equal(help.status, 0, `helm --help expected exit 0, got ${help.status}\nstdout: ${help.stdout}\nstderr: ${help.stderr}`);
+    assert.match(help.stdout, /Usage: helm <command>/, 'core help must print the usage header');
+
+    // a guaranteed-dead endpoint (port 1 on loopback never listens) must surface an explicit error
+    // envelope, never a fabricated response: --json puts the envelope on stderr with a non-zero exit.
+    const status = spawnSync(process.execPath, [path.join(cliStagingDir, 'index.js'), 'status', '--json'], {
+      cwd: dataDir,
+      encoding: 'utf8',
+      timeout: 50_000,
+      env: { ...process.env, HELM_DATA_DIR: dataDir, HELM_HUB_URL: 'http://127.0.0.1:1' },
+    });
+    assert.notEqual(status.status, 0, 'status against a dead endpoint must not exit 0');
+    assert.match(status.stderr, /"error"/, 'the --json failure envelope must land on stderr');
   } finally {
-    rmSync(installRoot, { recursive: true, force: true });
+    rmSync(dataDir, { recursive: true, force: true });
   }
 });
 
-test('launcher tarball acceptance: npm pack → npm install -g into an isolated prefix → installed bin runs', {
+test('cli tarball acceptance: npm pack → npm install -g into an isolated prefix → installed bin runs', {
   timeout: 240_000,
   skip: process.platform === 'win32' ? 'bin link execution via shebang is verified on POSIX lanes' : false,
 }, () => {
-  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-launcher-tgz-'));
+  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-cli-tgz-'));
   try {
     const packDir = path.join(outsideRoot, 'pack');
     mkdirSync(packDir, { recursive: true });
-    const packRes = runCommand('npm', ['pack', '--json', '--pack-destination', packDir], launcherStagingDir, 120_000);
+    const packRes = runCommand('npm', ['pack', '--json', '--pack-destination', packDir], cliStagingDir, 120_000);
     const packInfo = JSON.parse(packRes.stdout);
     assert.equal(packInfo.length, 1, `expected a single tarball: ${packRes.stdout}`);
     const tgz = path.join(packDir, packInfo[0].filename);
 
-    // Tarball shape: package-root manifest (not a dist-launcher/ prefix), no node_modules payload.
+    // Tarball shape: package-root manifest (not a dist-cli/ prefix), no node_modules payload.
     const members = runCommand('tar', ['-tzf', tgz], outsideRoot, 30_000).stdout.split('\n').filter(Boolean);
     for (const member of members) {
       assert.ok(member.startsWith('package/'), `tarball member escapes the package/ prefix: ${member}`);
     }
-    for (const must of ['package/package.json', 'package/main.js', 'package/LICENSE', 'package/THIRD_PARTY_NOTICES.md']) {
-      assert.ok(members.includes(must), `launcher tarball is missing ${must}`);
+    for (const must of ['package/package.json', 'package/index.js', 'package/LICENSE', 'package/THIRD_PARTY_NOTICES.md']) {
+      assert.ok(members.includes(must), `cli tarball is missing ${must}`);
     }
-    assert.ok(!members.some((m) => m.includes('node_modules')), 'the launcher tarball must not carry node_modules');
+    assert.ok(!members.some((m) => m.includes('node_modules')), 'the cli tarball must not carry node_modules');
 
     // The one-shot story itself: install -g from the real tarball into an isolated prefix.
     const prefix = path.join(outsideRoot, 'global-prefix');
     runCommand('npm', ['install', '-g', tgz, '--prefix', prefix, '--no-audit', '--no-fund'], outsideRoot, 120_000);
-    const binPath = path.join(prefix, 'bin', 'helm-hub-launcher');
-    assert.ok(existsSync(binPath), `npm install -g must create the helm-hub-launcher bin link under ${prefix}/bin`);
+    const binPath = path.join(prefix, 'bin', 'helm');
+    assert.ok(existsSync(binPath), `npm install -g must create the helm bin link under ${prefix}/bin`);
 
     // Zero-dependency proof at the installed location: no node_modules was created beside the package.
-    const installedPkgDir = path.join(prefix, 'lib', 'node_modules', ...launcherPackageName.split('/'));
-    assert.ok(existsSync(path.join(installedPkgDir, 'main.js')), 'the installed package must carry the bundled entry');
+    const installedPkgDir = path.join(prefix, 'lib', 'node_modules', ...cliPackageName.split('/'));
+    assert.ok(existsSync(path.join(installedPkgDir, 'index.js')), 'the installed package must carry the bundled entry');
     assert.ok(!existsSync(path.join(installedPkgDir, 'node_modules')), 'a zero-dependency package must not grow node_modules on install');
 
-    const installRoot = path.join(outsideRoot, 'install-root');
-    const res = spawnSync(binPath, ['status', '--json'], {
+    const dataDir = path.join(outsideRoot, 'data');
+    const res = spawnSync(binPath, ['--help'], {
       cwd: outsideRoot,
       encoding: 'utf8',
       timeout: 50_000,
-      env: { ...process.env, HELM_HUB_INSTALL_ROOT: installRoot },
+      env: { ...process.env, HELM_DATA_DIR: dataDir, HELM_HUB_URL: 'http://127.0.0.1:1' },
     });
-    assert.equal(res.status, 0, `installed bin status --json expected exit 0, got ${res.status}\nstdout: ${res.stdout}\nstderr: ${res.stderr}`);
-    const payload = JSON.parse(res.stdout);
-    assert.equal(payload.installRoot, installRoot);
-    assert.equal(payload.current, null);
+    assert.equal(res.status, 0, `installed helm --help expected exit 0, got ${res.status}\nstdout: ${res.stdout}\nstderr: ${res.stderr}`);
+    assert.match(res.stdout, /Usage: helm <command>/, 'the installed bin must run the bundled CLI');
   } finally {
     rmSync(outsideRoot, { recursive: true, force: true });
   }
@@ -613,6 +641,28 @@ test('end-to-end: npm pack → isolated npm install → check → start really l
       } finally {
         // the token lives only in this test's local variables; never written to logs or assertion messages.
       }
+
+      // real acceptance of the payload-bundled CLI (the exact same single-file bundle as the
+      // dist-cli artifact): run cli/dist/index.js status --json against the live Hub over real
+      // HTTP — exercising the bundled command dispatch, credential env, and JSON output path.
+      const cliStatus = spawnSync(
+        process.execPath,
+        [path.join(extractDir, 'cli', 'dist', 'index.js'), 'status', '--json'],
+        {
+          cwd: extractDir,
+          encoding: 'utf8',
+          timeout: 50_000,
+          env: { ...env, HELM_HUB_URL: `http://127.0.0.1:${port}`, HELM_TOKEN: token },
+        },
+      );
+      assert.equal(
+        cliStatus.status,
+        0,
+        `bundled helm status --json expected exit 0, got ${cliStatus.status}\nstdout: ${cliStatus.stdout}\nstderr: ${cliStatus.stderr}`,
+      );
+      const cliStatusBody = JSON.parse(cliStatus.stdout) as Record<string, unknown>;
+      assert.equal(cliStatusBody['configured'], true, 'the bundled CLI must see a configured Hub');
+      assert.equal(cliStatusBody['authenticated'], true, 'the bundled CLI must authenticate with the setup token');
     } finally {
       child.kill('SIGTERM');
       exitInfo = await waitForExit(5_000);
@@ -699,13 +749,18 @@ test('payload prebuilt mermaid: unpacked plugins.tgz serves mermaid & chunks wit
 });
 
 /**
- * Launcher golden sequence (real npm network acceptance, gated like the payload e2e above): the
- * globally installed launcher installs a real Hub payload tarball into its own release root
- * (`update --tarball --start`: unpack → candidate-root npm install → check → commit → launch →
- * health gate), `status` reflects the running release, and `stop` shuts it down cleanly. This is
- * the only place the launcher and the real payload artifact meet before a release ships.
+ * CLI golden sequence (real npm network acceptance, gated like the payload e2e above): the
+ * globally installed `helm` installs a real Hub payload tarball into its own release root
+ * (`update --tarball --version`: unpack → candidate-root npm install → check → commit → launch →
+ * health gate — the first `helm update` defaults to install and start), `update --status`
+ * reflects the running release, and `update --stop` shuts it down cleanly. This is the only
+ * place the CLI artifact and the real payload artifact meet before a release ships.
+ *
+ * Note: the user-facing update surface (`helm update --check/--watch/--status/--stop/--channel/
+ * --interval-ms/--tarball+--version`, no --start) is implemented CLI-side on @helm/hub-launcher's
+ * typed API; this sequence pins the distribution contract against it.
  */
-test('launcher golden sequence: installed launcher updates from a real payload tarball, health-gates, and stops', {
+test('cli golden sequence: installed helm updates from a real payload tarball, health-gates, and stops', {
   timeout: 600_000,
   skip: process.env.PAYLOAD_NPM_SMOKE !== '1'
     ? 'the real npm network acceptance runs as a dedicated CI step with PAYLOAD_NPM_SMOKE=1'
@@ -714,62 +769,68 @@ test('launcher golden sequence: installed launcher updates from a real payload t
       : false,
 }, async () => {
   const payloadPkg = JSON.parse(readFileSync(path.join(stagingDir, 'package.json'), 'utf-8'));
-  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-launcher-golden-'));
+  const outsideRoot = mkdtempSync(path.join(path.dirname(repoRoot), 'helm-cli-golden-'));
   try {
-    // 1. Real tarballs: launcher (published form) + Hub payload (the update target).
+    // 1. Real tarballs: cli (published form) + Hub payload (the update target).
     const packDir = path.join(outsideRoot, 'pack');
     mkdirSync(packDir, { recursive: true });
-    const launcherPack = runCommand('npm', ['pack', '--json', '--pack-destination', packDir], launcherStagingDir, 120_000);
-    const launcherTgz = path.join(packDir, JSON.parse(launcherPack.stdout)[0].filename);
+    const cliPack = runCommand('npm', ['pack', '--json', '--pack-destination', packDir], cliStagingDir, 120_000);
+    const cliTgz = path.join(packDir, JSON.parse(cliPack.stdout)[0].filename);
     const payloadPack = runCommand('npm', ['pack', '--json', '--pack-destination', packDir], stagingDir, 120_000);
     const payloadTgz = path.join(packDir, JSON.parse(payloadPack.stdout)[0].filename);
 
-    // 2. One-shot install of the launcher, exactly as a member machine would do it.
+    // 2. One-shot install of the CLI, exactly as a member machine would do it.
     const prefix = path.join(outsideRoot, 'global-prefix');
-    runCommand('npm', ['install', '-g', launcherTgz, '--prefix', prefix, '--no-audit', '--no-fund'], outsideRoot, 120_000);
-    const binPath = path.join(prefix, 'bin', 'helm-hub-launcher');
-    assert.ok(existsSync(binPath), 'npm install -g must create the helm-hub-launcher bin link');
+    runCommand('npm', ['install', '-g', cliTgz, '--prefix', prefix, '--no-audit', '--no-fund'], outsideRoot, 120_000);
+    const binPath = path.join(prefix, 'bin', 'helm');
+    assert.ok(existsSync(binPath), 'npm install -g must create the helm bin link');
 
-    // 3. update --tarball --start: the install root and the hub data dir stay separate trees by
-    //    contract; the port is an ephemeral claim, not a guess.
+    // 3. update --tarball --version: the first update installs and starts (default action; there is
+    //    no --start flag on the new surface). The install root and the hub data dir stay separate
+    //    trees by contract; the port is an ephemeral claim, not a guess.
     const installRoot = path.join(outsideRoot, 'install-root');
     const dataDir = path.join(outsideRoot, 'hub-data');
     const port = await freePort();
-    const updateEnv: NodeJS.ProcessEnv = { ...process.env, HELM_HUB_INSTALL_ROOT: installRoot };
+    const updateEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      HELM_HUB_INSTALL_ROOT: installRoot,
+      HELM_PORT: String(port),
+      HELM_HOST: '127.0.0.1',
+      HELM_DATA_DIR: dataDir,
+    };
     delete updateEnv.NODE_PATH;
-    const update = spawnSync(binPath, [
-      'update', '--tarball', payloadTgz, '--version', payloadPkg.version, '--start',
-      '--port', String(port), '--host', '127.0.0.1', '--data-dir', dataDir, '--health-timeout', '120000',
-    ], { cwd: outsideRoot, encoding: 'utf8', timeout: 420_000, env: updateEnv });
+    const update = spawnSync(binPath, ['update', '--tarball', payloadTgz, '--version', payloadPkg.version], {
+      cwd: outsideRoot, encoding: 'utf8', timeout: 420_000, env: updateEnv,
+    });
     assert.equal(
       update.status,
       0,
-      `launcher update --tarball failed (exit ${update.status})\nstdout: ${update.stdout}\nstderr: ${update.stderr}`,
+      `helm update --tarball failed (exit ${update.status})\nstdout: ${update.stdout}\nstderr: ${update.stderr}`,
     );
 
-    // 4. status: the committed release is current and the hub is running and healthy.
-    const status = spawnSync(binPath, ['status', '--json'], { cwd: outsideRoot, encoding: 'utf8', timeout: 50_000, env: updateEnv });
-    assert.equal(status.status, 0, `status --json failed\nstdout: ${status.stdout}\nstderr: ${status.stderr}`);
+    // 4. update --status: the committed release is current and the hub is running and healthy.
+    const status = spawnSync(binPath, ['update', '--status', '--json'], { cwd: outsideRoot, encoding: 'utf8', timeout: 50_000, env: updateEnv });
+    assert.equal(status.status, 0, `helm update --status --json failed\nstdout: ${status.stdout}\nstderr: ${status.stderr}`);
     const snapshot = JSON.parse(status.stdout);
     assert.equal(snapshot.current?.version, payloadPkg.version);
-    assert.ok(snapshot.running !== null, 'the hub must be running after update --start');
+    assert.ok(snapshot.running !== null, 'the hub must be running after the default install-and-start update');
     assert.equal(snapshot.running.port, port);
     assert.equal(snapshot.running.alive, true);
     assert.equal(snapshot.running.healthy, true, 'the health gate must have passed before update reported success');
     assert.ok(existsSync(path.join(installRoot, 'releases', payloadPkg.version)), 'the immutable release directory must exist');
     assert.ok(existsSync(path.join(installRoot, 'logs', 'hub.log')), 'the detached hub log must exist for diagnostics');
 
-    // 5. stop: identity-verified shutdown, leaving no pid file behind.
-    const stop = spawnSync(binPath, ['stop'], { cwd: outsideRoot, encoding: 'utf8', timeout: 120_000, env: updateEnv });
-    assert.equal(stop.status, 0, `launcher stop failed\nstdout: ${stop.stdout}\nstderr: ${stop.stderr}`);
-    const after = spawnSync(binPath, ['status', '--json'], { cwd: outsideRoot, encoding: 'utf8', timeout: 50_000, env: updateEnv });
+    // 5. update --stop: identity-verified shutdown, leaving no pid file behind.
+    const stop = spawnSync(binPath, ['update', '--stop'], { cwd: outsideRoot, encoding: 'utf8', timeout: 120_000, env: updateEnv });
+    assert.equal(stop.status, 0, `helm update --stop failed\nstdout: ${stop.stdout}\nstderr: ${stop.stderr}`);
+    const after = spawnSync(binPath, ['update', '--status', '--json'], { cwd: outsideRoot, encoding: 'utf8', timeout: 50_000, env: updateEnv });
     const afterSnapshot = JSON.parse(after.stdout);
-    assert.equal(afterSnapshot.running, null, 'no hub may keep running after stop');
+    assert.equal(afterSnapshot.running, null, 'no hub may keep running after update --stop');
     assert.equal(afterSnapshot.current?.version, payloadPkg.version, 'the committed release survives the stop');
     assert.ok(readdirSync(path.join(installRoot, 'releases')).length >= 1, 'release directories are retained for rollback');
   } finally {
     // Best-effort cleanup: stop anything the sequence may have left running before dropping the tree.
-    spawnSync(path.join(outsideRoot, 'global-prefix', 'bin', 'helm-hub-launcher'), ['stop'], {
+    spawnSync(path.join(outsideRoot, 'global-prefix', 'bin', 'helm'), ['update', '--stop'], {
       cwd: outsideRoot, timeout: 60_000, env: { ...process.env, HELM_HUB_INSTALL_ROOT: path.join(outsideRoot, 'install-root') },
     });
     rmSync(outsideRoot, { recursive: true, force: true });
