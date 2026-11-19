@@ -15,12 +15,14 @@
 
 helm 当前有两种安装方式：**npm 制品模式**（一次安装，推荐日常使用）与**源代码模式**（开发贡献）。npm 制品随 `v*` tag 的 release 工作流发布（见[发布流程](../releasing.md)）；在第一个正式版本发布之前，registry 上尚无制品，请先使用源代码模式。
 
+npm 侧共三个制品，按角色分工：`@team4u/helm-cli`（控制 CLI，bin `helm`）、`@team4u/helm-hub`（Hub 发行 payload，由 `helm update` 安装管理，一般不直接手动安装）与 `@team4u/helm-node`（远端节点守护进程，bin `helm-node`）。
+
 ## npm 制品安装（一次安装）
 
-全局安装 `@team4u/helm` 后，用 `helm` 管理本机 Hub，也可以连接已有 Hub 来操作会话、模型和插件。
+本机（Hub 所在机器）全局安装 `@team4u/helm-cli` 后，用 `helm` 管理本机 Hub，也可以连接已有 Hub 来操作会话、模型和插件。
 
 ```bash
-npm install -g @team4u/helm
+npm install -g @team4u/helm-cli
 helm update --watch
 ```
 
@@ -37,9 +39,20 @@ helm update --watch
 
 安装根默认 `~/.helm-hub`（`HELM_HUB_INSTALL_ROOT`），会话、凭据和插件数据默认位于 `~/.helm`（`HELM_DATA_DIR`）。这两个目录必须独立。端口默认 `3202`，绑定地址默认 `127.0.0.1`。启动配置优先使用命令行参数，其次是环境变量和上次保存的启动配置。用 `helm update --help` 查看选项。
 
-`--watch` 管理自己启动的 Hub，按 `Ctrl+C` 关闭。在 macOS 和 Windows 上使用 `--watch` 管理和更新运行中的 Hub。Windows 关停通过终止进程树完成。`helm update` 管理的是 Hub 版本。如需更新 npm 安装的 `helm` 命令本身，重新执行 `npm install -g @team4u/helm`。
+`--watch` 管理自己启动的 Hub，按 `Ctrl+C` 关闭。在 macOS 和 Windows 上使用 `--watch` 管理和更新运行中的 Hub。Windows 关停通过终止进程树完成。`helm update` 管理的是 Hub 版本。如需更新 npm 安装的 `helm` 命令本身，重新执行 `npm install -g @team4u/helm-cli`。
 
 全局安装后的 `helm plugins build` 使用本机已安装的 Hub 发行包中的编译器。请先通过 `helm update` 安装发行包。
+
+## 远端节点的 npm 制品安装
+
+远端受控机器首次接入只需一步安装节点守护进程：
+
+```bash
+npm install -g @team4u/helm-node
+helm-node start -d --hub http://<hub-host>:3202 --token <nodeId>:<secret>
+```
+
+节点制品的外部依赖恰为四个精确版本（`@earendil-works/chord` / `@earendil-works/pi-durable` / `birpc` / `ws`），`npm install -g` 即完成全部准备。后续版本由 Hub 侧 `helm nodes upgrade` 驱动：守护进程把 `@team4u/helm-node` 与 `@team4u/helm-cli` 双包同版本绑定升级，无需再手工重装（升级机制见 [EnvFabric 分布式执行底座](../architecture/envfabric.md)）。
 
 ## 源代码模式安装
 

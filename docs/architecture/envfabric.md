@@ -190,7 +190,7 @@ pnpm helm nodes forward gpu-a "[::1]:8080" 8000
 
 ## 节点自升级与升级排空
 
-`@helm/node` 内置双包协同自升级引擎（`@helm/node` 与 `@helm/cli` 同版本绑定），全程原子提交、失败自动回滚：
+`@helm/node` 内置双包协同自升级引擎（npm 制品 `@team4u/helm-node` 与 `@team4u/helm-cli` 同版本绑定；远端机器首次安装走 `npm install -g @team4u/helm-node`，此后由升级机制接管），全程原子提交、失败自动回滚：
 
 ```mermaid
 sequenceDiagram

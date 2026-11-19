@@ -46,7 +46,7 @@
 
 ### 本机 Hub 生命周期（npm 制品）
 
-**`helm update [--check] [--watch] [--status] [--stop] [--channel <tag>] [--interval-ms <ms>] [--tarball <path> --version <ver>]`** — 本机 Hub payload 的安装、更新与生命周期管理（`npm install -g @team4u/helm` 制品的主入口；经 `@helm/hub-launcher` 内部 typed API 实现，launcher 不单独发布 bin）。安装根 `~/.helm-hub`（`HELM_HUB_INSTALL_ROOT`）与用户数据 `~/.helm` 严格分离。
+**`helm update [--check] [--watch] [--status] [--stop] [--channel <tag>] [--interval-ms <ms>] [--tarball <path> --version <ver>]`** — 本机 Hub payload 的安装、更新与生命周期管理（`npm install -g @team4u/helm-cli` 制品的主入口；生命周期面实现于 `@helm/cli` 内的 launcher 模块 `packages/cli/src/launcher/`，不单独发布 bin）。安装根 `~/.helm-hub`（`HELM_HUB_INSTALL_ROOT`）与用户数据 `~/.helm` 严格分离。
 
 | 调用 | 说明 |
 | :--- | :--- |
@@ -146,7 +146,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helm nodes remove <nodeId>`** — 注销节点并断开连接。
 
-**`helm nodes upgrade [<nodeId>] [--check] [--version <v>] [--registry <url>] [--force] [--current]`** — 检查或执行节点自升级；`--current` 读 `HELM_NODE_ID`；执行禁用客户端超时。
+**`helm nodes upgrade [<nodeId>] [--check] [--version <v>] [--registry <url>] [--force] [--current]`** — 检查或执行节点自升级（守护进程把 `@team4u/helm-node` 与 `@team4u/helm-cli` 双包同版本绑定升级；远端首次安装走 `npm install -g @team4u/helm-node`）；`--current` 读 `HELM_NODE_ID`；执行禁用客户端超时。
 
 **`helm nodes forward [<nodeId> | --current] <listenHost:listenPort> [<targetHost>:]<targetPort>`** — 前台本地 TCP 端口转发：Hub 主机按需监听并将连接经节点隧道转发到目标节点视角的 `host:port`（目标 host 缺省 `127.0.0.1`），Ctrl-C 退出即关闭。
 
@@ -244,7 +244,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helm-node status`** — 节点绑定信息、后台进程 PID、`instanceId` 与运行态摘要。
 
-**`helm-node upgrade [--check] [--version <v>] [--registry <url>] [--force]`** — 自升级：双包同版本绑定 → 双阶段 SHA-512 校验 → 离线安装至不可变候选目录 → 金丝雀握手 → `upgradeCommit` 唯一提交点 → 失败自动回滚并写 `update-blocked.json` 隔离。
+**`helm-node upgrade [--check] [--version <v>] [--registry <url>] [--force]`** — 自升级：`@team4u/helm-node` 与 `@team4u/helm-cli` 双包同版本绑定 → 双阶段 SHA-512 校验 → 离线安装至不可变候选目录 → 金丝雀握手 → `upgradeCommit` 唯一提交点 → 失败自动回滚并写 `update-blocked.json` 隔离。
 
 **`helm-node doctor`** — 无副作用只读自检：`node.json` 权限（0600）、工作空间磁盘写入权限、Hub 端口连通性、Herdr 本地 IPC 管道状态。
 
