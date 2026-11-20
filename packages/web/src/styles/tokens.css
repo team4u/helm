@@ -48,7 +48,8 @@
   --diff-gutter-bg: #eef1f4;
   --diff-gutter-border: rgba(27, 31, 36, 0.08);
 
-  --human-pill-bg: #ffffff;
+  /* 人类输入胶囊：纸白降半档（低于 elevated 纯白），避免时间线上最亮表面抢视线 */
+  --human-pill-bg: #fbfbfd;
   --human-pill-border: #dcdce3;
 
   --fg: #1c1c21;
