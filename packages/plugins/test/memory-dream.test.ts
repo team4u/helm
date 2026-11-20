@@ -70,7 +70,10 @@ test('dream 纯函数：parseDreamModelOutput 严格校验（单一裸 JSON 对�
   for (const [raw, message] of fenced) {
     assert.throws(
       () => parseDreamModelOutput(raw, 8000),
-      (err: unknown) => err instanceof HelmxError && err.code === 'dream_output_invalid' && err.details?.reason === 'not_json',
+      (err: unknown) =>
+        err instanceof HelmxError &&
+        err.code === 'dream_output_invalid' &&
+        (err.details as { reason?: string } | undefined)?.reason === 'not_json',
       `${message} 应被拒绝`,
     )
   }
@@ -88,7 +91,10 @@ test('dream 纯函数：parseDreamModelOutput 严格校验（单一裸 JSON 对�
   for (const [raw, budget, reason] of cases) {
     assert.throws(
       () => parseDreamModelOutput(raw, budget),
-      (err: unknown) => err instanceof HelmxError && err.code === 'dream_output_invalid' && err.details?.reason === reason,
+      (err: unknown) =>
+        err instanceof HelmxError &&
+        err.code === 'dream_output_invalid' &&
+        (err.details as { reason?: string } | undefined)?.reason === reason,
       `${reason} 应被拒绝：${raw.slice(0, 40)}`,
     )
   }
@@ -1055,7 +1061,7 @@ interface EngineHarness {
   clock: FakeClock
   dir: string
   store: MemoryStore
-  calls: Array<{ conversationId: number; maxTokens?: number; signal?: AbortSignal }>
+  calls: Array<{ conversationId: number; text: string; maxTokens?: number; signal?: AbortSignal }>
   events: Array<{ title: string; detail: string }>
   setCompleteText(impl: (input: { signal?: AbortSignal }) => Promise<string>): void
   setMemoryEnabled(enabled: boolean): void
@@ -1420,7 +1426,7 @@ test('dream 真实组合层：faux 模型输出经 completeText 写回 MEMORY.md
     await waitFor(
       async () => {
         const status = (await plugins.invokeAction('builtin:memory', 'dream_status', {})) as {
-          profiles: Array<{ candidateCount: number }>
+          profiles: Array<{ profileId: string; candidateCount: number }>
         }
         return (status.profiles.find((p) => p.profileId === 'assistant')?.candidateCount ?? 0) > 0
       },
