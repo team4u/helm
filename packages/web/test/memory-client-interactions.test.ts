@@ -481,3 +481,77 @@ test('dream_status 载荷畸形：诚实报错、整节不崩溃、手动运行�
     assert.ok(ui.host.querySelector('[role="switch"]') !== null, '整节不崩溃，开关仍在')
   } finally { ui.unmount() }
 })
+
+test('dream 运行/刷新期间阻止 Save 与 Switch 分叉，textarea 仍可形成草稿；反向亦然', { timeout: 60_000 }, async () => {
+  const dreamGate = deferred<unknown>()
+  const action: ClientContext['callAction'] = async (name, input) => {
+    const id = String((input as { profileId: string }).profileId)
+    if (name === 'get') return memory(id, '原文')
+    if (name === 'dream_status') return dreamStatus(id)
+    if (name === 'dream') return dreamGate.promise
+    return {}
+  }
+  const ui = await mount(action)
+  try {
+    await act(async () => { dreamRunButton(ui.host).click() })
+    assert.match(ui.host.textContent!, /Organizing…/)
+    await typeText(ui.host, '运行期间的新草稿')
+    assert.equal(editor(ui.host).value, '运行期间的新草稿', 'textarea 在整理期间仍可编辑')
+    assert.equal(saveButton(ui.host).disabled, true, '整理在途（含写回与刷新窗口）Save 必须锁定')
+    const switchNode = ui.host.querySelector<HTMLButtonElement>('[role="switch"]')
+    assert.ok(switchNode !== null)
+    assert.equal(switchNode.disabled, true, '整理在途 Switch 必须锁定')
+    await act(async () => { dreamGate.resolve({ profileId: 'a', ran: true, applied: true, candidateCount: 2, consumed: 2 }) })
+    assert.equal(editor(ui.host).value, '运行期间的新草稿', '脏草稿跨整理保留')
+    assert.equal(saveButton(ui.host).disabled, false, '整理结束后 Save 解锁（脏草稿可显式保存）')
+    assert.equal(switchNode.disabled, false, '整理结束后 Switch 解锁')
+  } finally { ui.unmount() }
+})
+
+test('Save 在途时不得开整理（双向互斥）', { timeout: 60_000 }, async () => {
+  const setGate = deferred<unknown>()
+  const action: ClientContext['callAction'] = async (name, input) => {
+    const id = String((input as { profileId: string }).profileId)
+    if (name === 'set') return setGate.promise
+    if (name === 'get') return memory(id, '原文')
+    if (name === 'dream_status') return dreamStatus(id)
+    return {}
+  }
+  const ui = await mount(action)
+  try {
+    await typeText(ui.host, '待保存草稿')
+    await act(async () => { saveButton(ui.host).click() })
+    assert.equal(dreamRunButton(ui.host).disabled, true, 'Save 在途时整理按钮必须禁用')
+    await act(async () => { setGate.resolve({ ok: true }) })
+    assert.equal(dreamRunButton(ui.host).disabled, false, 'Save 结束后整理恢复可用')
+  } finally { ui.unmount() }
+})
+
+test('整理后正文刷新失败：显式告警与重试，成功后编辑区追上新正文', { timeout: 60_000 }, async () => {
+  let gets = 0
+  const action: ClientContext['callAction'] = async (name, input) => {
+    const id = String((input as { profileId: string }).profileId)
+    if (name === 'get') {
+      gets += 1
+      if (gets === 2) throw new Error('刷新读取失败')
+      return memory(id, gets === 1 ? '原文' : '原文\n- 整理新增行')
+    }
+    if (name === 'dream_status') return dreamStatus(id)
+    if (name === 'dream') return { profileId: id, ran: true, applied: true, conflict: false, candidateCount: 2, consumed: 2 }
+    return {}
+  }
+  const ui = await mount(action)
+  try {
+    await act(async () => { dreamRunButton(ui.host).click() })
+    assert.equal(editor(ui.host).value, '原文', '刷新失败时编辑区不伪造新正文')
+    assert.match(ui.host.textContent!, /Dream applied \(2 candidates merged\)/, '整理本身的成果如实报告')
+    const alert = ui.host.querySelector('[role="alert"].memory-dream-refresh-error')
+    assert.ok(alert !== null, '刷新失败必须有显式告警')
+    assert.match(ui.host.textContent!, /failed to reload it; the editor still shows the previous version/)
+    const retry = [...ui.host.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent === 'Retry')
+    assert.ok(retry !== undefined, '刷新失败提供重试入口')
+    await act(async () => { retry.click() })
+    assert.equal(editor(ui.host).value, '原文\n- 整理新增行', '重试成功后编辑区追上整理后正文')
+    assert.ok(ui.host.querySelector('[role="alert"].memory-dream-refresh-error') === null, '成功后告警消除')
+  } finally { ui.unmount() }
+})

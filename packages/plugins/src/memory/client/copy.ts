@@ -189,6 +189,10 @@ export const MEMORY_DREAM_DRAFT_KEPT: LocalizedText = {
   en: 'Unsaved edits in the editor were kept (based on the pre-dream text); saving them will replace the organized memory.',
   'zh-CN': '已保留编辑区未保存的修改（基于整理前文本）；保存将覆盖整理后的记忆。',
 }
+export const MEMORY_DREAM_REFRESH_FAILED: LocalizedText = {
+  en: 'The organized memory was applied, but the editor failed to reload it; the editor still shows the previous version.',
+  'zh-CN': '整理后的记忆已写入，但编辑区正文刷新失败，编辑器仍显示旧版本。',
+}
 export const MEMORY_DREAM_PAUSE: LocalizedText = { en: 'Pause auto', 'zh-CN': '暂停自动' }
 export const MEMORY_DREAM_RESUME: LocalizedText = { en: 'Resume auto', 'zh-CN': '恢复自动' }
 export const MEMORY_DREAM_GLOBAL_HINT: LocalizedText = {

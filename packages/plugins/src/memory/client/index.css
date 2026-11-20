@@ -68,3 +68,11 @@
 .memory-dream-diag {
   overflow-wrap: anywhere;
 }
+.memory-dream-refresh-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
