@@ -11,18 +11,25 @@
  * - 顶栏「新话题」：单候选角色直进待命页，多候选下拉选角（最近活跃根会话
  *   所属角色置顶，远端节点 @后缀标注）；首次发送才落库，不预创建会话；
  * - 筛选：全部 / 需处理 / 进行中 / 未读（SegmentedControl）+ 角色 / 节点 /
- *   来源（SDK Select，来源 = 常规对话 vs 托管会话，托管判定与侧栏
- *   sidebarSection filterTag 同源，零插件 ID 特判）；排序桶序 + createdAt
+ *   来源（SDK Select）+ 标题/摘要搜索，全部状态经唯一 URL Hash 导航模型
+ *   持久化（overview 目标的 sp. / ssp. 路由参数，仅参数变化 replace，
+ *   刷新/前进/后退/深链可恢复）；来源 = 常规对话 vs 托管会话，托管判定与
+ *   侧栏 sidebarSection filterTag 同源，零插件 ID 特判；排序桶序 + createdAt
  *   倒序，流式输出不跳卡；
+ * - 无结果语义：真实空系统与筛选无命中显式区分，无命中提供一键清除筛选；
+ *   桶徽标计数在其余筛选上下文内统计（如实表达切桶后的剩余量）；
+ * - 批量管理：选择集合始终收敛为当前可见可勾选卡片的子集（筛选变化与
+ *   实时会话变化后隐藏项立即出局，绝不悄悄操作不可见对象）；托管/bot 会话
+ *   保护与部分失败通知与侧栏同语义；
  * - 卡片元信息区挂 OVERVIEW_CARD_META_SLOT 只读插槽（插件贡献跳转胶囊等，
- *   插槽内可点元素自行 stopPropagation，不误触卡片直达；无贡献零占位）；
+ *   插槽内可点元素自带行为、不依赖冒泡拦截；无贡献零占位）；
  * - 审批仍走 AskDoc、后台通知仍走浏览器通知旧链路——本视图是态势的分发
  *   大堂，不是新的通知收件箱；
  * - 移动端主舞台自适应：筛选折行、卡片网格单列化（responsive 断点）。
  */
 import { HubUpdateCard } from './HubUpdateCard.js'
 import { HubUpgradedNotice } from './HubUpgradedNotice.js'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { HelmxIcon, Checkbox, PluginSlot, SegmentedControl, Select } from '@helmx/plugin-client'
@@ -56,10 +63,15 @@ import { useGlobalAttention } from '../shell/use-attention-indicator.js'
 import {
   buildOverviewCards,
   filterOverviewCards,
+  overviewBucketCounts,
+  overviewFilterParamsRepair,
   overviewNodeOptions,
   overviewProfileOptions,
+  parseOverviewFilterParams,
+  OVERVIEW_DESCENDANT_LIMIT,
   type OverviewBucketFilter,
   type OverviewCard,
+  type OverviewFilterParamKey,
   type OverviewSourceFilter,
 } from './overview-model.js'
 
@@ -72,7 +84,10 @@ type BucketFilterValue = OverviewBucketFilter
 type SourceFilterValue = OverviewSourceFilter
 
 /** 单卡：根会话树聚合卡（只读）；卡面/芯片直进主屏会话。
- * 批量模式下整卡变为勾选目标（含芯片点击），不再触发导航。 */
+ * 可访问性结构：外层 div 仅承载鼠标整卡点击便利（不挂交互 ARIA 角色，
+ * 避免交互嵌套），真正的语义入口是标题簇真按钮（含状态灯可读标签，
+ * 键盘 Enter/Space 可达）；菜单/勾选框/芯片/展开开关均为独立兄弟控件，
+ * 绝不嵌套进按钮。批量模式下按钮与整卡点击变为勾选切换（aria-pressed）。 */
 function OverviewCardView({
   card,
   onOpenConversation,
@@ -82,7 +97,9 @@ function OverviewCardView({
   batchMode = false,
   selectable = false,
   selected = false,
+  expanded = false,
   onToggleSelect,
+  onToggleExpanded,
 }: {
   card: OverviewCard
   onOpenConversation: (conversationId: number) => void
@@ -92,7 +109,10 @@ function OverviewCardView({
   batchMode?: boolean
   selectable?: boolean
   selected?: boolean
+  /** 卡内后代芯片是否展开全量（确定性排序不变，仅补齐剩余）。 */
+  expanded?: boolean
   onToggleSelect?: (conversationId: number) => void
+  onToggleExpanded?: (rootConversationId: number) => void
 }): ReactNode {
   const { t } = useWebLocale()
   const remoteNodeId = card.root.nodeId !== undefined && card.root.nodeId !== 'local' ? card.root.nodeId : null
@@ -123,17 +143,24 @@ function OverviewCardView({
   const toggleCardSelect = (): void => {
     if (selectable) onToggleSelect?.(card.root.id)
   }
+  const activateCard = (): void => {
+    if (batchMode) {
+      toggleCardSelect()
+      return
+    }
+    onOpenConversation(card.targetConversationId)
+  }
+  const openLabel = t('shell.attention.openConversation', { id: card.targetConversationId })
+  const cardTitleText = card.root.title || t('shell.conversationFallback', { id: card.root.id })
+  // 批量模式按钮语义切换为勾选（aria-pressed 表态，名称如实描述切换动作）；
+  // 普通模式不覆写 aria-label——可访问名称直接由内容组成（状态灯可读标签 +
+  // 标题 + #id），异常/等待人类事实原样进入读屏。
+  const buttonLabel = batchMode ? `${cardTitleText} · ${t('shell.overview.batchToggleCard')}` : openLabel
+  const shownDescendants = expanded ? card.descendants : card.descendants.slice(0, OVERVIEW_DESCENDANT_LIMIT)
   return (
     <div
       className={`overview-card overview-card-${card.bucket}${selected ? ' is-selected' : ''}`}
-      onClick={() => {
-        if (batchMode) {
-          toggleCardSelect()
-          return
-        }
-        onOpenConversation(card.targetConversationId)
-      }}
-      title={t('shell.attention.openConversation', { id: card.targetConversationId })}
+      onClick={activateCard}
     >
       <div className="overview-card-head">
         {batchMode && (
@@ -146,21 +173,36 @@ function OverviewCardView({
             />
           </span>
         )}
-        <span className="nav-status-slot">
-          {/* 灯位与侧栏会话行完全同构（通用统一口径）：根会话自身状态 +
-              树级后台在途聚合，经同一 resolveStatusLight 单灯裁决——根 idle
-              且树内有后台在途时同样渲染空心蓝环；子代理等后代状态由后代
-              芯片各自的灯与诚实摘要承载，不在卡面灯位混入代表位语义。 */}
-          <ConversationStatusDot
-            conv={card.root}
-            background={{ active: card.backgroundActive, summary: card.backgroundSummary }}
-            showDone={card.root.unread && !viewedConversationIds.has(card.root.id)}
-          />
-        </span>
-        <span className="overview-card-title">
-          {card.root.title || t('shell.conversationFallback', { id: card.root.id })}
-        </span>
-        <span className="overview-card-id tabular-nums">#{card.root.id}</span>
+        {/* 语义主入口：真按钮包住标题簇（灯 + 标题 + #id）。按钮内容即
+            可访问名称——状态灯自带可读 aria-label，异常/等待人类事实经
+            灯标签与诚实摘要原样进入读屏，不编造、不加进度。 */}
+        <button
+          type="button"
+          className="overview-card-open"
+          title={buttonLabel}
+          aria-label={batchMode ? buttonLabel : undefined}
+          aria-pressed={batchMode ? selected : undefined}
+          onClick={(e) => {
+            e.stopPropagation()
+            activateCard()
+          }}
+        >
+          <span className="nav-status-slot">
+            {/* 灯位与侧栏会话行完全同构（通用统一口径）：根会话自身状态 +
+                树级后台在途聚合，经同一 resolveStatusLight 单灯裁决——根 idle
+                且树内有后台在途时同样渲染空心蓝环；子代理等后代状态由后代
+                芯片各自的灯与诚实摘要承载，不在卡面灯位混入代表位语义。 */}
+            <ConversationStatusDot
+              conv={card.root}
+              background={{ active: card.backgroundActive, summary: card.backgroundSummary }}
+              showDone={card.root.unread && !viewedConversationIds.has(card.root.id)}
+            />
+          </span>
+          <span className="overview-card-title">
+            {card.root.title || t('shell.conversationFallback', { id: card.root.id })}
+          </span>
+          <span className="overview-card-id tabular-nums">#{card.root.id}</span>
+        </button>
         {!batchMode && (
           <span className="overview-card-actions" onClick={(e) => e.stopPropagation()}>
             <ConversationRowActionsMenu
@@ -198,8 +240,9 @@ function OverviewCardView({
           )}
         </div>
       )}
-      {/* 卡片元信息只读插槽：外层不拦截冒泡（空白处点击仍直达卡片目标），
-          插件可点元素自行 stopPropagation；无贡献时 PluginSlot 渲染 null 零占位。 */}
+      {/* 卡片元信息只读插槽：位于语义主入口之外，插件可点元素自带行为、
+          不再依赖冒泡拦截（空白区域点击不导航，导航入口是标题簇按钮与
+          芯片）；无贡献时 PluginSlot 渲染 null 零占位。 */}
       <PluginSlot
         ownerPluginId="builtin:overview"
         name={OVERVIEW_CARD_META_SLOT}
@@ -209,7 +252,7 @@ function OverviewCardView({
       />
       {card.descendants.length > 0 && (
         <div className="overview-chips">
-          {card.descendants.map((descendant) => (
+          {shownDescendants.map((descendant) => (
             <button
               key={descendant.conv.id}
               type="button"
@@ -234,10 +277,21 @@ function OverviewCardView({
               </span>
             </button>
           ))}
+          {/* 「+N / 还有 N 个」是真实入口：点击卡内展开剩余后代（同一
+              确定性排序补齐，不重排、不另建树模型），再点收起。 */}
           {card.hiddenDescendantCount > 0 && (
-            <span className="overview-chip-more tabular-nums">
-              {t('shell.overview.moreDescendants', { count: card.hiddenDescendantCount })}
-            </span>
+            <button
+              type="button"
+              className="overview-chip-more tabular-nums"
+              aria-expanded={expanded}
+              title={expanded ? t('shell.overview.collapseDescendants') : t('shell.overview.moreDescendants', { count: card.hiddenDescendantCount })}
+              onClick={(e) => {
+                e.stopPropagation()
+                onToggleExpanded?.(card.root.id)
+              }}
+            >
+              {expanded ? t('shell.overview.collapseDescendants') : t('shell.overview.moreDescendants', { count: card.hiddenDescendantCount })}
+            </button>
           )}
         </div>
       )}
@@ -253,25 +307,44 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     </>
   )
   const { locale, t } = useWebLocale()
-  const { openTarget, closeSplit, setActiveModal } = useStoreActions()
+  const { openTarget, closeSplit, setActiveModal, setScreenParams, pushNotice } = useStoreActions()
   const { background, viewedConversationIds } = useGlobalAttention()
   const conversations = useConversations()
   const plugins = usePlugins()
   const groupedUi = useGroupedUi()
   const { profiles } = useProfilesSlice()
-  const { splitTarget } = useLocationTargets()
+  const { primaryTarget, splitTarget } = useLocationTargets()
   const { sseConnected } = useAuthConnection()
   const { assetsLoaded } = useProfilesSlice()
-  const [bucketFilter, setBucketFilter] = useState<BucketFilterValue>('all')
-  const [profileFilter, setProfileFilter] = useState('')
-  const [nodeFilter, setNodeFilter] = useState('')
-  const [sourceFilter, setSourceFilter] = useState<SourceFilterValue>('all')
   const [batchMode, setBatchMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [expandedCardIds, setExpandedCardIds] = useState<Set<number>>(new Set())
   const [archiving, setArchiving] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false)
-  const { pushNotice } = useStoreActions()
+
+  // 筛选状态接入唯一 URL Hash 导航模型：总览目标在 sp. / ssp. 命名空间携带
+  // bucket/profile/node/source/q 路由参数（主屏 sp.、分屏 ssp.），经
+  // store.setScreenParams 写入——仅参数变化默认 replace 不污染后退栈，
+  // 刷新/前进/后退/深链恢复全由地址栏唯一事实源驱动；切换主屏目标时
+  // 命名空间参数随之丢弃（重新进入总览即回到未筛选态）。
+  const routeTarget = isSplit ? splitTarget : primaryTarget
+  const overviewParams = routeTarget !== null && routeTarget.kind === 'overview' ? routeTarget.params : undefined
+  const filter = parseOverviewFilterParams(overviewParams)
+  const bucketFilter = filter.bucket
+  const profileFilter = filter.profileId
+  const nodeFilter = filter.nodeId
+  const sourceFilter = filter.source
+  const queryFilter = filter.query
+  const applyFilterParam = (patch: Partial<Record<OverviewFilterParamKey, string | undefined>>): void => {
+    setScreenParams(patch, { split: isSplit === true })
+  }
+  // 深链自愈：手工拼写的非法枚举值/未知键（Hash 模型只能拦键形与空值）
+  // 在组件边界一次性修正为规范形态（replace，不产生额外历史项）。
+  useEffect(() => {
+    const repair = overviewFilterParamsRepair(overviewParams)
+    if (repair !== null) setScreenParams(repair, { split: isSplit === true })
+  }, [overviewParams, isSplit, setScreenParams])
 
   // 来源判定与侧栏同源（sidebarSection filterTag，零插件 ID 特判）：
   // 插件停用后其 section 贡献消失，卡片自然回到「常规对话」一侧。
@@ -290,8 +363,9 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
         profileId: profileFilter,
         nodeId: nodeFilter,
         source: sourceFilter,
+        query: queryFilter,
       }),
-    [cards, bucketFilter, profileFilter, nodeFilter, sourceFilter],
+    [cards, bucketFilter, profileFilter, nodeFilter, sourceFilter, queryFilter],
   )
   const dataReady = conversations.length > 0 || (assetsLoaded && sseConnected)
   const profileOptions = useMemo(() => overviewProfileOptions(cards), [cards])
@@ -299,14 +373,25 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   // 来源筛选仅在存在托管卡片（或已选非 all，防困住）时展示：无托管会话时
   // 不添无效控件，保持工具栏零噪音。
   const showSourceFilter = sourceFilter !== 'all' || cards.some((card) => card.managed)
+  const anyFilterActive =
+    bucketFilter !== 'all' ||
+    profileFilter !== '' ||
+    nodeFilter !== '' ||
+    sourceFilter !== 'all' ||
+    queryFilter.trim() !== ''
 
-  const bucketCounts = useMemo(() => {
-    const counts = { all: cards.length, needs_attention: 0, running: 0, unread_done: 0 }
-    for (const card of cards) {
-      if (card.bucket !== 'quiet') counts[card.bucket] += 1
-    }
-    return counts
-  }, [cards])
+  // 桶计数在角色/节点/来源/搜索上下文内统计：徽标如实表达「切到该桶后
+  // 剩几张卡」，避免全量计数与当前上下文错位造成误解。
+  const bucketCounts = useMemo(
+    () =>
+      overviewBucketCounts(cards, {
+        profileId: profileFilter,
+        nodeId: nodeFilter,
+        source: sourceFilter,
+        query: queryFilter,
+      }),
+    [cards, profileFilter, nodeFilter, sourceFilter, queryFilter],
+  )
 
   // 批量管理口径与侧栏批量模式同界：仅人类自有、未被插件 sidebarSection
   // 接管的根会话可勾选（isConversationArchivable ⇒ 可归档且可删除）；托管
@@ -319,7 +404,28 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     () => visibleCards.filter((card) => isCardSelectable(card.root)).map((card) => card.root.id),
     [visibleCards, isCardSelectable],
   )
-  const isAllSelected = selectableCardIds.length > 0 && selectableCardIds.every((id) => selectedIds.has(id))
+  // 批量选择边界：选择集合始终收敛为「当前可见且可勾选」卡片的子集——
+  // 筛选变化、实时会话变化（归档/被接管/离开总览）后，不可见对象立即
+  // 出局，绝不悄悄操作用户看不见的卡片。此处派生有效集合并回写状态，
+  // 批量条计数、按钮与执行链路一律消费有效集合。
+  const effectiveSelectedIds = useMemo(() => {
+    const visible = new Set(selectableCardIds)
+    const effective = new Set<number>()
+    for (const id of selectedIds) {
+      if (visible.has(id)) effective.add(id)
+    }
+    return effective
+  }, [selectedIds, selectableCardIds])
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.size !== effectiveSelectedIds.size) return new Set(effectiveSelectedIds)
+      for (const id of effectiveSelectedIds) {
+        if (!prev.has(id)) return new Set(effectiveSelectedIds)
+      }
+      return prev
+    })
+  }, [effectiveSelectedIds])
+  const isAllSelected = selectableCardIds.length > 0 && selectableCardIds.every((id) => effectiveSelectedIds.has(id))
 
   const toggleCardSelect = (conversationId: number): void => {
     setSelectedIds((prev) => {
@@ -333,6 +439,18 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     })
   }
 
+  const toggleCardExpanded = (rootConversationId: number): void => {
+    setExpandedCardIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(rootConversationId)) {
+        next.delete(rootConversationId)
+      } else {
+        next.add(rootConversationId)
+      }
+      return next
+    })
+  }
+
   const exitBatchMode = (): void => {
     setBatchMode(false)
     setSelectedIds(new Set())
@@ -340,12 +458,12 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
 
   /** 批量归档：逐会话 PATCH 宿主归档 tag + allSettled 聚合（部分失败不掩盖
    * 成功）；归档不删除会话、无导航，列表纯靠 conversation.upsert 更新
-   * （归档根树随即离开总览）。快照从全量 cards 解析（不随筛选丢失已选项）。 */
+   * （归档根树随即离开总览）。操作集合 = 有效选择集（可见可勾选卡片）。 */
   const executeBatchArchive = async (): Promise<void> => {
-    if (selectedIds.size === 0 || archiving || deleting) return
+    if (effectiveSelectedIds.size === 0 || archiving || deleting) return
     setArchiving(true)
     try {
-      const convs = cards.filter((card) => selectedIds.has(card.root.id)).map((card) => card.root)
+      const convs = cards.filter((card) => effectiveSelectedIds.has(card.root.id)).map((card) => card.root)
       const outcome = await patchConversationsArchived(convs, true)
       pushNotice(archiveBatchNotice(true, outcome, t))
       exitBatchMode()
@@ -358,11 +476,11 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
    * 不做任何导航——若被删会话正被打开，由 conversation.deleted SSE 兜底
    * 管道统一处理当前目标回退。 */
   const executeBatchDelete = async (): Promise<void> => {
-    if (selectedIds.size === 0 || deleting) return
+    if (effectiveSelectedIds.size === 0 || deleting) return
     setBatchDeleteConfirmOpen(false)
     setDeleting(true)
     try {
-      const ids = Array.from(selectedIds)
+      const ids = Array.from(effectiveSelectedIds)
       const results = await Promise.allSettled(ids.map((id) => conversationsApi.remove(id)))
       const fulfilled = results.filter((r) => r.status === 'fulfilled').length
       const rejected = results.filter((r) => r.status === 'rejected').length
@@ -464,7 +582,9 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
             <span>{t('shell.overview.title')}</span>
           </div>
           <span className="primary-center-subtitle tabular-nums">
-            {t('shell.overview.stats', { count: visibleCards.length })}
+            {anyFilterActive
+              ? t('shell.overview.statsFiltered', { count: visibleCards.length, total: cards.length })
+              : t('shell.overview.stats', { count: visibleCards.length })}
           </span>
         </div>
         <div className="primary-center-topbar-actions pane-actions">
@@ -540,7 +660,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       <div className="primary-center-toolbar overview-toolbar">
         <SegmentedControl<BucketFilterValue>
           value={bucketFilter}
-          onValueChange={setBucketFilter}
+          onValueChange={(value) => applyFilterParam({ bucket: value === 'all' ? undefined : value })}
           aria-label={t('shell.overview.title')}
           items={[
             { value: 'all', label: t('shell.overview.filterAll'), badge: <span className="tabular-nums">{bucketCounts.all}</span> },
@@ -550,6 +670,29 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
           ]}
         />
         <div className="overview-filter-selects">
+          <div className="search-box overview-search-box">
+            <HelmxIcon name="search" size={13} />
+            <input
+              type="text"
+              value={queryFilter}
+              placeholder={t('shell.overview.searchPlaceholder')}
+              aria-label={t('shell.overview.searchLabel')}
+              onChange={(event) =>
+                applyFilterParam({ q: event.target.value.trim() === '' ? undefined : event.target.value })
+              }
+            />
+            {queryFilter !== '' && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-icon-xs overview-search-clear"
+                title={t('shell.overview.clearSearch')}
+                aria-label={t('shell.overview.clearSearch')}
+                onClick={() => applyFilterParam({ q: undefined })}
+              >
+                <HelmxIcon name="x" size={12} />
+              </button>
+            )}
+          </div>
           <Select
             className="overview-filter-select"
             aria-label={t('shell.overview.profileFilterLabel')}
@@ -558,7 +701,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
               ...profileOptions.map((option) => ({ value: option.id, label: option.label })),
             ]}
             value={profileFilter}
-            onChange={(event) => setProfileFilter(event.target.value)}
+            onChange={(event) => applyFilterParam({ profile: event.target.value === '' ? undefined : event.target.value })}
           />
           <Select
             className="overview-filter-select"
@@ -571,7 +714,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
               })),
             ]}
             value={nodeFilter}
-            onChange={(event) => setNodeFilter(event.target.value)}
+            onChange={(event) => applyFilterParam({ node: event.target.value === '' ? undefined : event.target.value })}
           />
           {showSourceFilter && (
             <Select
@@ -583,7 +726,11 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
                 { value: 'managed', label: t('shell.overview.sourceManaged') },
               ]}
               value={sourceFilter}
-              onChange={(event) => setSourceFilter(event.target.value as SourceFilterValue)}
+              onChange={(event) =>
+                applyFilterParam({
+                  source: event.target.value === 'all' ? undefined : (event.target.value as SourceFilterValue),
+                })
+              }
             />
           )}
         </div>
@@ -607,7 +754,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       {batchMode && (
         <div className="overview-batch-bar">
           <span className="overview-batch-bar-count tabular-nums">
-            {t('shell.batch.selected', { count: selectedIds.size })}
+            {t('shell.batch.selected', { count: effectiveSelectedIds.size })}
           </span>
           <span className="overview-batch-bar-spacer" />
           <div className="overview-batch-bar-actions">
@@ -628,20 +775,20 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
             <button
               type="button"
               className="btn btn-ghost btn-sm"
-              disabled={selectedIds.size === 0 || deleting || archiving}
+              disabled={effectiveSelectedIds.size === 0 || deleting || archiving}
               onClick={() => {
                 void executeBatchArchive()
               }}
             >
-              {archiving ? t('shell.agents.archiving') : t('shell.agents.archiveCount', { count: selectedIds.size })}
+              {archiving ? t('shell.agents.archiving') : t('shell.agents.archiveCount', { count: effectiveSelectedIds.size })}
             </button>
             <button
               type="button"
               className="btn btn-sm btn-danger-sm"
-              disabled={selectedIds.size === 0 || deleting || archiving}
+              disabled={effectiveSelectedIds.size === 0 || deleting || archiving}
               onClick={() => setBatchDeleteConfirmOpen(true)}
             >
-              {deleting ? t('shell.batch.deleting') : t('shell.batch.deleteCount', { count: selectedIds.size })}
+              {deleting ? t('shell.batch.deleting') : t('shell.batch.deleteCount', { count: effectiveSelectedIds.size })}
             </button>
             <button type="button" className="btn btn-ghost btn-sm" disabled={deleting || archiving} onClick={exitBatchMode}>
               {t('shell.batch.exit')}
@@ -654,7 +801,22 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
         {dataReady === false ? (
           <div className="overview-empty overview-loading" role="status">{t('shell.overview.loading')}</div>
         ) : visibleCards.length === 0 ? (
-          <div className="overview-empty">{t('shell.overview.empty')}</div>
+          cards.length === 0 ? (
+            <div className="overview-empty">{t('shell.overview.emptySystem')}</div>
+          ) : (
+            <div className="overview-empty">
+              <span>{t('shell.overview.emptyFiltered')}</span>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm overview-clear-filters"
+                onClick={() =>
+                  applyFilterParam({ bucket: undefined, profile: undefined, node: undefined, source: undefined, q: undefined })
+                }
+              >
+                {t('shell.overview.clearFilters')}
+              </button>
+            </div>
+          )
         ) : (
           visibleCards.map((card) => (
             <OverviewCardView
@@ -666,8 +828,10 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
               viewedConversationIds={viewedConversationIds}
               batchMode={batchMode}
               selectable={isCardSelectable(card.root)}
-              selected={selectedIds.has(card.root.id)}
+              selected={effectiveSelectedIds.has(card.root.id)}
+              expanded={expandedCardIds.has(card.root.id)}
               onToggleSelect={toggleCardSelect}
+              onToggleExpanded={toggleCardExpanded}
             />
           ))
         )}
@@ -676,7 +840,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       <ConfirmDialog
         open={batchDeleteConfirmOpen}
         onOpenChange={setBatchDeleteConfirmOpen}
-        title={t('shell.batch.deleteConfirmTitle', { count: selectedIds.size })}
+        title={t('shell.batch.deleteConfirmTitle', { count: effectiveSelectedIds.size })}
         description={t('shell.batch.deleteConfirmDesc')}
         confirmText={t('shell.batch.deleteConfirmButton')}
         danger

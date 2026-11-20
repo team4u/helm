@@ -24,7 +24,7 @@
 | :--- | :--- |
 | `#/c/<id>` | 会话 |
 | `#/a/<profileId>` | 智能体待命页 |
-| `#/overview` | 会话总览（并发主入口：卡片/后代芯片直进主屏，抽屉速览与右分屏收进卡片菜单，顶栏新话题） |
+| `#/overview` | 会话总览（并发主入口：卡片/后代芯片直进主屏，抽屉速览与右分屏收进卡片菜单，顶栏新话题；筛选状态经 `sp.*` 路由参数持久化） |
 | `#/views/<pluginId>/<screenId>` | 插件全屏视图 |
 | `#/settings/profiles[/<profileId>]` | 角色中心 |
 | `#/settings/models[/<providerId> \| /defaults \| /<providerId>/defaults]` | 模型中心（`defaults` 保留段 = 全局默认 Tab） |
@@ -43,20 +43,20 @@
 ### 历史策略红线
 
 - push：切换主屏/分屏、开关工作台、持久弹窗、Rail 空间切换；
-- replace：同一弹窗内切换子项、工作台内切 Tab、同一 screen 仅改参数、待命目标仅改草稿环境、删除回退与草稿→真实会话迁移；
+- replace：同一弹窗内切换子项、工作台内切 Tab、同一 screen / overview 目标仅改参数（含总览筛选与搜索）、待命目标仅改草稿环境、删除回退与草稿→真实会话迁移；
 - `replace` 只替换当前历史项，不能也不宣称清空整个历史栈；历史策略统一维护在 `shouldPushLocationHistory`，调用方可经 `openTarget({ history })` 覆写下一拍；
 - 访问已删除会话的深链显式提示不存在，不得路由循环或静默跳转；
 - **主屏导航自动收起会话抽屉**：非 split 的 `openTarget` 推进主屏目标时若覆盖型会话抽屉（`conversation-drawer`）开着，顺手 `activeModal = null`——否则抽屉内徽标/通知触发的深链被全高抽屉自身遮挡，表现为「点击无反应」；分屏导航不遮挡不收；深链恢复（`applyExternalLocation`）不走此路径，`wb+modal=drawer` 组合态仍可精确还原。
 
-## 插件 Screen 路由参数
+## 目标路由参数（Screen 与总览共用 `sp.*` / `ssp.*` 机制）
 
-`screen` 目标可携带字符串参数（`ResolvedTarget.params`），三类入口：
+目标可携带字符串参数（`ResolvedTarget.params`），当前承载方为插件 `screen` 目标与宿主 `overview` 目标（总览筛选状态），三类入口：
 
 1. 声明式目标字符串 `screen:<pluginId>/<screenId>?k1=v1`（`sidebarItem.target` / `helmx:open` / `ctx.openScreen`）；
 2. 地址栏命名空间参数：主屏 `sp.<k>=<v>`，分屏 `ssp.<k>=<v>`——两套命名空间互不冲突，同一 screen 双开时参数各自独立；
 3. 组件内 `setParams(patch, { push? })`——经 `store.setScreenParams` 消费，值为 `undefined` 时删除键。
 
-约束：参数键非空且匹配 `^[A-Za-z0-9._-]+$`；`__proto__` / `constructor` / `prototype` 等原型键一律拒绝；声明式目标字符串严格解析（非法编码、空键值、重复键判整体无效），地址栏不合法 `sp.*` / `ssp.*` 项静默丢弃；参数按字典序稳定序列化；主屏切回会话或关闭分屏时对应命名空间参数随之丢弃；同一 screen 仅参数变化默认 `replace`（避免筛选器每次按键污染后退栈），显式 `{ push: true }` 才入栈。
+约束：参数键非空且匹配 `^[A-Za-z0-9._-]+$`；`__proto__` / `constructor` / `prototype` 等原型键一律拒绝；声明式目标字符串严格解析（非法编码、空键值、重复键判整体无效），地址栏不合法 `sp.*` / `ssp.*` 项静默丢弃；参数按字典序稳定序列化；主屏切回会话或关闭分屏时对应命名空间参数随之丢弃；同一 screen / overview 目标仅参数变化默认 `replace`（避免筛选器每次按键污染后退栈），显式 `{ push: true }` 才入栈。总览 `overview` 目标的参数键（`bucket` / `profile` / `node` / `source` / `q`）由宿主总览视图自持并做值级校验自愈（非法枚举值与未知键以 replace 修正为规范形态）；组件统一经 `store.setScreenParams` 写入（主屏 `sp.`、分屏 `ssp.`），不另建平行路由。
 
 ## 新增界面的接入方式
 

@@ -243,13 +243,30 @@ export const shellMessages = {
   'shell.overview.sourceRegular': { en: 'Regular conversations', 'zh-CN': '常规对话' },
   'shell.overview.sourceManaged': { en: 'Managed conversations', 'zh-CN': '托管会话' },
   'shell.overview.localNode': { en: 'Local', 'zh-CN': '本机' },
-  'shell.overview.empty': {
+  'shell.overview.statsFiltered': {
+    en: '{count} of {total} trees',
+    'zh-CN': '{count} / {total} 棵会话树',
+  },
+  'shell.overview.emptySystem': {
+    en: 'No conversations yet. Start one with New topic.',
+    'zh-CN': '还没有会话，从「新话题」开始。',
+  },
+  'shell.overview.emptyFiltered': {
     en: 'No conversations match the current filters',
     'zh-CN': '当前筛选下没有会话',
   },
+  'shell.overview.clearFilters': { en: 'Clear filters', 'zh-CN': '清除筛选' },
+  'shell.overview.searchLabel': { en: 'Search overview by title or summary', 'zh-CN': '按标题或摘要搜索总览' },
+  'shell.overview.searchPlaceholder': { en: 'Search', 'zh-CN': '搜索' },
+  'shell.overview.clearSearch': { en: 'Clear search', 'zh-CN': '清除搜索' },
   'shell.overview.loading': { en: 'Loading conversations…', 'zh-CN': '正在加载会话…' },
   'shell.overview.quickNavGroup': { en: 'Quick navigation', 'zh-CN': '快捷导航' },
   'shell.overview.moreDescendants': { en: '+{count} more', 'zh-CN': '还有 {count} 个' },
+  'shell.overview.collapseDescendants': { en: 'Show less', 'zh-CN': '收起' },
+  'shell.overview.batchToggleCard': {
+    en: 'Toggle selection for this conversation tree',
+    'zh-CN': '切换选择此会话树',
+  },
   'shell.overview.railTooltip': { en: 'Conversation overview', 'zh-CN': '会话总览' },
   'shell.overview.drawerPeek': { en: 'Peek in drawer', 'zh-CN': '抽屉速览' },
   'shell.overview.batchProtected': {

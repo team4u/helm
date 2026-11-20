@@ -15,6 +15,7 @@ import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, ty
  * query parameters):
  * - `c/<id>`                                                     conversation
  * - `a/<profileId>`                                              agent standby page
+ * - `overview`                                                   conversation overview (may carry sp.* filter params)
  * - `views/<pluginId>/<screenId>`                                plugin full-screen view
  * - `settings/profiles[/<profileId>]`                            profile center
  * - `settings/models[/<providerId>|/defaults|/<providerId>/defaults]` model center (defaults is the reserved segment = global-default tab)
@@ -190,7 +191,7 @@ function formatScreenParams(
   target: ResolvedTarget,
   prefix: string,
 ): Array<[string, string]> {
-  if (target.kind !== 'screen' || target.params === undefined) return []
+  if ((target.kind !== 'screen' && target.kind !== 'overview') || target.params === undefined) return []
   return Object.keys(target.params)
     .filter((key) => SCREEN_PARAM_KEY_PATTERN.test(key) && !isPrototypeParamKey(key) && target.params![key] !== '')
     .sort()
@@ -411,11 +412,11 @@ export function parseLocationHash(rawHash: string): WorkspaceLocationState {
 
   const state: WorkspaceLocationState = {
     primaryTarget:
-      primaryTarget.kind === 'screen'
+      primaryTarget.kind === 'screen' || primaryTarget.kind === 'overview'
         ? applyScreenParams(primaryTarget, extractScreenParams(params, PRIMARY_SCREEN_PARAM_PREFIX))
         : primaryTarget,
     splitTarget:
-      splitTarget !== null && splitTarget.kind === 'screen'
+      splitTarget !== null && (splitTarget.kind === 'screen' || splitTarget.kind === 'overview')
         ? applyScreenParams(splitTarget, extractScreenParams(params, SPLIT_SCREEN_PARAM_PREFIX))
         : splitTarget,
     workbenchOpen: params.has('wb'),
@@ -432,9 +433,10 @@ export function parseLocationHash(rawHash: string): WorkspaceLocationState {
   return state
 }
 
-/** Attach the params field only when valid params exist, keeping param-less screen targets shape-stable. */
+/** Attach the params field only when valid params exist, keeping param-less screen/overview targets shape-stable. */
 function applyScreenParams(
-  target: { kind: 'screen'; pluginId: string; screenId: string },
+  target:
+    | ({ kind: 'screen'; pluginId: string; screenId: string } | { kind: 'overview' }) & { params?: Record<string, string> },
   params: Record<string, string> | undefined,
 ): ResolvedTarget {
   return params === undefined ? target : { ...target, params }
@@ -517,6 +519,13 @@ const isSameScreenSlot = (a: ResolvedTarget | null, b: ResolvedTarget | null): b
   return a.pluginId === b.pluginId && a.screenId === b.screenId
 }
 
+/** The same overview coordinate is the same location slot; filter-param-only changes are not coordinate-level switches. */
+const isSameOverviewSlot = (a: ResolvedTarget | null, b: ResolvedTarget | null): boolean => {
+  if (a === null || b === null) return a === b
+  if (a.kind !== 'overview' || b.kind !== 'overview') return false
+  return true
+}
+
 /** The same agent standby coordinate (identical profileId) is the same location slot; draft-env-only changes are not coordinate-level switches. */
 const isSameAgentSlot = (a: ResolvedTarget | null, b: ResolvedTarget | null): boolean => {
   if (a === null || b === null) return a === b
@@ -535,17 +544,18 @@ const isSamePrimaryCenterSlot = (a: ResolvedTarget | null, b: ResolvedTarget | n
   return false
 }
 
-/** Whether the primary/split location changed at coordinate level (conversation id change, agent coordinate change, screen coordinate change, view-type change, split open/close). */
+/** Whether the primary/split location changed at coordinate level (conversation id change, agent coordinate change, screen/overview coordinate change, view-type change, split open/close). */
 const isTargetSlotChanged = (prev: ResolvedTarget | null, next: ResolvedTarget | null): boolean =>
-  !isSameResolvedTarget(prev, next) && !isSameScreenSlot(prev, next) && !isSameAgentSlot(prev, next) && !isSamePrimaryCenterSlot(prev, next)
+  !isSameResolvedTarget(prev, next) && !isSameScreenSlot(prev, next) && !isSameOverviewSlot(prev, next) && !isSameAgentSlot(prev, next) && !isSamePrimaryCenterSlot(prev, next)
 
 /**
  * Decide whether a state transition deserves a history-stack entry (pushState):
  * - primary, split, workbench toggle, modal toggle or modal kind change ->
  *   push (restorable via forward/back);
- * - the same screen target with only params changed, or the same agent standby
- *   target with only a draft env (node/cwd) change -> replace, so filter/env
- *   adjustments do not pollute the back stack on every keystroke; force a push
+ * - the same screen target with only params changed, the same overview target
+ *   with only filter params changed, or the same agent standby target with
+ *   only a draft env (node/cwd) change -> replace, so filter/env adjustments
+ *   do not pollute the back stack on every keystroke; force a push
  *   explicitly at the call site when needed;
  * - artifact preview switching to a different artifactId -> push (every
  *   preview is an independently reachable view);
