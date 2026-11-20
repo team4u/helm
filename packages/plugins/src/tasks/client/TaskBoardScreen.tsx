@@ -25,6 +25,7 @@ import type { ReactNode } from 'react'
 import type { ScreenProps } from '@helmx/protocol'
 import {
   HelmxIcon,
+  MarkdownView,
   Select,
   StatusLight,
   formatDurationMs,
@@ -548,12 +549,20 @@ function TaskOffBoardNotice(props: { taskId: string; onClose: () => void }): Rea
               <span>{record.title}</span>
               <span className="badge badge-neutral">{taskColumnLabel(record.column, locale)}</span>
             </div>
-            {record.brief !== '' ? <div className="task-card-submission-summary">{record.brief}</div> : null}
-            {record.submission !== undefined ? (
-              <div className="task-card-submission-facts">
-                <span>{record.submission.summary}</span>
-                {record.submission.branch !== undefined ? <span className="mono">{record.submission.branch}</span> : null}
+            {record.brief !== '' ? (
+              <div className="task-detail-md">
+                <MarkdownView text={record.brief} />
               </div>
+            ) : null}
+            {record.submission !== undefined ? (
+              <>
+                <div className="task-detail-md">
+                  <MarkdownView text={record.submission.summary} />
+                </div>
+                <div className="task-card-submission-facts">
+                  {record.submission.branch !== undefined ? <span className="mono">{record.submission.branch}</span> : null}
+                </div>
+              </>
             ) : null}
           </div>
           <button type="button" className="btn btn-sm btn-ghost" onClick={props.onClose}>

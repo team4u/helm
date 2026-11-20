@@ -372,6 +372,7 @@ export const TASK_SECTION_LAST_REWORK: LocalizedText = L('Last rework feedback',
 
 /** Submission artifacts section (clickable ctx.openArtifact chips in the detail drawer). */
 export const TASK_SUBMISSION_ARTIFACTS: LocalizedText = L('Artifacts', '交付产物')
+export const TASK_SUBMISSION_VERIFICATION: LocalizedText = L('Verification', '验证说明')
 export function taskArtifactOpenTitle(artifactId: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText({ en: `Open artifact ${artifactId}`, 'zh-CN': `打开产物 ${artifactId}` }, locale)
 }

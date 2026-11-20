@@ -13,6 +13,8 @@
  *   优先序（根精确 > 树成员；未归档 > 已归档；updatedAt 最新）+ 编译产物
  *   TaskOverviewCardMeta 只读跳转渲染/交互（命中渲染、点击深链且阻止冒泡、
  *   无命中 null 零残留、导出仅 PascalCase 组件）——该用例内注册 happy-dom。
+ * - 详情抽屉长文本（简报/交付 summary/验证说明/最近返工意见）全部经宿主
+ *   markdown.view 渲染且全文可见，交付区不复用卡片 line-clamp 摘要类。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -859,4 +861,157 @@ test('tasks-unit11: 总览卡胶囊查找优先序与 TaskOverviewCardMeta 只�
       miss.unmount()
     }
   }
+})
+
+test('tasks-unit12: 详情抽屉交付信息与返工意见走宿主 Markdown 渲染（全文不截断）', { timeout: 60_000 }, async (t) => {
+  // 该用例内注册 happy-dom；挂载编译产物 TaskDetailDrawer 验证长文本字段全部
+  // 经宿主 markdown.view 渲染且不落卡片式 line-clamp 类。
+  if (typeof globalThis.document === 'undefined') GlobalRegistrator.register()
+  const { deriveTaskLiveView } = await import('../src/tasks/client/models.ts')
+
+  const req = createRequire(new URL('../../plugin-client/package.json', import.meta.url))
+  const React = req('react') as typeof import('react')
+  const ReactDOM = req('react-dom') as unknown
+  const ReactDOMClient = req('react-dom/client') as {
+    createRoot: (container: Element) => { render(node: React.ReactNode): void; unmount(): void }
+  }
+  const ReactJsxRuntime = req('react/jsx-runtime') as Record<string, unknown>
+  const LucideReact = req('lucide-react') as Record<string, unknown>
+  const SDK = await import('../../plugin-client/src/index.js')
+
+  const g = globalThis as Record<string, unknown>
+  const sharedKeys = [
+    'React',
+    'IS_REACT_ACT_ENVIRONMENT',
+    CLIENT_SHARED_GLOBALS['react']!,
+    CLIENT_SHARED_GLOBALS['react-dom']!,
+    CLIENT_SHARED_GLOBALS['react-dom/client']!,
+    CLIENT_SHARED_GLOBALS['react/jsx-runtime']!,
+    CLIENT_SHARED_GLOBALS['lucide-react']!,
+    CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!,
+  ]
+  const prevGlobals = new Map(sharedKeys.map((k) => [k, g[k]]))
+  const buildDir = mkdtempSync(join(tmpdir(), 'helmx-tasks-drawer-md-'))
+  t.after(() => {
+    for (const key of sharedKeys) {
+      const prev = prevGlobals.get(key)
+      if (prev === undefined) delete g[key]
+      else g[key] = prev
+    }
+    rmSync(buildDir, { recursive: true, force: true })
+  })
+  g.React = React
+  g.IS_REACT_ACT_ENVIRONMENT = true
+  g[CLIENT_SHARED_GLOBALS['react']!] = React
+  g[CLIENT_SHARED_GLOBALS['react-dom']!] = ReactDOM
+  g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
+  g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
+  g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
+  g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = SDK
+
+  const clientDir = resolve(dirname(fileURLToPath(import.meta.url)), '../src/tasks/client')
+  const bundle = await compilePluginClientModule(TASKS_PLUGIN_ID, clientDir, 'TaskDialogs.tsx', buildDir)
+  const rawModule = (await import(`data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}`)) as Record<
+    string,
+    unknown
+  >
+  const TaskDetailDrawer = rawModule['TaskDetailDrawer'] as React.ComponentType<Record<string, unknown>>
+  assert.ok(TaskDetailDrawer !== undefined, '客户端应导出 TaskDetailDrawer')
+
+  const rendered: string[] = []
+  const port: import('../../plugin-client/src/index.js').PluginClientHostPort = {
+    authenticated: true,
+    theme: 'light',
+    locale: 'zh-CN',
+    conversations: [],
+    conversationDetails: {},
+    conversationLives: {},
+    pendingAsks: [],
+    loadErrors: {},
+    plugins: [],
+    screens: [],
+    pluginDocs: {},
+    ensurePluginDoc: async () => undefined,
+    getPluginSessionDoc: async () => undefined,
+    subscribeSessionDoc: () => () => {},
+    getSessionDocState: () => ({ hasValue: false, deleted: false, connected: false }),
+    invokePluginAction: async () => ({}),
+    submitConversationInput: async () => undefined,
+    openTarget: () => undefined,
+    openConversationDrawer: () => undefined,
+    openArtifactPreview: () => undefined,
+    setWorkbenchOpen: () => undefined,
+    setWorkbenchTab: () => undefined,
+    notify: () => undefined,
+    loadConversationDetail: () => undefined,
+    slots: { collectItems: () => [], renderItem: () => null },
+    markdown: {
+      view: ({ text }: { text: string }) => {
+        rendered.push(text)
+        return React.createElement('div', { className: 'md-stub' }, text)
+      },
+      codeBlock: ({ code }: { code: string }) => React.createElement('pre', null, code),
+    },
+  }
+  const ctx = SDK.createPluginClientContext(port, TASKS_PLUGIN_ID, 42)
+
+  const summaryText = '## 交付说明\n- 重定向循环已修复\n- 新增 e2e 用例覆盖'
+  const verificationText = '跑了 `pnpm test`，全部通过'
+  const feedbackText = '请补充**回归测试**后再交卷'
+  const briefText = '修复 issue 42 的登录重定向循环。'
+  const task = makeTask({
+    column: 'in_review',
+    brief: briefText,
+    submission: { summary: summaryText, verification: verificationText, branch: 'helmx/spawn-demo', submittedAt: 1_000 },
+    lastReworkFeedback: feedbackText,
+  })
+  const live = deriveTaskLiveView(task, [], undefined)
+
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+  React.act(() => {
+    root.render(
+      React.createElement(
+        SDK.PluginClientHostContext.Provider,
+        { value: port },
+        React.createElement(
+          SDK.PluginClientContext.Provider,
+          { value: ctx },
+          React.createElement(TaskDetailDrawer, {
+            item: { task, live },
+            tasksById: new Map([[task.id, task]]),
+            inline: true,
+            onClose: () => undefined,
+            onRework: () => undefined,
+            onResumeKickoff: () => undefined,
+            busy: false,
+          }),
+        ),
+      ),
+    )
+  })
+  t.after(() => {
+    React.act(() => {
+      root.unmount()
+    })
+    container.remove()
+  })
+
+  // 四个长文本字段（简报/交付 summary/验证说明/最近返工意见）全部经宿主 markdown 渲染
+  for (const text of [briefText, summaryText, verificationText, feedbackText]) {
+    assert.ok(rendered.includes(text), `长文本应经宿主 markdown.view 渲染：${text.slice(0, 12)}…`)
+  }
+  const drawerText = container.textContent ?? ''
+  for (const text of [summaryText, verificationText, feedbackText]) {
+    assert.ok(drawerText.includes(text), `交付/返工全文应可见（不被截断省略）：${text.slice(0, 12)}…`)
+  }
+  // 验证说明有独立标签；交付区块不再复用卡片式 line-clamp 摘要类
+  assert.ok(drawerText.includes('验证说明'), '验证说明应有独立区块标签')
+  const mdBlocks = Array.from(container.querySelectorAll('.task-detail-md, .task-detail-brief')).map((el) => el.textContent ?? '')
+  assert.ok(mdBlocks.some((s) => s.includes(summaryText)), '交付 summary 应在 markdown 容器中')
+  assert.ok(mdBlocks.some((s) => s.includes(verificationText)), '验证说明应在 markdown 容器中')
+  assert.ok(mdBlocks.some((s) => s.includes(feedbackText)), '返工意见应在 markdown 容器中')
+  assert.ok(container.querySelector('.task-detail-submission .task-card-submission-summary') === null, '抽屉交付区不得复用卡片 line-clamp 摘要类')
+  assert.ok((container.querySelector('.task-detail-submission .mono')?.textContent ?? '') === 'helmx/spawn-demo', '分支事实行保留')
 })
