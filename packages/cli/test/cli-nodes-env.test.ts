@@ -809,6 +809,26 @@ test('static command table: coreCommands paths are unique and prefix-free', { ti
 // 9. cli-token lock race: grace window retries empty/truncated lock files; stale leftovers reported as corrupt
 // ---------------------------------------------------------------------------
 
+/**
+ * Deterministic simulated holder release. A one-shot `rm` can transiently fail on Windows CI
+ * (EBUSY/EPERM from antivirus scans or delete-pending handles); a swallowed single failure would
+ * strand a live-PID lock and degrade the scenario into the 10s lock-wait timeout instead of the
+ * intended "succeeds after holder completes" path. Retry until the file is gone within the budget
+ * (kept well below the 10s lock deadline so recovered releases still acquire in time).
+ */
+async function releaseLockEventually(lockFile: string, budgetMs = 5_000): Promise<void> {
+  const deadline = Date.now() + budgetMs
+  for (;;) {
+    try {
+      await fsp.rm(lockFile, { force: true })
+      return
+    } catch (err) {
+      if (Date.now() > deadline) throw err
+    }
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  }
+}
+
 test('cli-token lock: freshly created empty lock file waits during grace window instead of falsely reporting corruption; stale empty lock throws credentials_lock_broken', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-nodes-')
   const lockFile = path.join(dir, 'cli-token.lock')
@@ -817,12 +837,16 @@ test('cli-token lock: freshly created empty lock file waits during grace window 
   await fsp.writeFile(lockFile, '', { mode: 0o600 })
   const holderOwner = `${process.pid} holder-uuid`
   const fillTimer = setTimeout(() => { void fsp.writeFile(lockFile, `${holderOwner}\n`).catch(() => {}) }, 150)
-  const releaseTimer = setTimeout(() => { void fsp.rm(lockFile, { force: true }).catch(() => {}) }, 350)
+  let releaseErr: unknown
+  const releaseTimer = setTimeout(() => { void releaseLockEventually(lockFile).catch((err: unknown) => { releaseErr = err }) }, 350)
   try {
     await updateCliCredentials(dir, { hubUrl: 'http://127.0.0.1:1', token: 'tok' })
   } finally {
     clearTimeout(fillTimer)
     clearTimeout(releaseTimer)
+  }
+  if (releaseErr !== undefined) {
+    assert.fail(`simulated holder could not release the lock: ${releaseErr instanceof Error ? releaseErr.message : String(releaseErr)}`)
   }
   const saved = JSON.parse(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8')) as { token: string }
   assert.equal(saved.token, 'tok')
@@ -846,12 +870,16 @@ test('cli-token lock: truncated lock content is also protected by grace window a
   // Truncated content (first token is non-PID) + slow holder completing full owner line within grace window before releasing
   await fsp.writeFile(lockFile, 'garbage ', { mode: 0o600 })
   const fillTimer = setTimeout(() => { void fsp.writeFile(lockFile, `${process.pid} filler\n`).catch(() => {}) }, 150)
-  const releaseTimer = setTimeout(() => { void fsp.rm(lockFile, { force: true }).catch(() => {}) }, 300)
+  let releaseErr: unknown
+  const releaseTimer = setTimeout(() => { void releaseLockEventually(lockFile).catch((err: unknown) => { releaseErr = err }) }, 300)
   try {
     await updateCliCredentials(dir, { hubUrl: 'http://127.0.0.1:2', token: 'tok-half' })
   } finally {
     clearTimeout(fillTimer)
     clearTimeout(releaseTimer)
+  }
+  if (releaseErr !== undefined) {
+    assert.fail(`simulated holder could not release the lock: ${releaseErr instanceof Error ? releaseErr.message : String(releaseErr)}`)
   }
   const saved = JSON.parse(await fsp.readFile(path.join(dir, 'cli-token'), 'utf8')) as { token: string }
   assert.equal(saved.token, 'tok-half')
