@@ -10,6 +10,9 @@ import net from 'node:net';
 import path from 'node:path';
 import { test } from 'node:test';
 import { useTempDir, waitFor } from '@helmx/test-kit/node';
+
+/** `useTempDir` alias so the React hooks lint rule does not misread it inside a plain helper. */
+const makeTempRoot = useTempDir;
 import { controlRequest, CONTROL_TIMEOUT_MS } from '@helmx/env-io';
 import { hubControlRecordPath, readHubControlRecord, type HubControlRecord } from '../src/control.js';
 
@@ -36,7 +39,7 @@ function waitExit(child: ChildProcess): Promise<number | null> {
 
 /** Boot the real hub entry and wait for its control record to appear. */
 async function bootHub(t: import('node:test').TestContext): Promise<{ child: ChildProcess; dataDir: string; record: HubControlRecord }> {
-  const root = useTempDir(t, 'helmx-hub-control-');
+  const root = makeTempRoot(t);
   const dataDir = path.join(root, 'data');
   const port = await freePort();
   const child = spawn(process.execPath, [repoFile('hub/dist/main.js')], {

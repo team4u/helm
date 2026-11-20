@@ -87,9 +87,9 @@ test('local control: install and start, report status, upgrade, and stop', { tim
   const status = ioWith(root);
   const statusPayload = await readLocalHubSnapshot({ root, io: status.io });
   assert.ok(statusPayload !== null);
-  assert.equal(statusPayload.current.version, '1.0.0');
-  assert.equal(statusPayload.running.alive, true);
-  assert.equal(statusPayload.running.healthy, true);
+  assert.ok(statusPayload.current !== null && statusPayload.current.version === '1.0.0');
+  assert.ok(statusPayload.running !== null && statusPayload.running.alive === true);
+  assert.ok(statusPayload.running !== null && statusPayload.running.healthy === true);
   assert.equal(statusPayload.launch.port, port);
 
   const update = ioWith(root);

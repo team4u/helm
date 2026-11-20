@@ -112,10 +112,10 @@ test('hub-update routes: unmanaged hubs and missing candidates refuse honestly',
 
   const unmanaged = createHubUpdateRoutes({ updater: null, kernel, root: null });
   const status = await unmanaged(new Request('http://x/api/hub-update/status'));
-  assert.equal(status.status, 200);
+  assert.ok(status !== undefined && status.status === 200);
   assert.equal((await status.json()).active, false);
   const applyUnmanaged = await unmanaged(makeApply());
-  assert.equal(applyUnmanaged.status, 409);
+  assert.ok(applyUnmanaged !== undefined && applyUnmanaged.status === 409);
   assert.equal((await applyUnmanaged.json()).error.code, 'hub_update_unmanaged');
 
   // Managed but nothing staged.
@@ -124,7 +124,7 @@ test('hub-update routes: unmanaged hubs and missing candidates refuse honestly',
   t.after(() => updater.stop());
   const managed = createHubUpdateRoutes({ updater, kernel, root });
   const noCandidate = await managed(makeApply());
-  assert.equal(noCandidate.status, 409);
+  assert.ok(noCandidate !== undefined && noCandidate.status === 409);
   assert.equal((await noCandidate.json()).error.code, 'no_staged_update');
 });
 
@@ -150,13 +150,13 @@ test('hub-update apply: busy gate defers, force bypasses, accepted switch answer
 
   counts = { ...emptyCounts(), activeConversations: 2 };
   const busy = await routes(makeApply());
-  assert.equal(busy.status, 409);
+  assert.ok(busy !== undefined && busy.status === 409);
   const busyBody = (await busy.json()) as { error: { code: string; details: { counts: { activeConversations: number } } } };
   assert.equal(busyBody.error.code, 'hub_busy');
   assert.equal(busyBody.error.details.counts.activeConversations, 2);
 
   const forced = await routes(makeApply({ force: true }));
-  assert.equal(forced.status, 202);
+  assert.ok(forced !== undefined && forced.status === 202);
   const forcedBody = (await forced.json()) as { ok: boolean; switching: boolean; targetVersion: string; handoffPid: number };
   assert.equal(forcedBody.ok, true);
   assert.equal(forcedBody.switching, true);
@@ -166,12 +166,12 @@ test('hub-update apply: busy gate defers, force bypasses, accepted switch answer
 
   counts = emptyCounts();
   const idle = await routes(makeApply());
-  assert.equal(idle.status, 202);
+  assert.ok(idle !== undefined && idle.status === 202, 'idle apply is accepted');
   assert.deepEqual(spawned, ['1.1.0', '1.1.0']);
 
   // Invalid bodies are boundary-rejected.
   const badForce = await routes(makeApply({ force: 'yes' }));
-  assert.equal(badForce.status, 400);
+  assert.ok(badForce !== undefined && badForce.status === 400, 'invalid force value is boundary-rejected');
   const wrongPath = await routes(new Request('http://x/api/hub-update/other', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }));
   assert.equal(wrongPath, undefined, 'unknown paths fall through to the core router');
   await clearUpdateReady(root);

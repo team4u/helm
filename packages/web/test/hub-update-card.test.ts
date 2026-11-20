@@ -55,7 +55,7 @@ test('HubUpdateCard stays absent without a staged update and renders the ready l
   try {
     const { container, rerender, unmount } = await renderCard()
     t.after(unmount)
-    assert.equal(container.firstElementChild, null, 'no ready update -> nothing rendered')
+    assert.ok(container.firstElementChild === null, 'no ready update -> nothing rendered')
 
     // A staged update appears on the next poll cycle.
     env.replace({ match: (l: FetchLog) => l.path === '/api/hub-update/status', status: 200, body: { active: true, currentVersion: '1.0.0', readyVersion: '1.1.0', lastError: null, blocked: null } })

@@ -335,6 +335,10 @@ importers:
         version: 8.18.2
 
   packages/payload:
+    dependencies:
+      '@helmx/env-io':
+        specifier: workspace:*
+        version: link:../env-io
     devDependencies:
       '@earendil-works/chord':
         specifier: 1.5.2
