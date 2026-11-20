@@ -69,7 +69,7 @@ export interface ProfileRuntime {
   env?: Record<string, string>
 }
 
-/** Skill catalog summary: dataDir root `~/.helmx/skills/<id>/` (SKILL.md + references/*.md), or machine-level shared source `~/.agents/skills/<id>/` (source='agents'; marks the discovery source, not a filesystem write permission). */
+/** Skill catalog summary: dataDir root `~/.helmx/skills/<id>/` (SKILL.md + references/*.md), machine-level shared source `~/.agents/skills/<id>/` (source='agents'), or the conversation node's own workspace source `<cwd>/.helmx/skills/<id>/` (source='node'; discovered and loaded read-only on the node, never copied into the Hub dataDir). */
 export interface SkillSummary {
   id: string
   name: string
@@ -78,8 +78,12 @@ export interface SkillSummary {
   references: string[]
   /** Plugin ID managing this skill; when that plugin is not enabled, the conversation catalog, skill menu and load_skill are all unavailable. */
   managedByPlugin?: string
-  /** Source root marker: default 'data' (~/.helmx/skills); 'agents' marks the machine-level shared source ~/.agents/skills (the pi ecosystem skill library); only marks the scan source, not a filesystem permission boundary. */
-  source?: 'data' | 'agents'
+  /**
+   * Source root marker: default 'data' (~/.helmx/skills); 'agents' marks the machine-level shared source ~/.agents/skills (the pi ecosystem skill library);
+   * 'node' marks the conversation node's workspace source <cwd>/.helmx/skills. Only marks the discovery source, not a filesystem permission boundary.
+   * Same-name priority contract: data (managed skills included, always highest) > agents > node — a node skill can only add, never shadow, Hub skills.
+   */
+  source?: 'data' | 'agents' | 'node'
 }
 
 /** Availability rule shared by the conversation skill catalog and load_skill; not a filesystem or tool-execution permission boundary. */

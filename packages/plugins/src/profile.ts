@@ -29,6 +29,12 @@ import {
   type ProfileCatalogEntry,
 } from './profile/catalog.js';
 import { computeAgentsMdSection } from './profile/agents-md.js';
+import {
+  nodeSkillsUnavailableSection,
+  readNodeSkillFile,
+  scanNodeSkills,
+  type NodeSkillScan,
+} from './profile/node-skills.js';
 
 const DEFAULT_PROFILE_ID = 'assistant';
 
@@ -45,6 +51,17 @@ export {
   type AgentsMdHostPort,
   type AgentsMdInjection,
 } from './profile/agents-md.js'
+export {
+  NODE_SKILLS_RELATIVE_DIR,
+  MAX_NODE_SKILL_FILE_BYTES,
+  MAX_NODE_SKILLS,
+  MAX_NODE_SKILL_REFERENCES,
+  nodeSkillsUnavailableSection,
+  scanNodeSkills,
+  readNodeSkillFile,
+  type NodeSkillScan,
+  type NodeSkillsHostPort,
+} from './profile/node-skills.js'
 export {
   PROFILE_SUMMARY_MAX_CODEPOINTS,
   activeRuntimeKinds,
@@ -85,8 +102,8 @@ export function createProfilePlugin(): PluginDefinition {
     id: 'builtin:profile',
     name: { en: 'Roles & Skills Foundation', 'zh-CN': '角色与技能基座' },
     description: {
-      en: 'Resident foundation: injects SYSTEM.md and the available skill catalog per the conversation Profile, providing the load_skill tool and the default assistant role.',
-      'zh-CN': '常驻基座：按会话 Profile 注入 SYSTEM.md 与可用技能目录，提供 load_skill 工具与默认助手角色。',
+      en: 'Resident foundation: injects SYSTEM.md and the available skill catalog (Hub skills plus the conversation node\'s read-only workspace skills) per the conversation Profile, providing the load_skill tool and the default assistant role.',
+      'zh-CN': '常驻基座：按会话 Profile 注入 SYSTEM.md 与可用技能目录（Hub 技能 + 会话节点工作区的只读技能库），提供 load_skill 工具与默认助手角色。',
     },
     icon: 'bot',
     version: '0.1.0',
@@ -142,26 +159,52 @@ export function createProfilePlugin(): PluginDefinition {
        * Read the current Profile's real config + plugin enablement, and filter the skill catalog
        * by the shared isSkillAvailable rule (Profile.skills defaults to all, [] disables all, a
        * non-empty whitelist filters; a disabled plugin's managed skills are unavailable). Re-read
-       * every turn -- runtime Profile edits or plugin toggles take effect on the next turn. A missing Profile is a config anomaly and errors explicitly.
+       * every turn -- runtime Profile edits, plugin toggles and node-skill edits take effect on the
+       * next turn. A missing Profile is a config anomaly and errors explicitly.
+       *
+       * Node skills (the conversation target's <cwd>/.helmx/skills) merge in read-only as the
+       * lowest-priority source: the Hub catalog (dataDir + machine-level shared roots) is scanned
+       * first and a same-name node skill never enters the merged catalog (Hub managed skills can
+       * never be shadowed; the merge order is an explicit contract, independent of listDir order).
+       * A node scan failure is returned as nodeUnavailable for explicit injection, never silently
+       * treated as "no node skills".
        */
-      const listAvailableSkills = async (profileId: string): Promise<SkillSummary[]> => {
+      const listAvailableSkills = async (
+        profileId: string,
+        conversation: { nodeId?: string; cwd: string },
+      ): Promise<{ available: SkillSummary[]; nodeUnavailable?: string }> => {
         const profile = await profiles.get(profileId)
         if (profile === undefined) {
           throw new HelmxError('profile_not_found', `conversation-bound profile '${profileId}' does not exist (the skill catalog cannot be filtered by Profile)`, 500, { profileId })
         }
         const enabledPluginIds = new Set(ctx.host.listPlugins().filter((p) => p.enabled).map((p) => p.id))
-        const all = await skills.list()
-        return all.filter((skill) => isSkillAvailable(skill, profile, enabledPluginIds))
+        const hub = await skills.list()
+        const byId = new Map(hub.map((skill) => [skill.id, skill]))
+        let nodeUnavailable: string | undefined
+        const scan: NodeSkillScan = await scanNodeSkills(ctx.host, conversation.nodeId, conversation.cwd)
+        if (scan.kind === 'ok') {
+          for (const skill of scan.skills) {
+            if (!byId.has(skill.id)) byId.set(skill.id, skill) // same-name: Hub version always wins
+          }
+        } else {
+          nodeUnavailable = scan.reason
+        }
+        const merged = [...byId.values()].sort((a, b) => a.id.localeCompare(b.id))
+        return {
+          available: merged.filter((skill) => isSkillAvailable(skill, profile, enabledPluginIds)),
+          ...(nodeUnavailable !== undefined ? { nodeUnavailable } : {}),
+        }
       }
 
       ctx.hook.onBeforeTurn(async (turn) => {
         const profileId = turn.conversation.profileId;
         // The workspace AGENTS.md (project-level conventions) reads in parallel with persona/skills:
         // re-read live every turn; file edits take effect on the next turn; the explicit-explanation
-        // policy for read failures or a remote node going offline lives in profile/agents-md.ts
-        const [rawSystem, available, agentsMd, profileRecord] = await Promise.all([
+        // policy for read failures or a remote node going offline lives in profile/agents-md.ts.
+        // Node skills rescan every turn the same way (see listAvailableSkills).
+        const [rawSystem, skillCatalog, agentsMd, profileRecord] = await Promise.all([
           readSystemOrEmpty(profileId),
-          listAvailableSkills(profileId),
+          listAvailableSkills(profileId, turn.conversation),
           computeAgentsMdSection(ctx.host, turn.conversation.nodeId, turn.conversation.cwd),
           profiles.get(profileId),
         ]);
@@ -195,8 +238,13 @@ export function createProfilePlugin(): PluginDefinition {
             ].join('\n'),
           });
         }
-        if (available.length) {
-          const catalog = available.map((skill) =>
+        // Node-skill library failures (node offline / IO faults / limits) are stated explicitly to
+        // the model -- the turn proceeds with the Hub-only catalog, never silently degraded.
+        if (skillCatalog.nodeUnavailable !== undefined) {
+          sections.push(nodeSkillsUnavailableSection(turn.conversation.nodeId, turn.conversation.cwd, skillCatalog.nodeUnavailable))
+        }
+        if (skillCatalog.available.length) {
+          const catalog = skillCatalog.available.map((skill) =>
             `<skill id="${escapeXml(skill.id)}"><name>${escapeXml(skill.name)}</name><description>${escapeXml(skill.description ?? '')}</description><references>${skill.references.map(escapeXml).join(', ')}</references></skill>`,
           ).join('\n');
           sections.push({
@@ -390,8 +438,16 @@ export function createProfilePlugin(): PluginDefinition {
           // Judge live by the conversation's current Profile whitelist and plugin enablement (same
           // rule as catalog injection): outside the Profile whitelist or managed plugin disabled ->
           // 403 skill_not_available; skill nonexistent -> 404 not_found (no content leakage). Path
-          // safety checks are preserved as-is in SkillService.readFile (traversal/absolute
+          // safety checks are preserved as-is on both branches (traversal/absolute
           // paths/symlinks all rejected).
+          //
+          // Same-name priority (explicit contract, mirrors catalog injection): a skill found in the
+          // Hub catalog (dataDir + machine-level shared roots) is always read from the Hub -- load_skill
+          // takes no source parameter, so a same-name node skill can never be reached while the Hub
+          // one exists. Only ids absent from every Hub root fall through to the node source, which
+          // reads the node's current file content directly (no cache: node edits are visible on the
+          // very next call). Node offline / read failures throw explicit diagnostics; there is no
+          // fallback to Hub content for a node-only skill id.
           const conversation = ctx.host.getConversation(context.conversationId);
           const profileId = conversation.profileId;
           const profile = await profiles.get(profileId);
@@ -399,19 +455,32 @@ export function createProfilePlugin(): PluginDefinition {
             throw new HelmxError('profile_not_found', `conversation-bound profile '${profileId}' does not exist; cannot determine skill availability`, 500, { profileId });
           }
           const enabledPluginIds = new Set(ctx.host.listPlugins().filter((p) => p.enabled).map((p) => p.id));
-          const skill = (await skills.list()).find((s) => s.id === input.skillId);
-          if (skill === undefined) {
-            throw new HelmxError('not_found', `skill does not exist: ${input.skillId}`, 404, { skillId: input.skillId });
+          const hubSkill = (await skills.list()).find((s) => s.id === input.skillId);
+          if (hubSkill !== undefined) {
+            if (!isSkillAvailable(hubSkill, profile, enabledPluginIds)) {
+              throw new HelmxError(
+                'skill_not_available',
+                `skill '${input.skillId}' is unavailable for profile '${profileId}' (not whitelisted, or its managing plugin is disabled); adjust the profile skills config to use it`,
+                403,
+                { skillId: input.skillId, profileId, managedByPlugin: hubSkill.managedByPlugin },
+              );
+            }
+            return { text: await skills.readFile(input.skillId, input.path) };
           }
-          if (!isSkillAvailable(skill, profile, enabledPluginIds)) {
+          // Node branch: a pseudo summary without managedByPlugin (node files can never claim host
+          // management) keeps the exact same isSkillAvailable rule as the catalog.
+          const nodePseudoSkill: SkillSummary = { id: input.skillId, name: input.skillId, references: [], source: 'node' };
+          if (!isSkillAvailable(nodePseudoSkill, profile, enabledPluginIds)) {
             throw new HelmxError(
               'skill_not_available',
               `skill '${input.skillId}' is unavailable for profile '${profileId}' (not whitelisted, or its managing plugin is disabled); adjust the profile skills config to use it`,
               403,
-              { skillId: input.skillId, profileId, managedByPlugin: skill.managedByPlugin },
+              { skillId: input.skillId, profileId },
             );
           }
-          return { text: await skills.readFile(input.skillId, input.path) };
+          return {
+            text: await readNodeSkillFile(ctx.host, conversation.nodeId, conversation.cwd, input.skillId, input.path ?? 'SKILL.md'),
+          };
         },
       });
 

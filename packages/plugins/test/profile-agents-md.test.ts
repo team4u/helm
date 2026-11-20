@@ -500,7 +500,11 @@ test('before_turn：远端节点在线 → 经 executionEnv openBinaryReader 读
     const agents = sections.find((s) => s.id === 'profile.agents')!
     assert.ok(agents.text.includes('<project_instructions path="C:\\repo\\AGENTS.md">'), 'path 属性为远端 Windows 路径')
     assert.ok(agents.text.includes('使用 pnpm。'), '正文进入注入段')
-    assert.deepEqual(env.backend.envCalls, [{ nodeId: 'remote-1', cwd: workspace }], '以靶点 nodeId+cwd 取执行环境')
+    assert.ok(
+      env.backend.envCalls.length >= 1 &&
+        env.backend.envCalls.every((e) => e.nodeId === 'remote-1' && e.cwd === workspace),
+      '以靶点 nodeId+cwd 取执行环境（同回合 AGENTS.md 读取与节点技能扫描各取一次短生命周期 env）',
+    )
     const openCalls = remoteEnv.calls.filter((c) => c.op === 'openBinaryReader') as Array<{ op: 'openBinaryReader'; path: string; noFollow: boolean }>
     assert.deepEqual(openCalls.map((c) => c.path), ['C:\\repo\\AGENTS.md'], 'win32 形状按反斜杠合成')
     assert.equal(openCalls[0]!.noFollow, true, 'noFollow 打开封软链替换竞态')
