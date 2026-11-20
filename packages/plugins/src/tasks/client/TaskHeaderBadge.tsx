@@ -1,10 +1,9 @@
 /**
  * builtin:tasks conversation:header badge (ctx.ui.action, placement 'toolbar'):
  * - the single in-conversation anchor binding an execution conversation back
- *   to its board task — icon + task id + honest status word (kickoff
- *   undelivered overrides the column label), tone-coded by data-column
- *   semantics shared with the overview pill (in_review = warn, in_progress =
- *   accent, done = ok);
+ *   to its board task — icon + task id + honest status word, tone-coded by
+ *   data-column semantics shared with the overview pill (in_review = warn,
+ *   in_progress = accent, done = ok);
  * - click deep-links to `screen:builtin:tasks/board?task=<id>` (the board
  *   detail drawer owns every planner action — approve/rework stay there by
  *   the anti-self-approval invariant);
@@ -41,14 +40,13 @@ export function TaskHeaderBadge(props: TaskHeaderBadgeProps): ReactNode {
       type="button"
       className="task-header-badge"
       data-column={task.column}
-      data-kickoff-undelivered={task.kickoffUndelivered === true ? 'true' : undefined}
       title={taskHeaderBadgeTitle(task, locale)}
       onClick={(e) => {
         e.stopPropagation()
         ctx.openScreen(`screen:builtin:tasks/board?task=${encodeURIComponent(task.id)}`)
       }}
     >
-      <HelmxIcon name={task.kickoffUndelivered === true ? 'alert-triangle' : 'check-square'} size={11} />
+      <HelmxIcon name="check-square" size={11} />
       <span className="task-header-badge-id">{task.id}</span>
       <span className="task-header-badge-column">{taskHeaderBadgeStatus(task, locale)}</span>
     </button>

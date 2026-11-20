@@ -67,8 +67,6 @@ import {
   TASK_ACTION_CONTINUE_TITLE,
   TASK_ACTION_DETAIL_BTN_TITLE,
   TASK_ACTION_DETAIL_LABEL,
-  TASK_ACTION_MERGE_CLOSE,
-  TASK_ACTION_MERGE_CLOSE_TITLE,
   TASK_ACTION_REWORK,
   TASK_ACTION_REWORK_TITLE,
   TASK_ACTION_OPEN_CONV_BTN,
@@ -93,19 +91,6 @@ import {
   TASK_BOARD_RETRY,
   TASK_CHAT_TASK,
   TASK_CHAT_TASK_TITLE,
-  TASK_DEPS_READY,
-  TASK_DEPS_UNKNOWN,
-  TASK_DEPS_UNKNOWN_TITLE,
-  TASK_DEP_OFF_BOARD_TITLE,
-  TASK_ACTION_RESUME_KICKOFF_TITLE,
-  TASK_MERGE_AWAIT_REVIEW,
-  TASK_ACTION_MERGE_RETRY,
-  TASK_ACTION_MERGE_RETRY_TITLE,
-  TASK_MOBILE_PILLS_ARIA,
-  TASK_MOBILE_GROUP_ARIA,
-  TASK_PLAN_APPROVED,
-  TASK_PLAN_ASK_PENDING,
-  TASK_PLAN_REJECTED,
   TASK_OFF_BOARD_CLOSE,
   TASK_OFF_BOARD_INSPECT,
   TASK_OFF_BOARD_INSPECTING,
@@ -114,7 +99,6 @@ import {
   taskArtifactCount,
   taskCardReworkLine,
   taskFilterActiveCount,
-  taskOffBoardDeps,
   taskOffBoardNotice,
   TASK_EMPTY_HINT,
   TASK_EMPTY_HINT_NO_MATCH,
@@ -128,8 +112,6 @@ import {
   TASK_FILTER_RESET,
   TASK_FILTER_TOGGLE_LABEL,
   TASK_FILTER_TOGGLE_TITLE,
-  TASK_FLAG_PLAN_FIRST,
-  TASK_FLAG_MERGE_PENDING,
   TASK_NEW_TASK,
   TASK_NEW_TASK_TITLE,
   TASK_SEARCH_CLEAR,
@@ -142,9 +124,10 @@ import {
   taskLightLabel,
   taskMobileTabLabel,
   taskReworkedTimes,
-  taskWaitingForDeps,
+  TASK_MOBILE_PILLS_ARIA,
+  TASK_MOBILE_GROUP_ARIA,
 } from './copy.ts'
-import { TaskCreateDialog, TaskDetailDrawer, TaskMergeConfirmDialog, TaskReworkDialog } from './TaskDialogs.tsx'
+import { TaskCreateDialog, TaskDetailDrawer, TaskReworkDialog } from './TaskDialogs.tsx'
 
 function TaskCard(props: {
   item: TaskItem
@@ -154,7 +137,7 @@ function TaskCard(props: {
   onShowDetail: (taskId: string) => void
   onSplit: (item: TaskItem) => void
   onStart: (taskId: string) => void
-  onApprove: (taskId: string, mergeAction: 'close_only' | 'merge_and_close') => void
+  onApprove: (taskId: string) => void
   onRework: (taskId: string) => void
   onContinue: (item: TaskItem) => void
 }): ReactNode {
@@ -178,13 +161,11 @@ function TaskCard(props: {
   }
 
   const submission = task.submission
-  const hasMergeMaterial = submission?.branch !== undefined || submission?.worktreePath !== undefined
   const isSevere = live.lightStatus === 'error'
 
   const showContinue =
     task.column === 'in_progress' &&
-    (live.kickoffUndelivered ||
-      live.stalled ||
+    (live.idleNotSubmitted ||
       (task.reworkCount > 0 && (live.lightStatus === 'idle' || live.lightStatus === 'done')))
   const showConversation = hasConversation && task.column !== 'backlog' && !showContinue
   const showStart = task.column === 'backlog' && live.isReadyToStart
@@ -193,28 +174,6 @@ function TaskCard(props: {
   if (task.archived === true) {
     statePills.push(
       <span key="archived" className="badge badge-neutral">{t(TASK_ARCHIVED_BADGE)}</span>,
-    )
-  }
-  if (task.column === 'backlog' && task.planFirst === true) {
-    statePills.push(
-      <span key="plan-first" className="badge badge-neutral">{t(TASK_FLAG_PLAN_FIRST)}</span>,
-    )
-  }
-  if (task.column === 'in_progress' && live.planAskPending) {
-    statePills.push(<span key="plan-ask" className="badge badge-warn">{t(TASK_PLAN_ASK_PENDING)}</span>)
-  }
-  if (task.column === 'in_progress' && live.planApproval !== undefined) {
-    statePills.push(
-      <span key="plan-approval" className={`badge ${live.planApproval === 'approved' ? 'badge-ok' : 'badge-warn'}`}>
-        {t(live.planApproval === 'approved' ? TASK_PLAN_APPROVED : TASK_PLAN_REJECTED)}
-      </span>,
-    )
-  }
-  if (task.mergePending === true && (task.column === 'in_progress' || task.column === 'in_review')) {
-    statePills.push(
-      <span key="merge" className="badge badge-accent">
-        {t(task.column === 'in_review' ? TASK_MERGE_AWAIT_REVIEW : TASK_FLAG_MERGE_PENDING)}
-      </span>,
     )
   }
   if (task.reworkCount > 0 && task.column !== 'done') {
@@ -234,11 +193,9 @@ function TaskCard(props: {
         className="btn btn-xs btn-primary"
         disabled={props.busy !== undefined}
         title={
-          live.kickoffUndelivered
-            ? t(TASK_ACTION_RESUME_KICKOFF_TITLE)
-            : live.stalled
-              ? t(TASK_ACTION_CONTINUE_TITLE)
-              : t(TASK_ACTION_CONTINUE_REWORK_TITLE)
+          live.idleNotSubmitted
+            ? t(TASK_ACTION_CONTINUE_TITLE)
+            : t(TASK_ACTION_CONTINUE_REWORK_TITLE)
         }
         onClick={(e) => {
           e.stopPropagation()
@@ -296,31 +253,13 @@ function TaskCard(props: {
         title={t(TASK_ACTION_APPROVE_TITLE)}
         onClick={(e) => {
           e.stopPropagation()
-          props.onApprove(task.id, 'close_only')
+          props.onApprove(task.id)
         }}
       >
         <HelmxIcon name="check" size={11} />
         <span>{t(TASK_ACTION_APPROVE)}</span>
       </button>,
     )
-    if (hasMergeMaterial) {
-      footerActions.push(
-        <button
-          key="merge"
-          type="button"
-          className="btn btn-xs"
-          disabled={props.busy !== undefined}
-          title={t(task.mergePending === true ? TASK_ACTION_MERGE_RETRY_TITLE : TASK_ACTION_MERGE_CLOSE_TITLE)}
-          onClick={(e) => {
-            e.stopPropagation()
-            props.onApprove(task.id, 'merge_and_close')
-          }}
-        >
-          <HelmxIcon name="git-pull-request" size={11} />
-          <span>{t(task.mergePending === true ? TASK_ACTION_MERGE_RETRY : TASK_ACTION_MERGE_CLOSE)}</span>
-        </button>,
-      )
-    }
     footerActions.push(
       <button
         key="rework"
@@ -417,29 +356,6 @@ function TaskCard(props: {
         <div className="task-card-rework" title={taskCardReworkLine(task.lastReworkFeedback, locale)}>
           <HelmxIcon name="rotate-ccw" size={11} />
           <span className="task-card-rework-text">{taskCardReworkLine(task.lastReworkFeedback, locale)}</span>
-        </div>
-      ) : null}
-
-      {task.column === 'backlog' ? (
-        <div className="task-card-deps">
-          {live.depsUnknown ? (
-            <span className="task-card-deps-waiting" title={t(TASK_DEPS_UNKNOWN_TITLE)}>
-              <HelmxIcon name="alert-circle" size={11} />
-              <span>{t(TASK_DEPS_UNKNOWN)}</span>
-            </span>
-          ) : live.blockedBy.length > 0 ? (
-            <span className="task-card-deps-waiting" title={taskWaitingForDeps(live.blockedBy, locale)}>
-              <HelmxIcon name="clock" size={11} />
-              <span>{taskWaitingForDeps(live.blockedBy, locale)}</span>
-            </span>
-          ) : (
-            <span className="badge badge-ok">{t(TASK_DEPS_READY)}</span>
-          )}
-          {!live.depsUnknown && live.offBoardDeps.length > 0 ? (
-            <span className="badge badge-neutral" title={t(TASK_DEP_OFF_BOARD_TITLE)}>
-              {taskOffBoardDeps(live.offBoardDeps.length, locale)}
-            </span>
-          ) : null}
         </div>
       ) : null}
 
@@ -591,7 +507,6 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
   const [queryDraft, setQueryDraft] = useState(params.filter.query)
   const [createOpen, setCreateOpen] = useState(false)
   const [reworkTaskId, setReworkTaskId] = useState<string | undefined>(undefined)
-  const [mergeConfirmId, setMergeConfirmId] = useState<string | undefined>(undefined)
   const [busyTaskId, setBusyTaskId] = useState<string | undefined>(undefined)
   const [actionError, setActionError] = useState<string | null>(null)
   const [filtersOpen, setFiltersOpen] = useState(false)
@@ -708,7 +623,7 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
 
   const cardHandlers = {
     onOpenConversation: (item: TaskItem) => {
-      const target = item.live.jumpConversationId ?? item.task.conversationId
+      const target = item.task.conversationId
       if (target !== undefined) ctx.openConversationDrawer(target)
     },
     onShowDetail: (taskId: string) => props.setParams({ task: taskId }),
@@ -718,30 +633,19 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
       }
     },
     onStart: (taskId: string) => runTaskAction(taskId, () => ctx.callAction('start', { taskId })),
-    onApprove: (taskId: string, mergeAction: 'close_only' | 'merge_and_close') => {
-      // Merging touches the repository main branch through the executor: explicit
-      // confirmation with the branch/cleanup facts first, never a one-tap dispatch.
-      if (mergeAction === 'merge_and_close') {
-        setMergeConfirmId(taskId)
-        return
-      }
-      runTaskAction(taskId, () => ctx.callAction('approve', { taskId, mergeAction }))
+    onApprove: (taskId: string) => {
+      runTaskAction(taskId, () => ctx.callAction('approve', { taskId }))
     },
     onRework: (taskId: string) => setReworkTaskId(taskId),
     onContinue: (item: TaskItem) => {
       if (busyTaskId !== undefined) return
+      if (item.task.conversationId === undefined) return
       setBusyTaskId(`continue:${item.task.id}`)
       setActionError(null)
-      // Kickoff-undelivered tasks resume through the explicit resume_kickoff action
-      // (idempotent via the original requestId); the plain continue message is only
-      // for stalled / reworked tasks. Never dispatched automatically either way.
-      const action =
-        item.task.kickoffUndelivered === true
-          ? ctx.callAction('resume_kickoff', { taskId: item.task.id })
-          : item.task.conversationId !== undefined
-            ? ctx.submitInput(TASK_CONTINUE_PROMPT, { conversationId: item.task.conversationId })
-            : Promise.resolve()
-      void action
+      // The plain continue message goes to the execution conversation as an
+      // explicit user action (submitInput); never dispatched automatically.
+      void ctx
+        .submitInput(TASK_CONTINUE_PROMPT, { conversationId: item.task.conversationId })
         .catch((err: unknown) => {
           const message = err instanceof Error ? err.message : String(err)
           setActionError(message)
@@ -1110,30 +1014,7 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
         <TaskOffBoardNotice taskId={selectedTaskId} onClose={() => props.setParams({ task: undefined })} />
       ) : null}
 
-      {createOpen ? (
-        <TaskCreateDialog
-          open={createOpen}
-          onClose={() => setCreateOpen(false)}
-          dependencyCandidates={(board?.tasks ?? [])
-            .filter((task) => task.column !== 'done')
-            .map((task) => ({ id: task.id, title: task.title }))}
-        />
-      ) : null}
-
-      {mergeConfirmId !== undefined ? (
-        <TaskMergeConfirmDialog
-          taskId={mergeConfirmId}
-          title={tasksById.get(mergeConfirmId)?.title ?? mergeConfirmId}
-          submission={tasksById.get(mergeConfirmId)?.submission}
-          open={mergeConfirmId !== undefined}
-          busy={busyTaskId !== undefined}
-          onClose={() => setMergeConfirmId(undefined)}
-          onConfirm={(taskId) => {
-            setMergeConfirmId(undefined)
-            runTaskAction(taskId, () => ctx.callAction('approve', { taskId, mergeAction: 'merge_and_close' }))
-          }}
-        />
-      ) : null}
+      {createOpen ? <TaskCreateDialog open={createOpen} onClose={() => setCreateOpen(false)} /> : null}
 
       {reworkTaskId !== undefined ? (
         <TaskReworkDialog
@@ -1151,10 +1032,6 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
           inline={props.inlineDrawer}
           onClose={() => props.setParams({ task: undefined })}
           onRework={(taskId) => setReworkTaskId(taskId)}
-          onMerge={(taskId) => setMergeConfirmId(taskId)}
-          onResumeKickoff={(taskId) =>
-            runTaskAction(taskId, () => ctx.callAction('resume_kickoff', { taskId }))
-          }
           busy={busyTaskId !== undefined}
         />
       ) : null}

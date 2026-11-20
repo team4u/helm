@@ -46,11 +46,9 @@ import {
   TASK_TOOL_TASK_MISSING,
   taskColumnLabel,
   taskLightLabel,
-  taskToolAutoStarted,
   taskToolOpenBoardLabel,
   taskToolOpenConversationLabel,
   taskToolTitle,
-  taskToolUnblocked,
 } from './copy.ts'
 
 /** Column badge tone from the real live state (drives the badge-* class). */
@@ -81,8 +79,8 @@ export function TaskToolView(props: ToolViewProps): ReactNode {
   const tasksById = useMemo(() => new Map((board?.tasks ?? []).map((task) => [task.id, task])), [board])
   const task = facts.taskId !== undefined ? tasksById.get(facts.taskId) : undefined
   const live = useMemo(
-    () => (task !== undefined ? deriveTaskLiveView(task, conversations, undefined, tasksById, locale) : undefined),
-    [task, conversations, tasksById, locale],
+    () => (task !== undefined ? deriveTaskLiveView(task, conversations, undefined, locale) : undefined),
+    [task, conversations, locale],
   )
 
   const isRunning = props.status === 'running'
@@ -96,12 +94,6 @@ export function TaskToolView(props: ToolViewProps): ReactNode {
   if (facts.taskId !== undefined) summaryParts.push(facts.taskId)
   const displayTitle = task?.title ?? facts.title
   if (displayTitle !== undefined) summaryParts.push(displayTitle)
-  if (facts.unblockedCount !== undefined && facts.unblockedCount > 0) {
-    summaryParts.push(taskToolUnblocked(facts.unblockedCount, locale))
-  }
-  if (facts.autoStartedCount !== undefined && facts.autoStartedCount > 0) {
-    summaryParts.push(taskToolAutoStarted(facts.autoStartedCount, locale))
-  }
   const errorFirstLine =
     isError && typeof props.result === 'string' && props.result.trim() !== ''
       ? (props.result.split(/\r?\n/, 1)[0] ?? '').trim()

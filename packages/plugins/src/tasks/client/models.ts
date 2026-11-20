@@ -2,25 +2,23 @@
  * Pure domain models and lenient boundary parsers for the `builtin:tasks`
  * client surfaces (zero React/DOM dependencies, Fast Refresh compliant).
  *
- * Type shapes mirror the Slice 2/3 shared contract 1:1 (packages/plugins
- * backend owns the authoritative contracts.ts; the client re-declares the
- * wire shape so the browser bundle never imports server modules — the
- * plugin-client packaging rule).
+ * Type shapes mirror the backend contracts 1:1 (packages/plugins backend owns
+ * the authoritative contracts.ts; the client re-declares the wire shape so the
+ * browser bundle never imports server modules — the plugin-client packaging
+ * rule).
  *
  * Live-state derivation never fabricates progress: every fact (working /
- * blocked / error / pending ask / stalled / missing conversation) comes from
- * the real `useConversations()` summaries or the task record itself.
+ * blocked / error / pending ask / idle-not-submitted / missing conversation)
+ * comes from the real `useConversations()` summary of the **main execution
+ * conversation** plus the shared SDK background snapshot — no client-side
+ * subtree traversal.
  */
 import { DEFAULT_HELMX_LOCALE, type ConversationBackgroundSnapshot, type HelmxLocale } from '@helmx/plugin-client'
 import type { ConversationSummary } from '@helmx/protocol'
 import {
-  taskKickoffUndelivered,
   taskLiveConversationMissing,
   taskLiveErrorLine,
-  taskLiveIdleWaiting,
-  taskLiveSubSessionConfirm,
-  taskLiveSubSessions,
-  taskLiveTurnSettled,
+  taskLiveIdleNotSubmitted,
   taskLiveWaitingApproval,
 } from './copy.ts'
 
@@ -50,19 +48,6 @@ export interface TaskSubmission {
   submittedAt: number
 }
 
-export interface TaskSilenceState {
-  stalledAt?: number
-  lastError?: string
-}
-
-/** planFirst 方案审批事实（真实 AskDoc 决议，由后端记录）。 */
-export interface TaskPlanApproval {
-  decision: 'approved' | 'rejected'
-  askedAt: number
-  decidedAt: number
-  askId: string
-}
-
 export interface TaskRecord {
   id: string
   title: string
@@ -74,34 +59,17 @@ export interface TaskRecord {
   cwd?: string
   model?: string
   thinkingLevel?: string
-  planFirst?: boolean
-  autoMerge?: boolean
-  dependsOn: string[]
-  autoStartOnUnblock?: boolean
   originConversationId?: number
   conversationId?: number
   conversationMissing?: boolean
   submission?: TaskSubmission
   reworkCount: number
   lastReworkFeedback?: string
-  mergePending?: boolean
-  /** 重启恢复呈现态：开工任务书未送达，等待用户显式继续（resume_kickoff），绝不自动投递。 */
-  kickoffUndelivered?: boolean
-  planApproval?: TaskPlanApproval
-  /** 发起中的方案审批 Ask ID（审批在途）。 */
-  pendingPlanAskId?: string
-  silenceState?: TaskSilenceState
   archived?: boolean
   createdAt: number
   updatedAt: number
   startedAt?: number
   completedAt?: number
-  /**
-   * 看板投影权威依赖真值（未 done 的前置 ID）：后端在投影时对全量 store 计算，
-   * 板书截断后前端无需自算。可选：旧版投影缺字段时消费方必须展示未知、
-   * 不得当作可开工。
-   */
-  blockedBy?: string[]
 }
 
 export interface TaskBoardDoc {
@@ -131,55 +99,29 @@ function parseBoolean(value: unknown): boolean | undefined {
 
 function parseStringArray(value: unknown): string[] | undefined {
   if (!Array.isArray(value)) return undefined
-  const items = value.filter((item): item is string => typeof item === 'string' && item !== '')
-  return items.length > 0 ? items : []
+  const out: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string') return undefined
+    out.push(item)
+  }
+  return out
 }
 
 function parseSubmission(value: unknown): TaskSubmission | undefined {
   if (!isRecord(value)) return undefined
   const summary = parseString(value['summary'])
   if (summary === undefined) return undefined
-  const changedFiles = Array.isArray(value['changedFiles'])
-    ? value['changedFiles'].filter((f): f is string => typeof f === 'string' && f !== '')
-    : undefined
-  const artifactIds = Array.isArray(value['artifactIds'])
-    ? value['artifactIds'].filter((f): f is string => typeof f === 'string' && f !== '')
-    : undefined
-  return pruneUndefined({
+  return {
     summary,
     verification: parseString(value['verification']),
     branch: parseString(value['branch']),
     worktreePath: parseString(value['worktreePath']),
-    changedFiles,
-    artifactIds,
+    changedFiles: parseStringArray(value['changedFiles']),
+    artifactIds: parseStringArray(value['artifactIds']),
     submittedAt: parseNumber(value['submittedAt']) ?? 0,
-  })
+  }
 }
 
-function parsePlanApproval(value: unknown): TaskPlanApproval | undefined {
-  if (!isRecord(value)) return undefined
-  const decision = value['decision']
-  const askId = parseString(value['askId'])
-  const askedAt = parseNumber(value['askedAt'])
-  const decidedAt = parseNumber(value['decidedAt'])
-  if ((decision !== 'approved' && decision !== 'rejected') || askId === undefined) return undefined
-  return { decision, askId, askedAt: askedAt ?? 0, decidedAt: decidedAt ?? 0 }
-}
-
-function parseSilenceState(value: unknown): TaskSilenceState | undefined {
-  if (!isRecord(value)) return undefined
-  const parsed = pruneUndefined({
-    stalledAt: parseNumber(value['stalledAt']),
-    lastError: parseString(value['lastError']),
-  })
-  return Object.keys(parsed).length > 0 ? parsed : undefined
-}
-
-function parseTaskColumn(value: unknown): TaskColumn | undefined {
-  return typeof value === 'string' && (TASK_COLUMNS as readonly string[]).includes(value) ? (value as TaskColumn) : undefined
-}
-
-/** Drop undefined-valued keys so optional fields stay truly absent (prevents `"x" in obj` surprises). */
 function pruneUndefined<T extends Record<string, unknown>>(value: T): T {
   const out: Record<string, unknown> = {}
   for (const [key, item] of Object.entries(value)) {
@@ -188,9 +130,8 @@ function pruneUndefined<T extends Record<string, unknown>>(value: T): T {
   return out as T
 }
 
-/** Lenient single-record parser (inspect-action payloads, off-board deep links). */
-export function parseTaskRecordLenient(value: unknown): TaskRecord | undefined {
-  return parseTaskRecord(value)
+function parseTaskColumn(value: unknown): TaskColumn | undefined {
+  return typeof value === 'string' && (TASK_COLUMNS as readonly string[]).includes(value) ? (value as TaskColumn) : undefined
 }
 
 function parseTaskRecord(value: unknown): TaskRecord | undefined {
@@ -211,29 +152,22 @@ function parseTaskRecord(value: unknown): TaskRecord | undefined {
     cwd: parseString(value['cwd']),
     model: parseString(value['model']),
     thinkingLevel: parseString(value['thinkingLevel']),
-    planFirst: parseBoolean(value['planFirst']),
-    autoMerge: parseBoolean(value['autoMerge']),
-    dependsOn: parseStringArray(value['dependsOn']) ?? [],
-    autoStartOnUnblock: parseBoolean(value['autoStartOnUnblock']),
     originConversationId: parseNumber(value['originConversationId']),
     conversationId: parseNumber(value['conversationId']),
     conversationMissing: parseBoolean(value['conversationMissing']),
     submission: parseSubmission(value['submission']),
     reworkCount: parseNumber(value['reworkCount']) ?? 0,
     lastReworkFeedback: parseString(value['lastReworkFeedback']),
-    mergePending: parseBoolean(value['mergePending']),
-    kickoffUndelivered: parseBoolean(value['kickoffUndelivered']),
-    planApproval: parsePlanApproval(value['planApproval']),
-    pendingPlanAskId: parseString(value['pendingPlanAskId']),
-    silenceState: parseSilenceState(value['silenceState']),
     archived: parseBoolean(value['archived']),
     createdAt: parseNumber(value['createdAt']) ?? 0,
     updatedAt: parseNumber(value['updatedAt']) ?? 0,
     startedAt: parseNumber(value['startedAt']),
     completedAt: parseNumber(value['completedAt']),
-    blockedBy: parseStringArray(value['blockedBy']),
   }) as TaskRecord
 }
+
+/** Lenient single-record parser (off-board deep links load the full record via inspect). */
+export const parseTaskRecordLenient = parseTaskRecord
 
 /** Lenient board doc parser: structurally invalid payloads return undefined (the caller must show an explicit invalid state, never a fake empty board). */
 export function parseTaskBoardDoc(raw: unknown): TaskBoardDoc | undefined {
@@ -306,59 +240,10 @@ export function findTaskForConversation(
 }
 
 // ---------------------------------------------------------------------------
-// Conversation subtree walk (cycle-defended, depth-capped)
+// Live view derivation (honest, zero fabricated progress — main conversation + background snapshot only)
 // ---------------------------------------------------------------------------
 
-/** Max traversal depth along parent -> child edges (defensive cap against corrupt parent links). */
-const SUBTREE_MAX_DEPTH = 32
-
-interface ConversationSubtree {
-  main: ConversationSummary | undefined
-  descendants: ConversationSummary[]
-}
-
-/** Collect the task's execution conversation plus every descendant (BFS, visited set, depth cap 32). */
-function collectConversationSubtree(
-  rootId: number | undefined,
-  conversations: readonly ConversationSummary[],
-): ConversationSubtree {
-  if (rootId === undefined) return { main: undefined, descendants: [] }
-  const byId = new Map<number, ConversationSummary>()
-  const childrenOf = new Map<number, number[]>()
-  for (const conv of conversations) {
-    byId.set(conv.id, conv)
-    const parent = conv.parentConversationId
-    if (parent !== undefined) {
-      const bucket = childrenOf.get(parent)
-      if (bucket === undefined) childrenOf.set(parent, [conv.id])
-      else bucket.push(conv.id)
-    }
-  }
-  const main = byId.get(rootId)
-  const descendants: ConversationSummary[] = []
-  const visited = new Set<number>([rootId])
-  let frontier: number[] = [rootId]
-  for (let depth = 0; depth < SUBTREE_MAX_DEPTH && frontier.length > 0; depth += 1) {
-    const next: number[] = []
-    for (const id of frontier) {
-      for (const childId of childrenOf.get(id) ?? []) {
-        if (visited.has(childId)) continue
-        visited.add(childId)
-        const child = byId.get(childId)
-        if (child !== undefined) descendants.push(child)
-        next.push(childId)
-      }
-    }
-    frontier = next
-  }
-  return { main, descendants }
-}
-
-// ---------------------------------------------------------------------------
-// Live view derivation (honest, zero fabricated progress)
-// ---------------------------------------------------------------------------
-
-/** Light vocabulary for a task card: subtree error > blocked/pending ask > main working > descendants-or-background active > main done > idle. */
+/** Light vocabulary for a task card: error > blocked > main working > background active > main done > idle. */
 export type TaskLightStatus = 'error' | 'blocked' | 'running' | 'background' | 'done' | 'idle'
 
 /**
@@ -387,48 +272,20 @@ export interface TaskLiveView {
   lightStatus: TaskLightStatus
   /** The bound execution conversation no longer exists (deleted by a human); honest flag, never auto-resolved. */
   conversationMissing: boolean
-  /** in_progress tasks with blocked / error / stalled-not-submitted / missing conversation. */
+  /** in_progress tasks with blocked / error / missing conversation. */
   needsAttention: boolean
-  /** Real live facts only: lastError / doing / active descendant or background summary / turn-settled-not-submitted / missing. */
+  /** Real live facts only: lastError / doing / background summary / idle-not-submitted / missing. */
   liveSummary: string
-  /** Descendant conversations currently working or blocked. */
-  activeChildCount: number
-  /**
-   * Direct-jump target: the failure site when the subtree errored, else the newest
-   * conversation waiting on a human Ask, else the newest blocked conversation,
-   * else the main execution conversation.
-   */
-  jumpConversationId: number | undefined
+  /** The main execution conversation waits on a human Ask (approval / question). */
+  approvalPending: boolean
+  /** A background run is in flight for the main conversation (generic workbench badge facts, plugin-ID free). */
+  backgroundActive: boolean
+  /** Pure derivation: in_progress, main conversation idle, no background in flight — settled without a submission. */
+  idleNotSubmitted: boolean
   /** task.project wins; otherwise the cwd basename (empty when neither is known). */
   projectLabel: string
-  /**
-   * Authoritative not-done dependency ids: the per-card `blockedBy` projection
-   * (computed by the backend against the full store, truncation-safe). Empty on
-   * old boards lacking the field — see depsUnknown.
-   */
-  blockedBy: string[]
-  /**
-   * true when the board projection carries NO authoritative blockedBy (old
-   * backend): dependency facts are unknowable — show unknown, never treat as
-   * startable.
-   */
-  depsUnknown: boolean
-  /** dependsOn ids absent from the current board projection (display-only context). */
-  offBoardDeps: string[]
-  /** backlog with authoritative dependencies all done and facts known. */
+  /** backlog cards are always startable (pure ledger, no dependency scheduling). */
   isReadyToStart: boolean
-  /** planFirst scheme approval decision (real AskDoc), when recorded. */
-  planApproval: 'approved' | 'rejected' | undefined
-  /** A plan approval Ask is currently pending on the execution conversation. */
-  planAskPending: boolean
-  /** The kickoff briefing was never delivered (restart recovery): awaits an explicit user resume_kickoff. */
-  kickoffUndelivered: boolean
-  /** A subtree conversation waits on a human Ask (approval question), distinct from errors and sub-session confirmation. */
-  approvalPending: boolean
-  /** A background run is in flight for a subtree conversation (generic workbench badge facts, plugin-ID free). */
-  backgroundActive: boolean
-  /** The turn settled without a submission AND nothing is provably in flight (honest, user-actionable state). */
-  stalled: boolean
 }
 
 /** Extract the last path segment of an absolute working directory (POSIX or Windows separators); empty when absent. */
@@ -447,32 +304,25 @@ function pendingAskCountOf(conv: ConversationSummary, pendingAsks: Readonly<Reco
 }
 
 /**
- * Derive the honest live view of one task from real conversation summaries:
- * - subtree statuses (main + descendants) drive the light, never percentages;
+ * Derive the honest live view of one task from the **main** execution
+ * conversation summary plus the shared SDK background snapshot:
+ * - the main conversation status drives the light, never percentages;
  * - a missing execution conversation is flagged, not fabricated;
- * - blockedBy reads the full task table (done deps unlock; unknown ids stay blocked).
+ * - "idle, not submitted" is a pure derivation: column in_progress + main idle
+ *   + no background in flight (zero server-side stall bookkeeping).
  */
 export function deriveTaskLiveView(
   task: TaskRecord,
   conversations: readonly ConversationSummary[],
   pendingAsks?: Readonly<Record<number, number>>,
-  tasksById?: ReadonlyMap<string, TaskRecord>,
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
   background?: TaskBackgroundFacts,
 ): TaskLiveView {
-  const { main, descendants } = collectConversationSubtree(task.conversationId, conversations)
+  const main = task.conversationId !== undefined
+    ? conversations.find((conv) => conv.id === task.conversationId)
+    : undefined
   const conversationMissing = task.conversationId !== undefined && main === undefined
-
-  const subtree = main !== undefined ? [main, ...descendants] : descendants
-  const errorConvs = subtree.filter((conv) => conv.status === 'error')
-  const blockedConvs = subtree.filter(
-    (conv) => conv.status === 'blocked' || pendingAskCountOf(conv, pendingAsks) > 0,
-  )
-  const approvalPending =
-    subtree.some((conv) => conv.status === 'blocked' && pendingAskCountOf(conv, pendingAsks) > 0) ||
-    (main?.status === 'blocked' && pendingAskCountOf(main, pendingAsks) > 0)
-  const activeChildren = descendants.filter((conv) => conv.status === 'working' || conv.status === 'blocked')
-  const stalled = task.silenceState?.stalledAt
+  const approvalPending = main !== undefined && main.status === 'blocked' && pendingAskCountOf(main, pendingAsks) > 0
 
   // Background in-flight facts from the shared SDK snapshot (host-standard workbench
   // badge aggregation). `unknown === true` (docs still loading / host without
@@ -480,147 +330,73 @@ export function deriveTaskLiveView(
   // fabricate "in flight" nor claim "no background work".
   const backgroundSummaries: string[] = []
   let backgroundActive = false
-  if (background !== undefined && background.unknown !== true) {
-    for (const conv of subtree) {
-      const fact = background.byConversation.get(conv.id)
-      if (fact?.active === true) {
-        backgroundActive = true
-        const summary = fact.summary.trim()
-        if (summary !== '' && !backgroundSummaries.includes(summary)) {
-          backgroundSummaries.push(summary)
-        }
-      }
+  if (background !== undefined && background.unknown !== true && task.conversationId !== undefined) {
+    const fact = background.byConversation.get(task.conversationId)
+    if (fact?.active === true) {
+      backgroundActive = true
+      const summary = fact.summary.trim()
+      if (summary !== '') backgroundSummaries.push(summary)
     }
   }
 
   let lightStatus: TaskLightStatus
-  if (errorConvs.length > 0) lightStatus = 'error'
-  else if (blockedConvs.length > 0) lightStatus = 'blocked'
+  if (main?.status === 'error' || conversationMissing) lightStatus = 'error'
+  else if (main?.status === 'blocked') lightStatus = 'blocked'
   else if (main?.status === 'working') lightStatus = 'running'
-  else if (activeChildren.length > 0 || backgroundActive) lightStatus = 'background'
+  else if (backgroundActive) lightStatus = 'background'
   else if (main?.status === 'done') lightStatus = 'done'
   else lightStatus = 'idle'
 
-  // Jump target priority: failure site > newest human-Ask conversation > newest blocked > main conversation.
-  const byNewest = (a: ConversationSummary, b: ConversationSummary) => b.createdAt - a.createdAt || b.id - a.id
-  let jumpConversationId = task.conversationId
-  if (errorConvs.length > 0) {
-    jumpConversationId = [...errorConvs].sort(byNewest)[0]?.id ?? task.conversationId
-  } else {
-    const askConvs = blockedConvs.filter((conv) => pendingAskCountOf(conv, pendingAsks) > 0)
-    const candidates = askConvs.length > 0 ? askConvs : blockedConvs
-    if (candidates.length > 0) {
-      jumpConversationId = [...candidates].sort(byNewest)[0]?.id ?? task.conversationId
-    }
-  }
+  const idleNotSubmitted =
+    task.column === 'in_progress' && !conversationMissing && main?.status === 'idle' && !backgroundActive
 
-  // Dependency truth: prefer the per-card authoritative `blockedBy` projection
-  // (backend-computed against the full store, truncation-safe). Old boards
-  // lacking the field are UNKNOWN — shown as such and never treated as startable;
-  // the local derivation is only a non-authoritative display fallback.
-  const hasAuthoritativeDeps = Array.isArray(task.blockedBy)
-  const depsUnknown = task.dependsOn.length > 0 && !hasAuthoritativeDeps
-  const blockedBy = hasAuthoritativeDeps
-    ? (task.blockedBy ?? []).filter((depId) => task.dependsOn.includes(depId))
-    : []
-  const offBoardDeps = tasksById === undefined ? [] : task.dependsOn.filter((depId) => !tasksById.has(depId))
-
-  // Stalled stays honest only when nothing else is provably in flight (a background run
-  // continuing the work must not be misreported as "settled, not submitted").
-  const effectiveStalled = backgroundActive ? undefined : stalled
-
-  const kickoffUndelivered = task.kickoffUndelivered === true
   const needsAttention =
     task.column === 'in_progress' &&
-    (lightStatus === 'blocked' ||
-      lightStatus === 'error' ||
-      effectiveStalled !== undefined ||
-      kickoffUndelivered ||
-      conversationMissing ||
-      task.conversationMissing === true)
+    (lightStatus === 'blocked' || lightStatus === 'error' || conversationMissing || task.conversationMissing === true)
 
   return {
     lightStatus,
     conversationMissing: conversationMissing || task.conversationMissing === true,
     needsAttention,
-    liveSummary: buildLiveSummary(
-      {
-        task,
-        lightStatus,
-        errorConv: errorConvs[0],
-        blockedConvs,
-        approvalPending,
-        main,
-        activeChildren,
-        stalled: effectiveStalled,
-        conversationMissing,
-        pendingAsks,
-        backgroundSummaries,
-        kickoffUndelivered,
-      },
-      locale,
-    ),
-    activeChildCount: activeChildren.length,
-    jumpConversationId,
-    projectLabel: task.project !== undefined && task.project !== '' ? task.project : cwdBasename(task.cwd),
-    blockedBy,
-    depsUnknown,
-    offBoardDeps,
-    isReadyToStart: task.column === 'backlog' && !depsUnknown && blockedBy.length === 0,
-    planApproval: task.planApproval?.decision,
-    planAskPending: task.pendingPlanAskId !== undefined && task.planApproval === undefined,
-    kickoffUndelivered,
+    liveSummary: buildLiveSummary({ task, lightStatus, main, approvalPending, backgroundSummaries, idleNotSubmitted, conversationMissing, pendingAsks }, locale),
     approvalPending,
     backgroundActive,
-    stalled: effectiveStalled !== undefined,
+    idleNotSubmitted,
+    projectLabel: task.project !== undefined && task.project !== '' ? task.project : cwdBasename(task.cwd),
+    isReadyToStart: task.column === 'backlog',
   }
 }
 
 interface LiveSummaryInputs {
   task: TaskRecord
   lightStatus: TaskLightStatus
-  errorConv: ConversationSummary | undefined
-  blockedConvs: ConversationSummary[]
-  approvalPending: boolean
   main: ConversationSummary | undefined
-  activeChildren: ConversationSummary[]
-  stalled: number | undefined
+  approvalPending: boolean
+  backgroundSummaries: readonly string[]
+  idleNotSubmitted: boolean
   conversationMissing: boolean
   pendingAsks: Readonly<Record<number, number>> | undefined
-  backgroundSummaries: readonly string[]
-  kickoffUndelivered: boolean
 }
 
-/** Build the one-line live summary from real facts (error first, then blocked [approval vs sub-session], running, background, stalled, missing). */
+/** Build the one-line live summary from real facts (error first, then blocked [approval], running, background, idle-not-submitted, missing). */
 function buildLiveSummary(inputs: LiveSummaryInputs, locale: HelmxLocale): string {
-  const { task, lightStatus, errorConv, blockedConvs, approvalPending, main, activeChildren, stalled, conversationMissing, pendingAsks, backgroundSummaries, kickoffUndelivered } = inputs
+  const { task, lightStatus, main, approvalPending, backgroundSummaries, idleNotSubmitted, conversationMissing } = inputs
   if (conversationMissing) return taskLiveConversationMissing(locale)
   if (lightStatus === 'error') {
-    const line = errorConv?.lastError ?? task.silenceState?.lastError
+    const line = main?.lastError
     if (line !== undefined && line !== '') return taskLiveErrorLine(line, locale)
   }
   if (lightStatus === 'blocked') {
-    const askConv = blockedConvs.find((conv) => pendingAskCountOf(conv, pendingAsks) > 0)
-    const doing = (askConv ?? blockedConvs[0])?.doing
-    // Waiting for approval (a human Ask) and waiting on a sub-session confirmation are
-    // distinct facts; both differ from errors.
-    return approvalPending ? taskLiveWaitingApproval(doing, locale) : taskLiveSubSessionConfirm(doing, locale)
+    return taskLiveWaitingApproval(main?.doing, locale, approvalPending)
   }
-  if (kickoffUndelivered) return taskKickoffUndelivered(locale)
   if (lightStatus === 'running') {
     const doing = main?.doing
     if (doing !== undefined && doing !== '') return doing
   }
-  if (lightStatus === 'background') {
-    const parts: string[] = []
-    if (activeChildren.length > 0) parts.push(taskLiveSubSessions(activeChildren.length, locale))
-    parts.push(...backgroundSummaries)
-    if (parts.length > 0) return parts.join(' · ')
+  if (lightStatus === 'background' && backgroundSummaries.length > 0) {
+    return backgroundSummaries.join(' · ')
   }
-  if (stalled !== undefined) return taskLiveTurnSettled(locale)
-  if (task.column === 'in_progress' && main?.status === 'idle' && backgroundSummaries.length === 0) {
-    return taskLiveIdleWaiting(locale)
-  }
+  if (idleNotSubmitted) return taskLiveIdleNotSubmitted(locale)
   return ''
 }
 
@@ -641,7 +417,7 @@ function compareTaskItems(a: TaskItem, b: TaskItem): number {
   return b.task.id.localeCompare(a.task.id)
 }
 
-/** Derive the live view of every board task (single pass, shared tasksById index). */
+/** Derive the live view of every board task (single pass, shared conversations index). */
 export function deriveBoardItems(
   tasks: readonly TaskRecord[],
   conversations: readonly ConversationSummary[],
@@ -649,10 +425,9 @@ export function deriveBoardItems(
   locale: HelmxLocale = DEFAULT_HELMX_LOCALE,
   background?: TaskBackgroundFacts,
 ): TaskItem[] {
-  const tasksById = new Map(tasks.map((task) => [task.id, task]))
   return tasks.map((task) => ({
     task,
-    live: deriveTaskLiveView(task, conversations, pendingAsks, tasksById, locale, background),
+    live: deriveTaskLiveView(task, conversations, pendingAsks, locale, background),
   }))
 }
 
@@ -698,7 +473,7 @@ export type TaskMobileBuckets = Record<Exclude<TaskMobileTab, 'all'>, TaskItem[]
 
 /**
  * Mobile five-bucket clear-down flow (+ optional grouped done view):
- * - attention: every task needing the owner (blocked / error / stalled / missing conversation);
+ * - attention: every task needing the owner (blocked / error / missing conversation);
  * - the rest follow their workflow column.
  */
 export function bucketMobile(items: readonly TaskItem[]): TaskMobileBuckets {
@@ -823,9 +598,6 @@ export interface TaskToolFacts {
   taskId: string | undefined
   title: string | undefined
   conversationId: number | undefined
-  /** approve results: tasks automatically unblocked / started downstream. */
-  unblockedCount: number | undefined
-  autoStartedCount: number | undefined
 }
 
 function readRecord(value: unknown): Record<string, unknown> | undefined {
@@ -851,13 +623,9 @@ export function parseTaskToolFacts(input: unknown, structured: unknown): TaskToo
     }
     return undefined
   }
-  const unblocked = parseStringArray(resultRecord?.['unblockedTaskIds'])
-  const autoStarted = parseStringArray(resultRecord?.['autoStartedTaskIds'])
   return {
     taskId: pickString(taskRecord?.['id'], resultRecord?.['taskId'], inputRecord?.['taskId'], inputRecord?.['id']),
     title: pickString(taskRecord?.['title'], inputRecord?.['title']),
     conversationId: pickNumber(resultRecord?.['conversationId'], taskRecord?.['conversationId'], inputRecord?.['conversationId']),
-    unblockedCount: unblocked !== undefined ? unblocked.length : parseNumber(resultRecord?.['unblockedCount']),
-    autoStartedCount: autoStarted !== undefined ? autoStarted.length : parseNumber(resultRecord?.['autoStartedCount']),
   }
 }
