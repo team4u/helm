@@ -854,24 +854,19 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
     )
   }
 
+  // 移动端列表：筛选清空（filtered.length === 0）时统一由底部带 Reset 的
+  // filtered-empty 面板兜底，这里不再叠一块内嵌空态；单 tab 空块仅在
+  // 「有筛选结果但该桶为空」时渲染（如 review 桶 0 卡）。
   const mobileList = activeTab === 'all' ? (
-    <>
-      {TASK_MOBILE_GROUP_ORDER.map(mobileGroup)}
-      {filtered.length === 0 ? (
-        <div className="task-board-empty">
-          <div className="task-board-empty-title">{t(TASK_EMPTY_NO_MATCH)}</div>
-          <div className="task-board-empty-hint text-subtle">{t(TASK_EMPTY_HINT_NO_MATCH)}</div>
-        </div>
-      ) : null}
-    </>
+    <>{TASK_MOBILE_GROUP_ORDER.map(mobileGroup)}</>
   ) : mobileBuckets[activeTab].length > 0 ? (
     mobileBuckets[activeTab].map(renderCard)
-  ) : (
+  ) : filtered.length > 0 ? (
     <div className="task-board-empty">
       <div className="task-board-empty-title">{t(TASK_EMPTY_NO_MATCH)}</div>
       <div className="task-board-empty-hint text-subtle">{t(TASK_EMPTY_HINT_NO_MATCH)}</div>
     </div>
-  )
+  ) : null
 
   return (
     <div className="task-board" data-view="task-board">

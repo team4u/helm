@@ -19,7 +19,7 @@
 - **执行会话**：开工时由插件创建的独立顶层会话，贴 `task` 标签（侧栏「任务执行」分组收口）；验收通过或归档后换 `task-archived` 标签（「已完成任务」分组）。**绝不删除底层会话历史**。
 - **受管技能 `tasks`**：随插件启停自举/消失，教会任意 Profile 角色做「需求规划者」——收清需求产出高质量 brief、按需拆分带依赖的任务组、不亲自下场写业务代码。
 - **双轨数据**：私有持久 doc `records`（`{ nextSeq, tasks }`）是单一真源；公开瞬态 doc `board`（`public: true, durable: false`）是前端实时投影，仅含未归档任务 + 最近 50 条已完成/归档历史。公开 doc 单值受宿主 **2 MiB 上限**（超限显式 413 拒绝写入），投影截断即为体积控制手段；全量历史经 `list({ includeArchived: true })` 动作按需查询。
-- **徽标聚合随板携带**：`board` 投影顶层携带诚实注意汇总——`attentionCount`（需人工介入任务数：全部未归档 in_review + 携任一诚实注意信号的未归档 in_progress，信号含：会话缺失（`conversationMissing` 或绑定会话不在实时会话表）/ 绑定会话子树（含自身）`error` 态 / 子树 `blocked` 或待答 Ask / `stalledAt` / `lastError` / `kickoffUndelivered` / 方案审批发起未决）、`reviewCount`（待验收数）、`runningCount`（健康在跑数）、`hasRunning`（`attentionCount === 0 && runningCount > 0`，安静圆点）、`badgeTone`（`error` > `warn` > `accent` > `neutral` 最高严重度）与 `badgeSummary`（双语摘要，如「2 个待验收 · 1 个需处理」）。徽标实时感知订阅真实内核事件（`conversation.upsert` / `ask.upsert` / `ask.resolved`，仅存在未归档活跃卡时重投影），并按徽标元组脏检查落笔——元组不变不写 doc，高频流式事件零 SSE 写放大。sidebarItem 徽标声明常量 `TASK_BOARD_SIDEBAR_BADGE`（`contracts.ts` 导出）与宿主通用 `SidebarItemBadgeSpec` 字段一一对应，宿主徽标基础设施并入后由集成在 `ui.ts` 补一行 `badge: TASK_BOARD_SIDEBAR_BADGE` 接线。
+- **徽标聚合随板携带**：`board` 投影顶层携带诚实注意汇总——`attentionCount`（需人工介入任务数：全部未归档 in_review + 携任一诚实注意信号的未归档 in_progress，信号含：会话缺失（`conversationMissing` 或绑定会话不在实时会话表）/ 绑定会话子树（含自身）`error` 态 / 子树 `blocked` 或待答 Ask / `stalledAt` / `lastError` / `kickoffUndelivered` / 方案审批发起未决）、`reviewCount`（待验收数）、`runningCount`（健康在跑数）、`hasRunning`（`attentionCount === 0 && runningCount > 0`，安静圆点）、`badgeTone`（`error` > `warn` > `accent` > `neutral` 最高严重度）与 `badgeSummary`（双语摘要，如「2 个待验收 · 1 个需处理」）。徽标实时感知订阅真实内核事件（`conversation.upsert` / `ask.upsert` / `ask.resolved`，仅存在未归档活跃卡时重投影），并按徽标元组脏检查落笔——元组不变不写 doc，高频流式事件零 SSE 写放大。sidebarItem 徽标声明常量 `TASK_BOARD_SIDEBAR_BADGE`（`contracts.ts` 导出）与宿主通用 `SidebarItemBadgeSpec` 字段一一对应，`ui.ts` 注册处已声明 `badge: TASK_BOARD_SIDEBAR_BADGE`——宿主订阅本插件公开 doc `board`，在活动 Rail 快捷入口、移动端 MobileQuickNav 与侧栏视图行渲染计数徽标 / 安静圆点 / tooltip 摘要（零插件 ID 特判，停用即随贡献消失）。
 - **依赖真值随卡携带**：投影的每张卡附带 `blockedBy: string[]`（未 done 的前置 ID，按真源全量计算）——板书截断后前端无法看到被截掉的依赖卡状态，UI 必须消费该字段判定阻塞，不得自行从截断板书推导（契约见 `TaskBoardEntry`）。
 - **持久化输入脱敏**：brief / title / project / summary / verification / branch / worktreePath / feedback / note 等用户文本写入 doc 前统一过 `ctx.host.redact`（宿主唯一脱敏入口，已登记机密替换为标记），不落明文机密。
 - **并发串行**：全部任务写经 `enqueueMutation` 串行队列（读-改-写 + 投影刷新原子完成），杜绝竞态重复创会话。
@@ -133,7 +133,7 @@
 
 ## UI 贡献
 
-- `sidebarItem` `task-board`（`order: 5`，先于 App Center；`quickEntry: true` 随宿主快捷入口体系直达）：Rail 视图图标一步直达看板；徽标声明 `TASK_BOARD_SIDEBAR_BADGE` 已在 `contracts.ts` 就绪，宿主通用 `SidebarItemBadgeSpec` 并入后由集成在注册处补一行 `badge:` 接线（count=`attentionCount` / tone=`badgeTone` / dot=`hasRunning` / summary=`badgeSummary`）；
+- `sidebarItem` `task-board`（`order: 5`，先于 App Center；`quickEntry: true` 随宿主快捷入口体系直达）：Rail 视图图标一步直达看板；注册处声明 `badge: TASK_BOARD_SIDEBAR_BADGE`（count=`attentionCount` / tone=`badgeTone` / dot=`hasRunning` / summary=`badgeSummary`），驱动活动 Rail 快捷入口、移动端 MobileQuickNav 与侧栏视图行的通用徽标渲染；
 - `screen` `board`：`TaskBoardScreen` 全屏看板（四列 + 移动端清零流，由前端切片实现）；
 - `sidebarSection` `task-conversations`（`filterTag: task`）与 `task-archived-conversations`（`filterTag: task-archived`）：任务执行会话收口分组，默认折叠；
 - `toolView` `task-tool-card`：`task_create / task_start / task_submit / task_approve / task_rework` 的时间线活体回执卡。

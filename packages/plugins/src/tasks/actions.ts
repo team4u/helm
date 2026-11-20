@@ -1135,11 +1135,13 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
   /** in_review 交卷通知（payload 契约对齐 protocol NotificationEvent / Web ToastOverlay）。 */
   const notifyReviewRequested = (task: TaskRecord): void => {
     try {
+      // summary 为空 / 纯空白时只报标题，不留尾随冒号（正常路径 summary 恒非空，防御观感）。
+      const summary = task.submission?.summary?.trim() ?? ''
       ctx.host.emitEvent('notification', {
         type: 'notification',
         level: 'info',
         title: ctx.host.redact(`任务 ${task.id} 已提交验收`),
-        body: ctx.host.redact(`${task.title}：${task.submission?.summary ?? ''}`),
+        body: ctx.host.redact(summary !== '' ? `${task.title}：${summary}` : task.title),
         ...(task.conversationId !== undefined ? { conversationId: task.conversationId } : {}),
       })
     } catch (err) {

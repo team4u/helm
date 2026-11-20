@@ -35,6 +35,7 @@ import {
   TASKS_SKILL_ID,
   TASK_ACTIVE_TAG,
   TASK_ARCHIVED_TAG,
+  TASK_BOARD_SIDEBAR_BADGE,
   type TaskBoardDoc,
   type TaskRecord,
 } from '../src/tasks.js'
@@ -198,6 +199,19 @@ test('tasks-int1: default-enabled boot, zero residents, workflow-disable freedom
       'sidebar.section:task-conversations',
       'tool.view:task-tool-card',
     ])
+
+    // End-to-end badge wiring: the live plugin's sidebar.item contribution carries
+    // the declared badge verbatim — protocol SidebarItemBadgeSpec + kernel boundary
+    // validator + plugin registration all agreeing on one contract.
+    const sidebarItem = kernel.plugins
+      .listUi()
+      .find((u) => u.pluginId === TASKS_PLUGIN_ID && u.surface === 'sidebar.item' && (u.spec as { id?: string }).id === 'task-board')
+    assert.ok(sidebarItem, 'sidebar.item:task-board contribution must exist')
+    assert.deepEqual(
+      (sidebarItem.spec as { badge?: unknown }).badge,
+      { ...TASK_BOARD_SIDEBAR_BADGE },
+      'task-board sidebarItem badge must match TASK_BOARD_SIDEBAR_BADGE (protocol -> kernel validator -> plugin registration)',
+    )
   } finally {
     await env.close()
   }

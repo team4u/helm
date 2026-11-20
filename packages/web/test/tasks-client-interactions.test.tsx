@@ -673,6 +673,16 @@ test('筛选与深链：q/project/assignee/node 参数过滤、清除按钮回�
   assert.deepEqual(desktopCards(byNode.host), ['T-2'])
   byNode.unmount()
 
+  // 筛选清空全部任务：全板仅一块 filtered-empty 面板（带 Reset）兜底——
+  // 移动端 all 分组视图不再叠加内嵌空态（回归锁定）。
+  const byNothing = await mountBoard(makeSpyCtx(), mutableScreenProps({ q: 'zzz-no-match' }).props)
+  t.after(() => byNothing.unmount())
+  const emptyPanels = [...byNothing.host.querySelectorAll('.task-board-empty')]
+  assert.equal(emptyPanels.length, 1, '筛选清空时只渲染一块空看板面板')
+  assert.match(emptyPanels[0]?.textContent ?? '', /No matching tasks/)
+  assert.ok([...emptyPanels[0]!.querySelectorAll('button')].some((b) => b.textContent?.includes('Reset filters')), '空面板应带重置按钮')
+  byNothing.unmount()
+
   // 触发器标签聚合（未过滤时显示 All；cwd basename 进入项目选项语境）
   const all = await mountBoard(makeSpyCtx(), mutableScreenProps().props)
   t.after(() => all.unmount())

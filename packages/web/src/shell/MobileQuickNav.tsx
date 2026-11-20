@@ -15,7 +15,12 @@ import { useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useIsMobileViewport } from '../lib/use-media-query.js'
 import { composeAttentionSummary, type GlobalAttentionIndicator } from './attention-model.js'
-import { sidebarBadgeCountLabel, type ResolvedSidebarBadge, type SidebarViewItem } from './sidebar-model.js'
+import {
+  composeSidebarBadgeLabel,
+  sidebarBadgeCountLabel,
+  type ResolvedSidebarBadge,
+  type SidebarViewItem,
+} from './sidebar-model.js'
 
 export interface MobileQuickNavProps {
   /** 全局态势微标（同源 indicator）。 */
@@ -34,10 +39,7 @@ export function MobileQuickNav({ indicator, quickEntry, quickEntryBadge = null }
   const attentionSummary = composeAttentionSummary(indicator, t)
   const overviewLabel =
     attentionSummary !== '' ? `${t('shell.overview.railTooltip')} · ${attentionSummary}` : t('shell.overview.railTooltip')
-  const quickLabel =
-    quickEntry !== null && quickEntryBadge !== null && quickEntryBadge.summary !== ''
-      ? `${quickEntry.label} · ${quickEntryBadge.summary}`
-      : quickEntry?.label ?? ''
+  const quickLabel = quickEntry !== null ? composeSidebarBadgeLabel(quickEntry.label, quickEntryBadge) : ''
   return (
     <div className="mobile-quick-nav" role="group" aria-label={t('shell.overview.quickNavGroup')}>
       {quickEntry !== null && (

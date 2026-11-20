@@ -634,7 +634,7 @@ function validateSidebarItemSpec(spec: Record<string, unknown>, id: string, ctx:
   if (spec['badge'] !== undefined && !isPlainObject(spec['badge'])) {
     throw new HelmxError(
       'invalid_ui_spec',
-      `plugin ${pluginId} ui.sidebarItem  badge must be a plain object { doc, countField, toneField?, dotField?, summaryField? }`,
+      `plugin ${pluginId} ui.sidebarItem badge must be a plain object { doc, countField, toneField?, dotField?, summaryField? }`,
       400,
       { pluginId, id },
     );
@@ -652,13 +652,13 @@ function validateSidebarItemSpec(spec: Record<string, unknown>, id: string, ctx:
     for (const field of SIDEBAR_BADGE_FIELDS) {
       if (p === `/badge/${field}`) {
         return {
-          message: `plugin ${pluginId} ui.sidebarItem  badge.${field} must be non-empty string field name`,
+          message: `plugin ${pluginId} ui.sidebarItem badge.${field} must be non-empty string field name`,
           details: { pluginId, id, field },
         };
       }
     }
     return {
-      message: `plugin ${pluginId} ui.sidebarItem  badge only allows { doc, countField, toneField?, dotField?, summaryField? }`,
+      message: `plugin ${pluginId} ui.sidebarItem badge only allows { doc, countField, toneField?, dotField?, summaryField? }`,
       details: { pluginId, id },
     };
   });
@@ -670,7 +670,7 @@ function validateSidebarItemSpec(spec: Record<string, unknown>, id: string, ctx:
       if (typeof value === 'string' && UNSAFE_TOP_LEVEL_KEYS.has(value)) {
         throw new HelmxError(
           'invalid_ui_spec',
-          `plugin ${pluginId} ui.sidebarItem  badge.${field} must be security top-level doc key (refuse __proto__/constructor/prototype)`,
+          `plugin ${pluginId} ui.sidebarItem badge.${field} must be security top-level doc key (refuse __proto__/constructor/prototype)`,
           400,
           { pluginId, id, field, value },
         );
