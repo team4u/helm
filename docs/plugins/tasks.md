@@ -137,7 +137,8 @@
 - `screen` `board`：`TaskBoardScreen` 全屏看板（四列 + 移动端清零流，由前端切片实现）；
 - `sidebarSection` `task-conversations`（`filterTag: task` + `keptAliveTag: task-archived`）：任务执行会话单一收口分组（结单/归档成员换标签后仍留组沉底），默认折叠；
 - `toolView` `task-tool-card`：`task_create / task_start / task_submit / task_approve / task_rework` 的时间线活体回执卡；
-- `slot` `overview-card-meta`（target `OVERVIEW_CARD_META_SLOT`，宿主会话总览卡片元数据区）：向任务执行会话的总览卡贡献一枚只读跳转胶囊（`TaskOverviewCardMeta`：任务号 + 列位标签 + 可选项目短标记，点击 `stopPropagation` 后深链 `screen:builtin:tasks/board?task=<id>` 定位看板抽屉）。`scope.tags` 为 `task` / `task-archived` 的 OR 匹配——仅任务执行会话卡片挂载，普通对话零开销零订阅；查无匹配任务返回 `null` 零视觉残留；审批/返工/开工/合并等重操作一律留在看板自身，胶囊坚持只读 + 跳转；插件停用后贡献即时消失。
+- `slot` `overview-card-meta`（target `OVERVIEW_CARD_META_SLOT`，宿主会话总览卡片元数据区）：向任务执行会话的总览卡贡献一枚只读跳转胶囊（`TaskOverviewCardMeta`：任务号 + 状态词 + 可选项目短标记，点击 `stopPropagation` 后深链 `screen:builtin:tasks/board?task=<id>` 定位看板抽屉）。`scope.tags` 为 `task` / `task-archived` 的 OR 匹配——仅任务执行会话卡片挂载，普通对话零开销零订阅；查无匹配任务返回 `null` 零视觉残留；`kickoffUndelivered`（重启恢复）时**同一枚胶囊**切 warn 态（警示图标 + 「开工未送达」状态词 + 恢复指引 title），不另增第二枚按钮；审批/返工/开工/合并等重操作一律留在看板自身，胶囊坚持只读 + 跳转；插件停用后贡献即时消失。
+- `action` `task-anchor`（target `conversation:header`，`placement: 'toolbar'`）：任务执行会话头部的任务锚点徽标（`TaskHeaderBadge`：图标 + 任务号 + 状态词，`data-column` 语义配色与总览胶囊同源；点击 `stopPropagation` 深链看板任务详情）。这是执行会话内**唯一**的任务回链——验收/返工等规划者动作留在看板抽屉（`assertPlannerAuthority` 防自审自批不变量），徽标本身是只读导航锚零动作权限面；`scope.tags` 同上 OR 匹配，结单换 `task-archived` 标签后徽标仍在；数据走 `board` 公开投影（`findTaskForConversation`：未归档 > `updatedAt` 新），任务被 >50 归档截断出投影或 doc 未加载时返回 `null` 零残留；窄屏（≤680px）收敛为图标 + 任务号，状态词进 `title`。
 
 ## 生命周期与诚实边界
 

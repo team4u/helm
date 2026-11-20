@@ -45,7 +45,8 @@
 - push：切换主屏/分屏、开关工作台、持久弹窗、Rail 空间切换；
 - replace：同一弹窗内切换子项、工作台内切 Tab、同一 screen 仅改参数、待命目标仅改草稿环境、删除回退与草稿→真实会话迁移；
 - `replace` 只替换当前历史项，不能也不宣称清空整个历史栈；历史策略统一维护在 `shouldPushLocationHistory`，调用方可经 `openTarget({ history })` 覆写下一拍；
-- 访问已删除会话的深链显式提示不存在，不得路由循环或静默跳转。
+- 访问已删除会话的深链显式提示不存在，不得路由循环或静默跳转；
+- **主屏导航自动收起会话抽屉**：非 split 的 `openTarget` 推进主屏目标时若覆盖型会话抽屉（`conversation-drawer`）开着，顺手 `activeModal = null`——否则抽屉内徽标/通知触发的深链被全高抽屉自身遮挡，表现为「点击无反应」；分屏导航不遮挡不收；深链恢复（`applyExternalLocation`）不走此路径，`wb+modal=drawer` 组合态仍可精确还原。
 
 ## 插件 Screen 路由参数
 

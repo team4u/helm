@@ -275,18 +275,36 @@ export function findTaskForOverviewCard(
   memberIds: ReadonlyArray<number> | undefined,
 ): TaskRecord | undefined {
   const memberSet = memberIds === undefined ? undefined : new Set(memberIds)
-  let rootHit: TaskRecord | undefined
+  const rootHit = rootConversationId === undefined ? undefined : findTaskForConversation(tasks, rootConversationId)
   let memberHit: TaskRecord | undefined
   for (const task of tasks) {
     const conversationId = task.conversationId
     if (conversationId === undefined) continue
-    if (conversationId === rootConversationId) {
-      if (preferOverviewTask(task, rootHit)) rootHit = task
-    } else if (memberSet !== undefined && memberSet.has(conversationId)) {
+    if (conversationId !== rootConversationId && memberSet !== undefined && memberSet.has(conversationId)) {
       if (preferOverviewTask(task, memberHit)) memberHit = task
     }
   }
   return rootHit ?? memberHit
+}
+
+/**
+ * Pure lookup for the conversation header task badge (ctx.ui.action
+ * conversation:header contribution): find the task whose execution
+ * conversation is exactly this one. Same ranking as the overview pill
+ * (non-archived wins, then newer updatedAt, then id). No match — including
+ * done-history tasks truncated out of the board projection (>50 archived) —
+ * returns undefined (the badge renders nothing, zero visual residue).
+ */
+export function findTaskForConversation(
+  tasks: readonly TaskRecord[],
+  conversationId: number,
+): TaskRecord | undefined {
+  let hit: TaskRecord | undefined
+  for (const task of tasks) {
+    if (task.conversationId !== conversationId) continue
+    if (preferOverviewTask(task, hit)) hit = task
+  }
+  return hit
 }
 
 // ---------------------------------------------------------------------------

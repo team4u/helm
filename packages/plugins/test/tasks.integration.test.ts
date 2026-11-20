@@ -193,6 +193,7 @@ test('tasks-int1: default-enabled boot, zero residents, workflow-disable freedom
       .map((u) => `${u.surface}:${String((u.spec as { id?: string }).id)}`)
       .sort()
     assert.deepEqual(surfaces, [
+      'conversation.header.action:task-anchor',
       'plugin.slot:overview-card-meta',
       'screen:board',
       'sidebar.item:task-board',
