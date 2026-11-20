@@ -425,7 +425,20 @@ export interface StartHubOptions {
    * Passed through to `createHubHandler` under the same option name.
    */
   webDistDir?: string | false
+  /**
+   * Composition-root product routes, consulted after authentication and before core `/api`
+   * dispatch (mechanism only: the kernel never defines product semantics). Returning
+   * `undefined` falls through to the core router. Passed through to `createHubHandler`.
+   */
+  productRoutes?: ProductRouteHandler
 }
+
+/**
+ * Product route handler: receives the authenticated request and returns a complete Response, or
+ * `undefined` to fall through to the core API router. Runs behind the same bearer-token gate as
+ * core routes (public paths never reach it).
+ */
+export type ProductRouteHandler = (request: Request) => Promise<Response | undefined>
 
 export interface HubHandle {
   url: string

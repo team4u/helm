@@ -210,7 +210,7 @@ test('payload publish package contract: the dist root package.json is a standalo
   // component directories ship.
   assert.deepEqual(
     (distPkg.files as string[]).slice().sort(),
-    ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'cli', 'env-io.tgz', 'hub.tgz', 'kernel.tgz', 'manifest.json', 'plugin-build.tgz', 'plugins.tgz', 'protocol.tgz', 'start.mjs', 'web'].sort(),
+    ['LICENSE', 'THIRD_PARTY_NOTICES.md', 'cli', 'env-io.tgz', 'hub.tgz', 'kernel.tgz', 'manifest.json', 'plugin-build.tgz', 'plugins.tgz', 'protocol.tgz', 'start.mjs', 'update-handoff.mjs', 'web'].sort(),
   );
   // @helmx runtime packages install from archives (all six, hub included); direct external
   // dependencies use exact versions (no ^/~/>= floating).
@@ -291,7 +291,7 @@ test('payload manifest contract: formatVersion/version/entries/checksums all hol
       'kernel', 'kernelArchive', 'kernelPackageJson', 'launcher',
       'pluginBuild', 'pluginBuildArchive', 'pluginBuildPackageJson',
       'plugins', 'pluginsArchive', 'pluginsPackageJson', 'protocol',
-      'protocolArchive', 'protocolPackageJson', 'rootPackageJson', 'webIndex',
+      'protocolArchive', 'protocolPackageJson', 'rootPackageJson', 'updateHandoff', 'webIndex',
     ].sort(),
   );
 });

@@ -83,7 +83,11 @@ interface NodeHubHandle extends HubHandle {
 
 export async function startHub(options: StartHubOptions): Promise<NodeHubHandle> {
   const { kernel, webDistDir } = options
-  const handler = createHubHandler({ kernel, ...(webDistDir !== undefined ? { webDistDir } : {}) })
+  const handler = createHubHandler({
+    kernel,
+    ...(webDistDir !== undefined ? { webDistDir } : {}),
+    ...(options.productRoutes !== undefined ? { productRoutes: options.productRoutes } : {}),
+  })
   // Validate explicit static directory eagerly at startup (fail fast): invalid dir refuses to start
   // with a structured diagnostic (matching `web_dist_invalid` on first-request path) rather than deferring failure.
   if (typeof webDistDir === 'string') {

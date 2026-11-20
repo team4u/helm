@@ -206,7 +206,7 @@ export async function performHubUpdate(options: PerformUpdateOptions): Promise<U
     }).dataDir ?? defaultHubDataDir(io.env);
 
     const staged = await stageHubRelease({
-      io,
+      env: io.env,
       core,
       root,
       version: targetVersion,

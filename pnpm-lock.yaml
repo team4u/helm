@@ -209,6 +209,9 @@ importers:
       '@helmx/protocol':
         specifier: workspace:*
         version: link:../protocol
+      tar:
+        specifier: 7.5.23
+        version: 7.5.23
     devDependencies:
       '@helmx/test-kit':
         specifier: workspace:*

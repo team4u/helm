@@ -29,6 +29,7 @@ export {
   ValidationError,
 } from './validate.js'
 export type {
+  ProductRouteHandler,
   AuthService,
   ArtifactService,
   ConversationFileContent,

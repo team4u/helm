@@ -19,3 +19,6 @@ export * from './node-shell-config-io.js'
 export * from './control.js'
 export * from './os-service.js'
 export * from './update/index.js'
+// NOTE: `hub-payload.ts` (tarball unpacking + payload staging + update-ready state, tar-dependent)
+// is exported ONLY via the './hub-payload' subpath so the node daemon bundle keeps its
+// four-external contract.

@@ -293,6 +293,9 @@ export async function startHubLocked(root: string, io: LauncherIo, options: Star
     HELMX_PORT: String(config.port),
     HELMX_HUB_ACTIVITY_LAUNCH_ID: launchId,
     HELMX_HOST: config.host,
+    // Mark the hub as payload-managed: enables its in-process background updater and the
+    // /api/hub-update surface (docker/dev hubs run without it and honestly report inactive).
+    HELMX_HUB_INSTALL_ROOT: root,
   };
   if (config.dataDir !== undefined) childEnv.HELMX_DATA_DIR = config.dataDir;
   if (config.model !== undefined) childEnv.HELMX_MODEL = config.model;

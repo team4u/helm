@@ -2054,3 +2054,34 @@ test('CORS: reflects any Origin and carries credentials header', { timeout: 60_0
   assert.equal(preflight.status, 204)
   assert.equal(preflight.headers.get('access-control-allow-origin'), 'http://localhost:3201')
 })
+
+test('productRoutes run authenticated ahead of core dispatch and fall through on undefined', { timeout: 60_000 }, async () => {
+  const kernel = makeKernel()
+  const seen: string[] = []
+  const handler = createHubHandler({
+    kernel,
+    productRoutes: async (request) => {
+      seen.push(new URL(request.url).pathname)
+      if (new URL(request.url).pathname === '/api/product/hello') {
+        return new Response(JSON.stringify({ ok: true, product: true }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return undefined
+    },
+  })
+
+  // Unauthenticated product requests are rejected by the same bearer gate as core routes.
+  const unauth = await call(handler, 'GET', '/api/product/hello', { auth: false })
+  assert.equal(unauth.status, 401)
+  assert.deepEqual(seen, [], 'unauthenticated requests never reach product routes')
+
+  // Authenticated hit answers from the product handler.
+  const hit = await call(handler, 'GET', '/api/product/hello')
+  assert.equal(hit.status, 200)
+  assert.deepEqual(hit.body, { ok: true, product: true })
+  assert.deepEqual(seen, ['/api/product/hello'])
+
+  // Everything else is consulted but falls through to the core router untouched.
+  const core = await call(handler, 'GET', '/api/conversations')
+  assert.ok(core.status === 200 || core.status === 404, `core dispatch answered (${core.status})`)
+  assert.deepEqual(seen, ['/api/product/hello', '/api/conversations'], 'the product handler was consulted for the core path and declined')
+})

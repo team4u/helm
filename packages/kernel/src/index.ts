@@ -5,7 +5,7 @@ export {
   type ActivityHeartbeat,
   type ActivityHeartbeatOptions,
 } from './runtime/activity-heartbeat.js';
-export { createHubHandler, startHub } from './http/index.js';
+export { createHubHandler, startHub, errorResponse, jsonOk, type ProductRouteHandler } from './http/index.js';
 export {
   createEnvFabric,
   createScopedExecutionEnv,
