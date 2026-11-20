@@ -323,6 +323,10 @@ export const COMPOSER_STATUS_SLOT = 'builtin:composer/status' as const
  * the height. */
 export const COMPOSER_DOCK_SLOT = 'builtin:composer/dock' as const
 
+/** Namespace reserved by the host conversation overview card metadata area; does not imply a builtin:overview plugin exists.
+ * Read-only badge/link pills (e.g. task number + column link) are contributed via ctx.ui.slot; heavy actions belong in the plugin's own screen/drawer. */
+export const OVERVIEW_CARD_META_SLOT = 'builtin:overview/card-meta' as const
+
 /** Only mounted for existing nodes; contains no node access tokens or other credentials. */
 export interface NodeDetailSlotProps {
   nodeId: string
@@ -339,6 +343,14 @@ export interface ProfileDetailSlotProps {
   isNew: boolean
   /** Whether the host drawer is in a saving/deleting disabled state. */
   disabled: boolean
+}
+
+/** Props passed to plugin client.tsx components for the target: OVERVIEW_CARD_META_SLOT sub-slot (read-only metadata pills on a host conversation overview card). */
+export interface OverviewCardMetaSlotProps {
+  /** Root conversation of the overview card. */
+  rootConversation: ConversationSummary
+  /** All conversation IDs in this tree (root included). */
+  memberIds: ReadonlyArray<number>
 }
 
 /** ctx.ui: base extension surface plus fine-grained composition extension surfaces. */
