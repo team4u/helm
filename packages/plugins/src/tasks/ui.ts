@@ -24,6 +24,12 @@ export function registerTasksUi(ctx: HelmxPluginContext): void {
     target: 'screen:builtin:tasks/board',
     order: 5,
     quickEntry: true,
+    // 徽标接线（集成期补一行）：宿主通用 `SidebarItemSpec.badge`（SidebarItemBadgeSpec）
+    // 由徽标基础设施切片并入后，此处追加 `badge: TASK_BOARD_SIDEBAR_BADGE`
+    // （`contracts.ts` 已导出该常量，字段名与 board 投影徽标聚合 100% 对齐——
+    // doc=board / countField=attentionCount / toneField=badgeTone /
+    // dotField=hasRunning / summaryField=badgeSummary）。本切片 worktree 的
+    // SidebarItemSpec 尚无该字段，为零造型接线留待集成合并，禁止 any 临时补丁。
   })
 
   ctx.ui.screen({

@@ -3,14 +3,18 @@
  * - 单一真源：私有持久 doc `records`（{ nextSeq, tasks }），全部写经串行 mutation 队列；
  * - 公开投影：瞬态内存 doc `board`（public + non-durable），每次真源变更同步刷新，
  *   仅投射未归档任务 + 最近 N 条归档 / 已完成历史，防公开 doc 超 2 MiB 写放大；
+ * - 徽标聚合：投影把实时会话事实（可选 `listConversations` 事实源）折进 attention /
+ *   review / running / tone / summary；会话事件侧走 `refreshBoardIfBadgeChanged` 脏检查，
+ *   徽标元组不变即跳过写入，高频流式事件零 SSE 写放大；
  * - 任务编号单调分配 `T-1`, `T-2`, ...；
  * - 依赖校验：无自依赖、引用存在、全图无环（DFS）。
  */
-import { HelmxError, type PluginDocHandle } from '@helmx/protocol'
+import { HelmxError, type ConversationSummary, type PluginDocHandle } from '@helmx/protocol'
 import {
   assertTaskStoreDoc,
   detectDependencyCycle,
   projectBoardDoc,
+  taskBoardBadgeKey,
   type TaskBoardDoc,
   type TaskColumn,
   type TaskRecord,
@@ -25,6 +29,13 @@ export interface TaskListFilter {
   includeArchived?: boolean
 }
 
+export interface TasksStoreOptions {
+  /** 实时会话事实源：每次写档与投影刷新都把真实会话状态（缺失 / error / blocked / 待答 Ask）折进 board 徽标；缺省仅按记录内信号判定。 */
+  listConversations?: () => ConversationSummary[]
+  onMutationStart?: (label: string) => void
+  onMutationEnd?: (label: string) => void
+}
+
 export interface TasksStoreRuntime {
   /** 快照读（含归档；调用方自行过滤）。 */
   read(): TaskStoreDoc
@@ -32,8 +43,10 @@ export interface TasksStoreRuntime {
   list(filter?: TaskListFilter): TaskRecord[]
   /** 串行读-改-写：在队列内对真源 draft 变更并同步刷新 board 投影。 */
   enqueueMutation<T>(fn: (draft: TaskStoreDoc) => Promise<T> | T): Promise<T>
-  /** 立即按当前真源刷新公开投影（事件侧标记类变更用）。 */
+  /** 立即按当前真源刷新公开投影（记录侧变更用）。 */
   refreshBoard(): void
+  /** 会话事件侧徽标脏检查：仅当徽标元组真实变化才写 board（高频流式事件零 SSE 写放大）。 */
+  refreshBoardIfBadgeChanged(): void
   /** 当前 in_progress 任务数（maxConcurrentTasks 计数口径）。 */
   countInProgress(): number
 }
@@ -41,21 +54,23 @@ export interface TasksStoreRuntime {
 export function createTasksStore(
   records: PluginDocHandle<TaskStoreDoc>,
   board: PluginDocHandle<TaskBoardDoc>,
-  hooks?: { onMutationStart?: (label: string) => void; onMutationEnd?: (label: string) => void },
+  options?: TasksStoreOptions,
 ): TasksStoreRuntime {
   const read = (): TaskStoreDoc => assertTaskStoreDoc(records.get())
+  const conversationsSnapshot = (): ReadonlyArray<ConversationSummary> | undefined =>
+    options?.listConversations?.()
 
   const write = (next: TaskStoreDoc): void => {
     assertTaskStoreDoc(next)
     records.set(next)
-    board.set(projectBoardDoc(next))
+    board.set(projectBoardDoc(next, conversationsSnapshot()))
   }
 
   let chain: Promise<unknown> = Promise.resolve()
 
   const enqueueMutation = <T>(fn: (draft: TaskStoreDoc) => Promise<T> | T): Promise<T> => {
     const label = `mutation:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`
-    hooks?.onMutationStart?.(label)
+    options?.onMutationStart?.(label)
     const task = chain.then(async () => {
       const draft = read()
       const result = await fn(draft)
@@ -63,7 +78,7 @@ export function createTasksStore(
       return result
     })
     chain = task.catch(() => undefined)
-    task.catch(() => undefined).finally(() => hooks?.onMutationEnd?.(label))
+    task.catch(() => undefined).finally(() => options?.onMutationEnd?.(label))
     return task
   }
 
@@ -89,7 +104,12 @@ export function createTasksStore(
     list,
     enqueueMutation,
     refreshBoard: () => {
-      board.set(projectBoardDoc(read()))
+      board.set(projectBoardDoc(read(), conversationsSnapshot()))
+    },
+    refreshBoardIfBadgeChanged: () => {
+      const next = projectBoardDoc(read(), conversationsSnapshot())
+      if (taskBoardBadgeKey(board.get()) === taskBoardBadgeKey(next)) return
+      board.set(next)
     },
     countInProgress: () => Object.values(read().tasks).filter((t) => t.column === 'in_progress').length,
   }

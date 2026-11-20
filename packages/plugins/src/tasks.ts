@@ -52,7 +52,12 @@ export function createTasksPlugin(): PluginDefinition {
       let active = false
       let shutdown = false
       let deletedUnsubscribe: (() => void) | undefined
+      let stateUnsubscribers: Array<() => void> = []
       const liveTasks = new Map<string, number>()
+
+      /** 会话状态 / Ask 变化的真实内核事件名（protocol `events.ts` 契约，勿凭空猜测）：
+       * conversation.upsert（状态 / pendingAskCount / 摘要变化）+ ask.upsert / ask.resolved。 */
+      const CONVERSATION_STATE_EVENT_TYPES = ['conversation.upsert', 'ask.upsert', 'ask.resolved'] as const
 
       const countLabel = (label: string, delta: number): void => {
         const next = (liveTasks.get(label) ?? 0) + delta
@@ -99,7 +104,19 @@ export function createTasksPlugin(): PluginDefinition {
           { nextSeq: 1, tasks: {} },
           { public: false, durable: true },
         ),
-        board: ctx.doc<TaskBoardDoc>(TASK_BOARD_DOC, { tasks: [], updatedAt: 0 }, { public: true, durable: false }),
+        board: ctx.doc<TaskBoardDoc>(
+          TASK_BOARD_DOC,
+          {
+            tasks: [],
+            updatedAt: 0,
+            attentionCount: 0,
+            reviewCount: 0,
+            runningCount: 0,
+            hasRunning: false,
+            badgeTone: 'neutral',
+          },
+          { public: true, durable: false },
+        ),
       }
 
       const readConversationOrUndefined = (id: number | undefined): ConversationSummary | undefined => {
@@ -113,6 +130,7 @@ export function createTasksPlugin(): PluginDefinition {
       }
 
       const store = createTasksStore(docs.records, docs.board, {
+        listConversations: () => ctx.host.listConversations(),
         onMutationStart: (label) => countLabel(`store:${label}`, +1),
         onMutationEnd: (label) => countLabel(`store:${label}`, -1),
       })
@@ -127,6 +145,12 @@ export function createTasksPlugin(): PluginDefinition {
         reportError,
         track,
       }
+
+      /** 未归档 in_progress / in_review 卡存在性：会话事件订阅的廉价门（无活跃卡时徽标与会话事实无关）。 */
+      const hasActiveBoardTasks = (): boolean =>
+        Object.values(store.read().tasks).some(
+          (t) => t.archived !== true && (t.column === 'in_progress' || t.column === 'in_review'),
+        )
 
       registerTasksActions(ctx, runtime)
       registerTasksHooks(ctx, runtime)
@@ -240,6 +264,15 @@ export function createTasksPlugin(): PluginDefinition {
             if (deletedId === undefined) return
             return onTasksConversationDeleted(runtime, deletedId)
           })
+          // 徽标实时感知：订阅会话状态 / Ask 变化事件，仅当存在未归档活跃卡时重投影，
+          // 且经徽标元组脏检查后真正变化才写 board（高频流式事件零 SSE 写放大）。
+          stateUnsubscribers = CONVERSATION_STATE_EVENT_TYPES.map((type) =>
+            ctx.host.onEvent(type, () => {
+              if (!active || shutdown) return
+              if (!hasActiveBoardTasks()) return
+              store.refreshBoardIfBadgeChanged()
+            }),
+          )
           store.refreshBoard()
         },
         async stop() {
@@ -247,6 +280,8 @@ export function createTasksPlugin(): PluginDefinition {
           active = false
           deletedUnsubscribe?.()
           deletedUnsubscribe = undefined
+          for (const unsubscribe of stateUnsubscribers) unsubscribe()
+          stateUnsubscribers = []
         },
       })
     },
@@ -268,6 +303,7 @@ export {
   TASK_ARCHIVED_TAG,
   ACTIVE_TASK_SECTION_ID,
   TASK_BOARD_DONE_HISTORY_LIMIT,
+  TASK_BOARD_SIDEBAR_BADGE,
   TASK_COLUMNS,
   assertTaskId,
   assertTaskRecord,
@@ -275,6 +311,9 @@ export {
   detectDependencyCycle,
   blockedDependenciesOf,
   projectBoardDoc,
+  subtreeAttentionFlags,
+  taskBoardBadgeKey,
+  type TaskBoardBadgeTone,
   type TaskColumn,
   type TaskRecord,
   type TaskSubmission,
