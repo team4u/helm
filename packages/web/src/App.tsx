@@ -300,6 +300,13 @@ function HelmxShellInner() {
         ? fallbackTarget.conversationId
         : undefined
 
+  // 工作台绑定「正在查看的会话」：会话抽屉打开时优先绑定抽屉会话，与主会话
+  // 同等的完整工作台（产物 + 插件面板按该会话 scope 解析）；否则回退主屏/
+  // 分屏活动会话。叠层高度由 plugin-client overlay-stack 按打开时序自动裁决。
+  const drawerConversationId =
+    activeModal?.kind === 'conversation-drawer' ? activeModal.conversationId : undefined
+  const workbenchConversationId = drawerConversationId ?? activeConversationId
+
   // 移动端快捷导航簇的 quickEntry 按钮仅在「不在该视图上」时渲染（主屏已停在
   // 入口目标时就地隐藏）；顶栏左让位宽度（mq-quick-on）跟随真实可见性，而非
   // 插件是否声明了 quickEntry。
@@ -470,7 +477,7 @@ function HelmxShellInner() {
 
         {workbenchOpen && (
           <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('conv.shell.loadingWorkbench')}</div>}>
-            <WorkbenchDrawer conversationId={activeConversationId} />
+            <WorkbenchDrawer conversationId={workbenchConversationId} />
           </Suspense>
         )}
 

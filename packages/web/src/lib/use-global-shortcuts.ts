@@ -98,8 +98,12 @@ export function useGlobalShortcuts({
       if (event.defaultPrevented) return
 
       if (isMod && keyLower === 'j') {
-        if (activeModalRef.current !== null || hasNonWorkbenchDialogOpen()) return
-        if (!workbenchOpenRef.current && activeTarget.kind !== 'conversation') return
+        // 会话抽屉打开时视作会话上下文：Ctrl+J 仍可开合（工作台绑定抽屉会话）。
+        const openModal = activeModalRef.current
+        const drawerConversationId =
+          openModal?.kind === 'conversation-drawer' ? openModal.conversationId : undefined
+        if ((openModal !== null && drawerConversationId === undefined) || hasNonWorkbenchDialogOpen()) return
+        if (!workbenchOpenRef.current && activeTarget.kind !== 'conversation' && drawerConversationId === undefined) return
         event.preventDefault()
         clearEscAbortPrompt()
         setWorkbenchOpen((open) => !open)

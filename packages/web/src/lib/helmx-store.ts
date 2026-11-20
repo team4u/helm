@@ -1636,7 +1636,13 @@ export class HelmxExternalStore {
 
   setActiveModal = (update: StoreUpdater<ActiveModal>): void => {
     const next = applyUpdater(this.navState.activeModal, update)
-    this.patchNav({ activeModal: next })
+    const patch: Partial<NavSlice> = { activeModal: next }
+    // 打开会话抽屉即离开工作台「抬升态」：收起旧工作台，避免它隐藏在抽屉之下
+    // 却仍占据 workbenchOpen 语义（工作台改为绑定抽屉会话，经抽屉内按钮显式
+    // 重新打开、叠于抽屉之上）。深链恢复（applyExternalLocation）不走此路径，
+    // `wb` + `modal=drawer` 组合态仍可精确还原。
+    if (next?.kind === 'conversation-drawer') patch.workbenchOpen = false
+    this.patchNav(patch)
   }
 
   openTarget = (

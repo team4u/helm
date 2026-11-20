@@ -11,7 +11,10 @@ import type { ResolvedTarget, ActiveModal } from '../src/lib/types.js'
 /**
  * 子会话抽屉（conversation-drawer）导航闭环回归：
  * - 全站不再渲染祖先回退按钮（抽屉/主屏/分屏顶栏均无面包屑）；
- * - 普通关闭与浏览器后退只关抽屉，工作台保留。
+ * - 普通关闭与浏览器后退只关抽屉，工作台保留；
+ * - 抽屉会话与主会话工作台功能对齐：抽屉顶栏工作台按钮打开的工作台绑定
+ *   抽屉会话（插件面板按其 scope 解析），抬升于抽屉之上；打开抽屉时收起
+ *   旧工作台，深链组合态可精确还原。
  */
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -20,6 +23,7 @@ const { ConversationPane } = await import('../src/conversation/ConversationPane.
 const { ConversationDrawer } = await import('../src/conversation/ConversationDrawer.js')
 const { HelmxStoreProvider } = await import('../src/lib/HelmxStoreProvider.js')
 const { useHelmxStore } = await import('../src/lib/store-context.js')
+const { App: RealApp } = await import('../src/App.js')
 const e = React.createElement
 const originalFetch = globalThis.fetch
 let root: Root | undefined
@@ -60,11 +64,14 @@ const conversations = [summary(1), summary(11, 1), summary(111, 11), summary(999
 interface FetchFixture {
   list?: ConversationSummary[]
   detailMap?: Record<number, ConversationSummary>
+  /** SSE 快照携带的插件 UI 贡献（默认空）。 */
+  ui?: unknown[]
 }
 
 function installFetch(fixture: FetchFixture = {}): void {
   const list = fixture.list ?? conversations
   const detailMap = fixture.detailMap ?? {}
+  const ui = fixture.ui ?? []
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input)
     if (url === '/api/auth/status') {
@@ -78,7 +85,7 @@ function installFetch(fixture: FetchFixture = {}): void {
           conversations: list,
           pendingAsks: [],
           plugins: [],
-          ui: [],
+          ui,
         })}\n\n`))
       }, { signal: init?.signal }), { status: 200, headers: { 'content-type': 'text/event-stream' } })
     }
@@ -142,6 +149,19 @@ async function mount(hash: string, fixture?: FetchFixture): Promise<void> {
   await act(async () => {
     root = createRoot(host!)
     root.render(e(HelmxStoreProvider, null, e(App)))
+  })
+  await settle()
+}
+
+/** 真实 App（含工作台绑定派生与叠层）黑盒挂载：断言全部走 DOM 与地址栏。 */
+async function mountReal(hash: string, fixture?: FetchFixture): Promise<void> {
+  window.history.replaceState(null, '', hash)
+  host = document.createElement('div')
+  document.body.appendChild(host)
+  installFetch(fixture)
+  await act(async () => {
+    root = createRoot(host!)
+    root.render(e(RealApp))
   })
   await settle()
 }
@@ -260,5 +280,105 @@ test('抽屉标题与 aria-label 展示有意义的会话标题，占位标题�
     fallbackDlg!.getAttribute('aria-label'),
     'Child conversation #20 · 详情兜底标题 drawer',
     '摘要缺失时应使用 detail 标题',
+  )
+})
+
+// ---------------------------------------------------------------------------
+// 抽屉会话工作台对齐（真实 App 黑盒回归）
+// ---------------------------------------------------------------------------
+
+/** 仅匹配 #11（tags 含 drawer-tagged）的插件工作台面板：用于证明工作台绑定抽屉会话。 */
+const DRAWER_ONLY_PANEL = {
+  pluginId: 'sample',
+  surface: 'workbench.panel',
+  spec: {
+    id: 'drawer-only',
+    label: '抽屉专属面板',
+    order: 5,
+    scope: { tags: ['drawer-tagged'] },
+  },
+}
+
+function drawerWorkbenchFixture(): FetchFixture {
+  return {
+    list: [summary(1), { ...summary(11, 1), tags: ['drawer-tagged'] }],
+    ui: [DRAWER_ONLY_PANEL],
+  }
+}
+
+function workbenchTabTexts(): string[] {
+  return [...document.querySelectorAll('.helmx-workbench .tabs-bar .tab-btn')].map(
+    (el) => el.textContent ?? '',
+  )
+}
+
+test('抽屉会话顶栏工作台按钮打开绑定抽屉会话的完整工作台，抬升于抽屉之上且关闭互不影响', { timeout: 60_000 }, async () => {
+  await mountReal('#/c/1?modal=drawer&id=11', drawerWorkbenchFixture())
+  const drawer = document.querySelector<HTMLElement>('.conversation-drawer')
+  assert.ok(drawer, '应渲染会话抽屉')
+  assert.ok(document.querySelector('.helmx-workbench') === null, '初始工作台应关闭')
+
+  const workbenchBtn = document.querySelector<HTMLButtonElement>(
+    '.conversation-drawer .pane-actions button[aria-label="Workbench"]',
+  )
+  assert.ok(workbenchBtn, '抽屉顶栏应有与主会话一致的工作台按钮')
+
+  await act(async () => { workbenchBtn!.click() })
+  await settle()
+  assert.ok(document.querySelector('.helmx-workbench'), '点击后应打开工作台')
+  assert.match(window.location.hash, /wb=/, '工作台状态应写入地址栏')
+  const tabs = workbenchTabTexts()
+  assert.ok(tabs.some((text) => text.includes('抽屉专属面板')), `工作台应绑定抽屉会话 #11（scope 命中的插件面板须出现），实际页签: ${JSON.stringify(tabs)}`)
+  assert.ok(tabs.some((text) => text.includes('Artifacts')), '内置产物页签应保留')
+
+  // 叠层：后开的工作台须高于抽屉（overlay-stack 按打开时序分配 z-index）
+  const workbenchEl = document.querySelector<HTMLElement>('.helmx-workbench')
+  const drawerZ = Number(drawer!.style.zIndex || 0)
+  const workbenchZ = Number(workbenchEl!.style.zIndex || 0)
+  assert.ok(workbenchZ > drawerZ, `工作台应抬升于抽屉之上（workbench=${workbenchZ}, drawer=${drawerZ}）`)
+
+  // 关闭工作台只收工作台，不动抽屉
+  const closeBtn = document.querySelector<HTMLButtonElement>('.helmx-workbench .workbench-close-btn')
+  assert.ok(closeBtn, '工作台应有关闭按钮')
+  await act(async () => { closeBtn!.click() })
+  await settle()
+  assert.ok(document.querySelector('.helmx-workbench') === null, '关闭后工作台应收起')
+  assert.ok(document.querySelector('.conversation-drawer'), '抽屉应保持打开')
+  assert.match(window.location.hash, /modal=drawer&id=11/, '地址栏应保留抽屉态')
+  assert.doesNotMatch(window.location.hash, /wb=/, '地址栏应收起工作台参数')
+})
+
+test('工作台打开时经总览卡片打开会话抽屉：旧工作台自动收起，抽屉内可重新打开', { timeout: 60_000 }, async () => {
+  await mountReal('#/overview?wb=artifacts', {
+    list: [summary(1), { ...summary(11, 1), tags: ['drawer-tagged'] }],
+    ui: [DRAWER_ONLY_PANEL],
+  })
+  assert.ok(document.querySelector('.helmx-workbench'), '初始工作台应打开')
+
+  // 点根会话卡的后代芯片 #11 打开抽屉（#11 命中 scoped 面板，抽屉顶栏工作台按钮可见）
+  const chip = document.querySelector<HTMLButtonElement>('.overview-card .overview-chip')
+  assert.ok(chip, '总览卡片应渲染后代会话芯片')
+  await act(async () => { chip!.click() })
+  await settle()
+  assert.ok(document.querySelector('.conversation-drawer'), '点击芯片应打开会话抽屉')
+  assert.ok(document.querySelector('.helmx-workbench') === null, '打开抽屉应收起旧工作台（离开抬升态）')
+
+  const workbenchBtn = document.querySelector<HTMLButtonElement>(
+    '.conversation-drawer .pane-actions button[aria-label="Workbench"]',
+  )
+  assert.ok(workbenchBtn, '抽屉顶栏应有工作台按钮')
+  await act(async () => { workbenchBtn!.click() })
+  await settle()
+  assert.ok(document.querySelector('.helmx-workbench'), '抽屉内应能重新打开工作台')
+})
+
+test('深链组合态还原抽屉会话的抬升工作台（wb + modal=drawer）', { timeout: 60_000 }, async () => {
+  await mountReal('#/c/1?wb=artifacts&modal=drawer&id=11', drawerWorkbenchFixture())
+  assert.ok(document.querySelector('.conversation-drawer'), '应渲染抽屉')
+  assert.ok(document.querySelector('.helmx-workbench'), '深链应直接还原工作台')
+  const tabs = workbenchTabTexts()
+  assert.ok(
+    tabs.some((text) => text.includes('抽屉专属面板')),
+    `深链工作台应绑定抽屉会话 #11，实际页签: ${JSON.stringify(tabs)}`,
   )
 })

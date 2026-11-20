@@ -33,7 +33,10 @@ const OVERLAY_SELECTOR = [
 ].join(', ')
 
 const DIALOG_SELECTOR = '[role="dialog"], [role="alertdialog"]'
-const NON_WORKBENCH_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"]:not(.helmx-workbench)'
+// 会话抽屉是完整的会话视图（非阻断性弹窗）：对工作台快捷键视为会话上下文，
+// 不计入「其他对话框打开」的阻断判定。
+const NON_WORKBENCH_DIALOG_SELECTOR =
+  '[role="alertdialog"], [role="dialog"]:not(.helmx-workbench):not(.conversation-drawer)'
 const NON_MODEL_PICKER_DIALOG_SELECTOR = '[role="alertdialog"], [role="dialog"]:not(.composer-model-popover)'
 
 export function getStoredSidebarCollapsed(): boolean {

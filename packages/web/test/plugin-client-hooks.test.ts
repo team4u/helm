@@ -235,12 +235,14 @@ test('useConversation：reload 调用 loadConversationDetail(id, true) 强制刷
 // openConversationDrawer：统一子会话抽屉入口（不改变工作台开关状态）
 // ---------------------------------------------------------------------------
 
-test('createPluginClientContext.openConversationDrawer：打开 conversation-drawer 模态且不触碰工作台开关', { timeout: 60_000 }, () => {
+test('createPluginClientContext.openConversationDrawer：打开 conversation-drawer 模态并收起已打开的工作台', { timeout: 60_000 }, () => {
   const store = makeStore({ workbenchOpen: true })
   const ctx = createPluginClientContext(createPluginClientHostPort(store.getSnapshot()), 'test:plugin', 1)
   ctx.openConversationDrawer(42)
   assert.deepEqual(store.getActiveModal(), { kind: 'conversation-drawer', conversationId: 42 }, '必须设置 conversation-drawer 模态')
-  assert.equal(store.getWorkbenchSlice().workbenchOpen, true, '不得触碰工作台开关（保持原状）')
+  // 工作台改为绑定抽屉会话并经抽屉内按钮显式抬升：打开抽屉时收起旧工作台，
+  // 避免其隐藏在抽屉之下却仍占据 workbenchOpen 语义。
+  assert.equal(store.getWorkbenchSlice().workbenchOpen, false, '打开抽屉应收起已打开的工作台（离开抬升态）')
 })
 
 test('createPluginClientContext.openConversationDrawer：工作台关闭时同样只开抽屉，不强制打开工作台', { timeout: 60_000 }, () => {

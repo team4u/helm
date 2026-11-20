@@ -400,6 +400,10 @@ test('ConversationPane 顶栏类名、分屏隐藏容器、标题 Popover 与抽
   const moreIdx = children.findIndex((el) => el.classList.contains('pane-more-menu'))
   const closeIdx = children.findIndex((el) => el.classList.contains('conversation-drawer-close-btn'))
   assert.ok(fullscreenIdx >= 0 && moreIdx > fullscreenIdx && closeIdx === children.length - 1, '抽屉 [×] 必须严格固定在最右侧')
+  assert.ok(
+    [...actionsContainer.querySelectorAll('button[aria-label]')].some((btn) => btn.getAttribute('aria-label') === 'Workbench'),
+    '抽屉模式顶栏应渲染与主会话一致的工作台按钮',
+  )
 })
 
 test('workbench-model 与 ArtifactsTab 严格分离正式产物与 spill、去重计数并支持预览下载与插件工作台', { timeout: 60_000 }, async () => {

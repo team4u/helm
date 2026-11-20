@@ -23,7 +23,7 @@ import {
   resolveFocusedPanel,
   type HelmxShortcutDetail,
 } from '../src/shell/shortcuts-model.js'
-import type { HelmxStoreValue, ResolvedTarget } from '../src/lib/types.js'
+import type { ActiveModal, HelmxStoreValue, ResolvedTarget } from '../src/lib/types.js'
 
 GlobalRegistrator.register()
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
@@ -465,6 +465,36 @@ test('HelmxStoreProvider split-focus routing and global single-key shortcut disp
   assert.equal(capturedStore?.workbenchOpen, true)
   dispatchWindowKey(modInit('j'))
   assert.equal(capturedStore?.workbenchOpen, false)
+
+  // Mod+J with a conversation drawer open: the drawer is a full conversation
+  // context, so the workbench toggle keeps working (bound to the drawer conv).
+  await act(async () => {
+    capturedStore?.setActiveModal({ kind: 'conversation-drawer', conversationId: 2 })
+  })
+  await settle()
+  // 经由括号表达式读取，规避前文 assert.equal 对 capturedStore?.activeModal 路径的窄化残留
+  const drawerModal: ActiveModal = (capturedStore ?? undefined)?.activeModal ?? null
+  assert.equal(drawerModal?.kind, 'conversation-drawer')
+  dispatchWindowKey(modInit('j'))
+  assert.equal(capturedStore?.workbenchOpen, true, '会话抽屉打开时 Mod+J 仍应开合工作台')
+  dispatchWindowKey(modInit('j'))
+  assert.equal(capturedStore?.workbenchOpen, false)
+  await act(async () => {
+    capturedStore?.setActiveModal(null)
+  })
+  await settle()
+
+  // Mod+J stays blocked behind a non-drawer modal (command palette)
+  await act(async () => {
+    capturedStore?.setActiveModal({ kind: 'command-palette' })
+  })
+  await settle()
+  dispatchWindowKey(modInit('j'))
+  assert.equal(capturedStore?.workbenchOpen, false, '命令面板打开时 Mod+J 应保持阻断')
+  await act(async () => {
+    capturedStore?.setActiveModal(null)
+  })
+  await settle()
 
   // Mod+B: toggle the desktop sidebar collapse and persist it to localStorage
   assert.equal(capturedStore?.sidebarCollapsed, false)

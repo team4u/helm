@@ -398,7 +398,7 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
               slotProps={{ conversation }}
             />
           ))}
-          {!isDrawer && (workbenchCount > 0 || hasWorkbenchPanel || hasAnyArtifacts) ? (
+          {(workbenchCount > 0 || hasWorkbenchPanel || hasAnyArtifacts) ? (
             <button
               type="button"
               className={`btn btn-sm${workbenchOpen ? ' btn-primary' : ''}`}
