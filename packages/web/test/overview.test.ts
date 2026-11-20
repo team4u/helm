@@ -594,6 +594,35 @@ test('Sidebar rail: the overview button opens #/overview and carries the same-so
     const primary = store.getPrimaryTarget()
     assert.ok(primary.kind === 'overview', 'clicking navigates to the overview stage')
 
+    // 唯一点亮不变量：主屏停总览时总览按钮独占 Rail 高亮，空间按钮全灭
+    // （修复「对话」空间按钮与「会话总览」双高亮）。
+    assert.ok(overviewBtn.classList.contains('rail-btn-active'), 'the overview rail button owns the active state')
+    const spaceBtns = [...container.querySelectorAll<HTMLButtonElement>('.rail-space-btn')]
+    assert.ok(spaceBtns.length === 3, 'three space buttons render')
+    for (const btn of spaceBtns) {
+      assert.ok(
+        !btn.classList.contains('rail-btn-active'),
+        `space button stays unlit on the overview stage (got: ${btn.getAttribute('aria-label')})`,
+      )
+    }
+
+    // 总览不占对话空间记忆位：从总览点「对话」空间按钮跳回记忆的会话目标，
+    // 绝不 no-op、绝不被总览劫持。
+    await act(async () => {
+      store.openTarget({ kind: 'conversation', conversationId: 50 })
+    })
+    await act(async () => {
+      store.openTarget({ kind: 'overview' })
+    })
+    await act(async () => {
+      store.openSpace('conversations')
+    })
+    const jumped = store.getPrimaryTarget()
+    assert.ok(
+      jumped.kind === 'conversation' && jumped.conversationId === 50,
+      'the conversations space button jumps back to the remembered conversation target',
+    )
+
     // 无信号时灯点不渲染（诚实：无信号不装忙）
     const quiet = overviewStore({
       conversations: [conv({ id: 50, title: '安静', profileId: 'coder' })],

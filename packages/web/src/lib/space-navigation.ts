@@ -88,14 +88,18 @@ export type SpaceSwitchResolution =
   | { kind: 'unavailable'; clearStaleMemory: boolean }
 
 /** Resolve the target decision for an Activity Rail space click: same space no-op;
- * valid memory first; stale memory marked for cleanup with a fallback to the default. */
+ * valid memory first; stale memory marked for cleanup with a fallback to the default.
+ * The overview stage is a top-level destination with its own rail button — it never
+ * counts as "being inside" the conversations space (clicking the conversations
+ * space button from the overview jumps back to the remembered conversation-space
+ * target instead of no-op'ing). */
 export function resolveSpaceSwitch(
   space: SidebarSpace,
   currentPrimary: ResolvedTarget,
   memory: Partial<Record<SidebarSpace, ResolvedTarget>>,
   input: SpaceTargetInput,
 ): SpaceSwitchResolution {
-  if (spaceForTarget(currentPrimary) === space) {
+  if (currentPrimary.kind !== 'overview' && spaceForTarget(currentPrimary) === space) {
     return { kind: 'already-in-space' }
   }
   let clearStaleMemory = false
