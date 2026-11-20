@@ -216,6 +216,9 @@ importers:
 
   packages/hub:
     dependencies:
+      '@helmx/env-io':
+        specifier: workspace:*
+        version: link:../env-io
       '@helmx/kernel':
         specifier: workspace:*
         version: link:../kernel

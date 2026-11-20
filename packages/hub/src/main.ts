@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { createHelmx } from './app.js';
 import { hubActivityFilePath, startActivityHeartbeat, startHub } from '@helmx/kernel';
 import { resolveWebDistOption } from './web-dist.js';
+import { hubPackageVersion, startHubControlServer, type HubControlHandle } from './control.js';
 
 const launchId = process.env.HELMX_HUB_ACTIVITY_LAUNCH_ID;
 delete process.env.HELMX_HUB_ACTIVITY_LAUNCH_ID;
@@ -49,9 +50,14 @@ try {
   process.stdout.write(`Helmx Hub: ${hub.url}\nData directory: ${app.kernel.dataDir}\n`);
   const listeningHub = hub;
   let stopping = false;
+  let control: HubControlHandle | undefined;
+  // Graceful shutdown order: heartbeat -> HTTP listener -> kernel -> control channel. The control
+  // channel's own `stop` handler runs this function and then removes its record itself, so that
+  // path must never reach the `control.close()` tail (it would await its own in-flight stop chain).
   const stop = async () => {
     if (stopping) return;
     stopping = true;
+    const heldControl = control;
     try {
       try {
         await heartbeat.stop();
@@ -62,11 +68,21 @@ try {
           await app.close();
         }
       }
+      await heldControl?.close();
     } catch (error) {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;
     }
   };
+  // Control channel (cross-platform verified stop/restart; record lives under the data directory).
+  // Failure to listen is fatal honesty: without it `helmx stop` cannot address this Hub, so we
+  // refuse to serve as an unstoppable process instead of degrading silently.
+  control = await startHubControlServer({
+    dataDir: app.kernel.dataDir,
+    version: hubPackageVersion(),
+    port: listeningHub.url !== null ? Number(new URL(listeningHub.url).port) : port,
+    requestStop: stop,
+  });
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
 } catch (error) {

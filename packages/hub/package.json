@@ -21,6 +21,7 @@
     "test": "tsx --test"
   },
   "dependencies": {
+    "@helmx/env-io": "workspace:*",
     "@helmx/kernel": "workspace:*",
     "@helmx/plugin-build": "workspace:*",
     "@helmx/plugins": "workspace:*",
