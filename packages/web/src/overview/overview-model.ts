@@ -7,6 +7,11 @@
  * 桶序（需关注 > 运行中 > 未读完成 > 安静）内按 root.createdAt 倒序
  * （同刻 id 倒序），绝不用 updatedAt 防流式跳卡。只读视图：本层不产生任何
  * 副作用与编造事实，摘要复用 composeHonestTreeSummary。
+ *
+ * 灯位口径（与侧栏会话行通用统一）：卡面灯 = 根会话自身状态 + 树级后台
+ * 在途聚合，经同一 resolveStatusLight 单灯裁决——representative 仅用于
+ * 诚实摘要与桶位推导，绝不充当卡面灯位（防「侧栏空心蓝、总览无灯」的
+ * 代表位/行语义分叉）。
  */
 
 import type { ConversationSummary, Profile } from '@helmx/protocol/browser'

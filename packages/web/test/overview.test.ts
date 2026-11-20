@@ -273,6 +273,60 @@ function overviewScenarioStore(): HelmxExternalStore {
   })
 }
 
+test('ConversationOverview card light matches the sidebar row verdict: idle root with background in-flight renders the hollow ring', { timeout: 60_000 }, async () => {
+  // 通用统一口径回归：根 idle + 树内后台在途（workbench badge doc accent）→
+  // 卡面灯位渲染空心蓝环，与侧栏会话行完全一致；在跑的后台子代理（working
+  // 后代）不再以代表位身份抢占卡面灯——由芯片自带灯呈现。
+  const workflowPanel = {
+    pluginId: 'builtin:workflow',
+    surface: 'workbench.panel' as const,
+    spec: {
+      id: 'runs',
+      label: { en: 'Runs' },
+      badge: { doc: 'run-badges', byConversationField: 'byConversation' },
+    },
+  }
+  const store = overviewStore({
+    conversations: [
+      conv({ id: 5, title: '后台在跑', profileId: 'coder', status: 'idle', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 51, parentConversationId: 5, title: '后台子代理', status: 'working', createdAt: 9100, updatedAt: 9200 }),
+    ],
+    primaryTarget: { kind: 'overview' },
+    uiContributions: [workflowPanel],
+    pluginDocs: {
+      'builtin:workflow/run-badges': { byConversation: { '5': { count: 1, tone: 'accent', footerText: '1 Running' } } },
+    },
+  })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(HostStoreProviders, { value: store }, e(ConversationOverview)))
+    })
+    const card = container.querySelector<HTMLElement>('.overview-card')
+    assert.ok(card !== null, 'the tree card renders')
+    assert.ok(
+      card.querySelector('.overview-card-head .status-dot-background') !== null,
+      'idle root + tree background in-flight renders the hollow ring (row-consistent)',
+    )
+    assert.ok(
+      card.querySelector('.overview-card-head .status-dot-working') === null,
+      'the working background descendant no longer steals the card head light',
+    )
+    assert.ok(
+      card.querySelector('.overview-chip .status-dot-working') !== null,
+      'the background descendant chip carries its own working light',
+    )
+  } finally {
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
+  }
+})
+
 test('ConversationOverview renders the card grid with honest facts and reuses the conversation drawer on click', { timeout: 60_000 }, async () => {
   const store = overviewScenarioStore()
   const container = document.createElement('div')
@@ -286,8 +340,12 @@ test('ConversationOverview renders the card grid with honest facts and reuses th
     const cards = container.querySelectorAll('.overview-card')
     assert.equal(cards.length, 3, 'attention trees first, quiet tree last (all filter)')
     assert.ok(cards[0]!.textContent?.includes('出错的重构'), 'the needs-attention tree leads')
-    assert.ok(cards[0]!.querySelector('.status-dot-blocked') !== null, 'the representative blocked light renders')
+    // 灯位口径与侧栏行统一（根锚定）：根 #1 为 idle，卡面灯位零灯（不编造）；
+    // blocked 的后代由芯片自带灯呈现，摘要如实说明等待事实。
+    assert.ok(cards[0]!.querySelector('.overview-card-head .status-dot') === null, 'the idle root keeps the card head light off (row-consistent)')
+    assert.ok(cards[0]!.querySelector('.overview-chip .status-dot-blocked') !== null, 'the blocked descendant chip carries its own light')
     assert.ok(cards[0]!.textContent?.includes('待审批子任务'), 'the waiting descendant renders as a chip')
+    assert.ok(cards[1]!.querySelector('.overview-card-head .status-dot-working') !== null, 'the working root lights the card head exactly like a sidebar row')
     assert.ok(cards[1]!.textContent?.includes('正在检索文档'), 'the running card states the real doing text')
     assert.ok(container.textContent?.includes('3 trees'), 'the stats line counts visible cards')
 
