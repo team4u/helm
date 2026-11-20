@@ -74,13 +74,13 @@ export function ConversationRowActionsMenu({
   const actions = matchConversationActions(groupedUi.uiActions, 'conversation:row', conversation)
 
   // 宿主归档动作可达性：人类自有的根会话可归档；已归档会话始终提供恢复
-  // （当前会话若已归档，仍须提供恢复入口）。keptAliveTag 成员视同插件接管。
-  const { sectionTags, keptAliveTags } = useMemo(
+  // （当前会话若已归档，仍须提供恢复入口）。
+  const { sectionTags } = useMemo(
     () => partitionSidebarUi([], groupedUi.sidebarSections),
     [groupedUi.sidebarSections],
   )
   const archived = isConversationArchived(conversation)
-  const hostArchiveAction: 'archive' | 'restore' | null = isConversationArchivable(conversation, sectionTags, keptAliveTags)
+  const hostArchiveAction: 'archive' | 'restore' | null = isConversationArchivable(conversation, sectionTags)
     ? archived
       ? 'restore'
       : 'archive'

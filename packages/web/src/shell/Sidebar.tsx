@@ -136,21 +136,14 @@ function SidebarSectionGroup({
   const { locale, t } = useWebLocale()
   const spec = section.spec
   const tag = spec.filterTag as string
-  const keptAliveTag = spec.keptAliveTag?.trim() || undefined
   const sectionLabel = resolveLocalizedText(spec.label, locale)
   const convs = useMemo(
     // 按创建时间倒序固定排列（同刻按 id 决胜）：分组内会话后台跑动推进 updatedAt 不再引起跳位。
-    // keptAliveTag 成员（如已结单任务会话）沉底：活跃成员永远先出现在分组顶部。
     () =>
-      filterConversationsByTag(store.conversations, tag, keptAliveTag)
+      filterConversationsByTag(store.conversations, tag)
         .filter((conversation) => !isConversationArchived(conversation))
-        .sort((a, b) => {
-          const aKept = a.tags.includes(tag) ? 0 : 1
-          const bKept = b.tags.includes(tag) ? 0 : 1
-          if (aKept !== bKept) return aKept - bKept
-          return b.createdAt - a.createdAt || b.id - a.id
-        }),
-    [store.conversations, tag, keptAliveTag],
+        .sort((a, b) => b.createdAt - a.createdAt || b.id - a.id),
+    [store.conversations, tag],
   )
   const collapsible = spec.collapsible === true
   const [open, setOpen] = useState(!collapsible || spec.defaultCollapsed !== true)

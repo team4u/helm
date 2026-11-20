@@ -275,7 +275,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
 
   // 来源判定与侧栏同源（sidebarSection filterTag，零插件 ID 特判）：
   // 插件停用后其 section 贡献消失，卡片自然回到「常规对话」一侧。
-  const { sectionTags, keptAliveTags } = useMemo(
+  const { sectionTags } = useMemo(
     () => partitionSidebarUi(groupedUi.sidebarItems, groupedUi.sidebarSections),
     [groupedUi.sidebarItems, groupedUi.sidebarSections],
   )
@@ -310,10 +310,10 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
 
   // 批量管理口径与侧栏批量模式同界：仅人类自有、未被插件 sidebarSection
   // 接管的根会话可勾选（isConversationArchivable ⇒ 可归档且可删除）；托管
-  // （任务执行等）与 bot 会话不参与批量，保护语义与侧栏勾选框一致。
+  // 与 bot 会话不参与批量，保护语义与侧栏勾选框一致。
   const isCardSelectable = useMemo(
-    () => (conv: ConversationSummary) => isConversationArchivable(conv, sectionTags, keptAliveTags),
-    [sectionTags, keptAliveTags],
+    () => (conv: ConversationSummary) => isConversationArchivable(conv, sectionTags),
+    [sectionTags],
   )
   const selectableCardIds = useMemo(
     () => visibleCards.filter((card) => isCardSelectable(card.root)).map((card) => card.root.id),

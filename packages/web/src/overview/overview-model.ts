@@ -54,7 +54,7 @@ export interface OverviewCard {
   profileLabel: string
   /** 诚实摘要（真实 lastError / doing / 后台摘要 / 后代运行计数）。 */
   summaryText: string
-  /** 根会话已被插件 sidebarSection filterTag 接管（任务执行 / 后台 Worker 等）。 */
+  /** 根会话已被插件 sidebarSection filterTag 接管（托管 / 后台 Worker 等）。 */
   managed: boolean
   /** 整棵子树成员 ID（含根；OVERVIEW_CARD_META_SLOT 插槽 props 输入）。 */
   memberIds: number[]

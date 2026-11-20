@@ -10,7 +10,7 @@
  *   done > idle，平手保留列表头）与后台摘要合并；
  * - 暴露边界复用 sidebar-model 的 isConversationArchived /
  *   collectEnabledPluginIds / isProfileVisible：已归档根会话、已停用插件托管
- *   Profile 的会话不进态势；被 sidebarSection 接管的活跃会话（任务执行 / 后台
+ *   Profile 的会话不进态势；被 sidebarSection 接管的活跃会话（托管 / 后台
  *   Worker 等）依然纳入——并发在跑的工作无论挂在哪个空间都不允许失明。
  *
  * 诚实性：摘要只呈现真实 lastError / doing / backgroundSummary / 后代运行

@@ -80,14 +80,14 @@ describe('assembleHelmxEvent', { timeout: 60_000 }, () => {
   it('notification accepts an optional deep-link view string and rejects malformed values', { timeout: 60_000 }, () => {
     const withView = assembleHelmxEvent(
       'notification',
-      { level: 'info', title: 't', view: 'screen:builtin:tasks/board?task=T-1' },
+      { level: 'info', title: 't', view: 'screen:builtin:apps/catalog?app=demo-1' },
       identity,
     )
     assert.deepEqual(withView, {
       type: 'notification',
       level: 'info',
       title: 't',
-      view: 'screen:builtin:tasks/board?task=T-1',
+      view: 'screen:builtin:apps/catalog?app=demo-1',
     })
     for (const bad of ['', 42, null, {}, []]) {
       assert.throws(

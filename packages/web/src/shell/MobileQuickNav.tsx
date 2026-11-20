@@ -1,7 +1,7 @@
 /**
  * 移动端全局快捷导航簇（根挂载，与 .mobile-nav-toggle 同层）：
  *
- * - 免开汉堡的一键直达：首个已声明 quickEntry 的插件视图（如任务看板）+
+ * - 免开汉堡的一键直达：首个已声明 quickEntry 的插件视图 +
  *   会话态势总览；quickEntry 按钮按插件 sidebarItem 通用 badge 声明渲染
  *   计数徽标 / 安静圆点（mobile-quick-badge / mobile-quick-dot）；总览按钮
  *   挂同源 tone 灯点（与 PC 折叠 Rail 的总览按钮同款，无计数徽标——总览页

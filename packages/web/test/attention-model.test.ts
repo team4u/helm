@@ -521,13 +521,13 @@ const { extractRailQuickEntries } = await import('../src/shell/sidebar-model.js'
 
 function sidebarItemContribution(overrides: { pluginId?: string; spec?: Record<string, unknown> } = {}): PluginUiContribution {
   return {
-    pluginId: overrides.pluginId ?? 'builtin:tasks',
+    pluginId: overrides.pluginId ?? 'builtin:apps',
     surface: 'sidebar.item',
     spec: {
-      id: 'task-board',
-      label: { en: 'Task Board', 'zh-CN': '任务看板' },
+      id: 'app-center',
+      label: { en: 'App Center', 'zh-CN': '应用中心' },
       icon: 'check-square',
-      target: 'screen:builtin:tasks/board',
+      target: 'screen:builtin:apps/board',
       order: 5,
       quickEntry: true,
       ...overrides.spec,
@@ -537,9 +537,9 @@ function sidebarItemContribution(overrides: { pluginId?: string; spec?: Record<s
 
 function screenContribution(overrides: { pluginId?: string; spec?: Record<string, unknown> } = {}): PluginUiContribution {
   return {
-    pluginId: overrides.pluginId ?? 'builtin:tasks',
+    pluginId: overrides.pluginId ?? 'builtin:apps',
     surface: 'screen',
-    spec: { id: 'board', label: { en: 'Task Board', 'zh-CN': '任务看板' }, icon: 'check-square', ...overrides.spec },
+    spec: { id: 'board', label: { en: 'App Center', 'zh-CN': '应用中心' }, icon: 'check-square', ...overrides.spec },
   }
 }
 
@@ -553,24 +553,24 @@ test('extractRailQuickEntries: only screen-backed quickEntry items pass; missing
     }),
     sidebarItemContribution({ spec: { id: 'no-target', label: { en: 'No Target' }, quickEntry: false } }),
     sidebarItemContribution({ spec: { id: 'conv-target', label: { en: 'Conv' }, target: 'conversation:1', quickEntry: false } }),
-    sidebarItemContribution({ spec: { id: 'ghost-screen', label: { en: 'Ghost' }, target: 'screen:builtin:tasks/ghost', quickEntry: false } }),
+    sidebarItemContribution({ spec: { id: 'ghost-screen', label: { en: 'Ghost' }, target: 'screen:builtin:apps/ghost', quickEntry: false } }),
   ]
   const screens = [screenContribution(), screenContribution({ pluginId: 'other', spec: { id: 'view', label: { en: 'Other View' } } })]
   const qualifiedItems = items.map((item) => ({ pluginId: item.pluginId, spec: item.spec as SidebarItemSpec }))
   const qualifiedScreens = screens.map((item) => ({ pluginId: item.pluginId, spec: item.spec as ScreenSpec }))
   const entries = extractRailQuickEntries(qualifiedItems, qualifiedScreens, conversations, 'en')
   assert.equal(entries.length, 1, 'only the screen-backed quickEntry item surfaces (non-quick screen items and quick items without a real screen never leak)')
-  assert.equal(entries[0]!.label, 'Task Board')
+  assert.equal(entries[0]!.label, 'App Center')
   assert.equal(entries[0]!.icon, 'check-square')
   assert.equal(entries[0]!.order, 5)
   assert.equal(entries[0]!.target.kind, 'screen')
   const zhEntries = extractRailQuickEntries(qualifiedItems, qualifiedScreens, conversations, 'zh-CN')
-  assert.equal(zhEntries[0]!.label, '任务看板', 'labels resolve per locale')
+  assert.equal(zhEntries[0]!.label, '应用中心', 'labels resolve per locale')
 })
 
 test('Sidebar renders rail quick entries and disables with the plugin contributions (store.live SSE path)', { timeout: 60_000 }, async () => {
   const store = sidebarStore({
-    plugins: [{ id: 'builtin:tasks', name: 'Tasks', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'builtin:apps', name: 'Apps', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
     conversations: [conv({ id: 50, title: '当前查看', profileId: 'coder' })],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
     uiContributions: [sidebarItemContribution(), screenContribution()],
@@ -585,12 +585,12 @@ test('Sidebar renders rail quick entries and disables with the plugin contributi
     })
     const quickBtn = container.querySelector<HTMLButtonElement>('.rail-quick-btn')
     assert.ok(quickBtn !== null, 'the quick entry renders in the activity rail')
-    assert.ok(quickBtn.getAttribute('aria-label') === 'Task Board', 'the entry uses the plugin-provided localized label')
+    assert.ok(quickBtn.getAttribute('aria-label') === 'App Center', 'the entry uses the plugin-provided localized label')
     await act(async () => {
       quickBtn.click()
     })
     const primary = store.getPrimaryTarget()
-    assert.ok(primary.kind === 'screen' && primary.pluginId === 'builtin:tasks' && primary.screenId === 'board', 'clicking navigates via the standard store routing')
+    assert.ok(primary.kind === 'screen' && primary.pluginId === 'builtin:apps' && primary.screenId === 'board', 'clicking navigates via the standard store routing')
 
     // Simulate the SSE path of a disabled plugin: contributions vanish from the live state -> zero residue.
     await act(async () => {
@@ -638,7 +638,7 @@ test('the overview entry mounts only in the conversations space (mobile drawer i
             conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
             conv({ id: 50, title: '当前查看', profileId: 'coder', status: 'idle' }),
           ],
-          primaryTarget: { kind: 'screen', pluginId: 'builtin:tasks', screenId: 'board' },
+          primaryTarget: { kind: 'screen', pluginId: 'builtin:apps', screenId: 'app-center' },
         }),
       )
     } finally {
@@ -670,7 +670,7 @@ test('CommandPaletteModal: all plugin views are searchable rows and open via the
   globalThis.fetch = (async () =>
     new Response(JSON.stringify([]), { status: 200, headers: { 'content-type': 'application/json' } })) as typeof fetch
   const store = sidebarStore({
-    plugins: [{ id: 'builtin:tasks', name: { en: 'Tasks', 'zh-CN': '任务' }, version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'builtin:apps', name: { en: 'Apps', 'zh-CN': '应用' }, version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
     conversations: [conv({ id: 50, title: '当前查看', profileId: 'coder' })],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
     uiContributions: [sidebarItemContribution(), screenContribution()],
@@ -683,9 +683,9 @@ test('CommandPaletteModal: all plugin views are searchable rows and open via the
       root = createRoot(container)
       root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(CommandPaletteModal, { onClose: () => {} })))
     })
-    let viewRow = [...document.body.querySelectorAll('.modal .nav-item')].find((row) => row.textContent?.includes('Task Board'))
+    let viewRow = [...document.body.querySelectorAll('.modal .nav-item')].find((row) => row.textContent?.includes('App Center'))
     assert.ok(viewRow !== undefined, 'the plugin view row renders in the empty-query palette')
-    assert.ok(viewRow.textContent?.includes('Tasks'), 'the row hints the owning plugin display name')
+    assert.ok(viewRow.textContent?.includes('Apps'), 'the row hints the owning plugin display name')
 
     // Search narrows to the view row (Cmd+K finds every plugin view).
     const input = document.body.querySelector<HTMLInputElement>('.modal .search-box input')
@@ -697,7 +697,7 @@ test('CommandPaletteModal: all plugin views are searchable rows and open via the
     await act(async () => {
       await new Promise((resolve) => setTimeout(resolve, 0))
     })
-    viewRow = [...document.body.querySelectorAll('.modal .nav-item')].find((row) => row.textContent?.includes('Task Board'))
+    viewRow = [...document.body.querySelectorAll('.modal .nav-item')].find((row) => row.textContent?.includes('App Center'))
     assert.ok(viewRow !== undefined, 'typing the view name keeps the view row visible')
 
     const rowElement = viewRow as HTMLElement
@@ -774,7 +774,7 @@ const {
 } = await import('../src/shell/sidebar-model.js')
 
 const TASK_BADGE_SPEC: SidebarItemBadgeSpec = {
-  doc: 'task-board',
+  doc: 'app-center',
   countField: 'attentionCount',
   toneField: 'badgeTone',
   dotField: 'hasRunning',
@@ -783,12 +783,12 @@ const TASK_BADGE_SPEC: SidebarItemBadgeSpec = {
 
 function viewItem(overrides: Partial<SidebarViewItem> = {}): SidebarViewItem {
   return {
-    key: 'builtin:tasks/task-board',
-    pluginId: 'builtin:tasks',
-    label: 'Task Board',
+    key: 'builtin:apps/app-center',
+    pluginId: 'builtin:apps',
+    label: 'App Center',
     icon: 'check-square',
     order: 5,
-    target: { kind: 'screen', pluginId: 'builtin:tasks', screenId: 'board' },
+    target: { kind: 'screen', pluginId: 'builtin:apps', screenId: 'app-center' },
     badge: TASK_BADGE_SPEC,
     ...overrides,
   }
@@ -851,21 +851,21 @@ test('resolveSidebarItemBadge: count badge, tone fallback, quiet dot, LocalizedT
   assert.equal(sidebarBadgeToneClass('ok'), 'badge-ok')
   assert.equal(sidebarBadgeToneClass('neutral'), 'badge-neutral')
   // label 与 summary 合成（summary 为空原样返回）
-  assert.equal(composeSidebarBadgeLabel('Task Board', { count: 2, tone: 'warn', dot: false, summary: '2 to review' }), 'Task Board · 2 to review')
-  assert.equal(composeSidebarBadgeLabel('Task Board', null), 'Task Board')
-  assert.equal(composeSidebarBadgeLabel('Task Board', { count: 0, tone: 'accent', dot: true, summary: '' }), 'Task Board')
+  assert.equal(composeSidebarBadgeLabel('App Center', { count: 2, tone: 'warn', dot: false, summary: '2 to review' }), 'App Center · 2 to review')
+  assert.equal(composeSidebarBadgeLabel('App Center', null), 'App Center')
+  assert.equal(composeSidebarBadgeLabel('App Center', { count: 0, tone: 'accent', dot: true, summary: '' }), 'App Center')
 })
 
 test('collectSidebarBadgeDocs: dedupes plugin/doc refs and skips badge-less items', { timeout: 60_000 }, () => {
   const refs = collectSidebarBadgeDocs([
     viewItem(),
-    viewItem({ key: 'builtin:tasks/task-board-2' }), // 同插件同 doc：去重
+    viewItem({ key: 'builtin:apps/app-center-2' }), // 同插件同 doc：去重
     viewItem({ key: 'other/view', pluginId: 'other' }),
     viewItem({ key: 'plain/view', badge: undefined }),
   ])
   assert.deepEqual(
     refs.map((r) => `${r.pluginId}/${r.doc}`),
-    ['builtin:tasks/task-board', 'other/task-board'],
+    ['builtin:apps/app-center', 'other/app-center'],
   )
 })
 
@@ -873,7 +873,7 @@ function badgeScenarioStore(overrides: { doc?: Record<string, unknown>; specBadg
   const spec: Record<string, unknown> = {}
   if (overrides.specBadge !== null) {
     spec.badge = overrides.specBadge ?? {
-      doc: 'task-board',
+      doc: 'app-center',
       countField: 'attentionCount',
       toneField: 'badgeTone',
       dotField: 'hasRunning',
@@ -881,11 +881,11 @@ function badgeScenarioStore(overrides: { doc?: Record<string, unknown>; specBadg
     }
   }
   return sidebarStore({
-    plugins: [{ id: 'builtin:tasks', name: 'Tasks', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+    plugins: [{ id: 'builtin:apps', name: 'Apps', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
     conversations: [conv({ id: 50, title: '当前查看', profileId: 'coder' })],
-    primaryTarget: { kind: 'screen', pluginId: 'builtin:tasks', screenId: 'board' },
+    primaryTarget: { kind: 'screen', pluginId: 'builtin:apps', screenId: 'app-center' },
     uiContributions: [sidebarItemContribution({ spec }), screenContribution()],
-    pluginDocs: overrides.doc !== undefined ? { 'builtin:tasks/task-board': overrides.doc } : {},
+    pluginDocs: overrides.doc !== undefined ? { 'builtin:apps/app-center': overrides.doc } : {},
   })
 }
 
@@ -895,14 +895,14 @@ test('Sidebar renders sidebar.item badge on the rail quick entry and the views r
   )
   // Rail 快捷入口：计数徽标 + tone + summary 进 aria/tooltip
   const quickBtn = html.match(/<button[^>]*class="rail-btn rail-quick-btn[^"]*"[^>]*>/)?.[0] ?? ''
-  assert.ok(quickBtn.includes('aria-label="Task Board · 2 awaiting review · 1 needs attention"'), `rail quick button carries the badge summary (got: ${quickBtn})`)
+  assert.ok(quickBtn.includes('aria-label="App Center · 2 awaiting review · 1 needs attention"'), `rail quick button carries the badge summary (got: ${quickBtn})`)
   assert.ok(
     html.includes('class="rail-quick-badge" data-tone="error"') && html.includes('>3</span>'),
     'the rail quick entry renders the count badge with the doc-provided tone',
   )
   // 视图行（views 空间）：紧凑语义徽标 + summary aria
-  const viewBtn = html.match(/<button[^>]*class="nav-item-main nav-open"[^>]*title="Task Board[^"]*"[^>]*>/)?.[0] ?? ''
-  assert.ok(viewBtn.includes('aria-label="Task Board · 2 awaiting review · 1 needs attention"'), `the views row button carries the badge summary (got: ${viewBtn})`)
+  const viewBtn = html.match(/<button[^>]*class="nav-item-main nav-open"[^>]*title="App Center[^"]*"[^>]*>/)?.[0] ?? ''
+  assert.ok(viewBtn.includes('aria-label="App Center · 2 awaiting review · 1 needs attention"'), `the views row button carries the badge summary (got: ${viewBtn})`)
   assert.ok(html.includes('badge badge-err tabular-nums sidebar-view-badge'), 'the views row renders the compact semantic badge pill')
 })
 
@@ -942,7 +942,7 @@ test('useSidebarBadges discovers and loads the badge doc itself; plugin disable 
       root = createRoot(container)
       root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
     })
-    assert.deepEqual(docUrls, ['/api/plugins/builtin%3Atasks/docs/task-board'], 'the sidebar hook loads the declared badge doc on demand')
+    assert.deepEqual(docUrls, ['/api/plugins/builtin%3Aapps/docs/app-center'], 'the sidebar hook loads the declared badge doc on demand')
     assert.ok(container.querySelector('.rail-quick-badge') !== null, 'the fetched doc drives the rendered badge')
 
     // Simulate the SSE path of a disabled plugin: contributions vanish -> badge residue zeroed.
