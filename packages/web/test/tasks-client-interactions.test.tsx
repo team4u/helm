@@ -12,9 +12,10 @@
  *    setParams 深链任务抽屉、分屏按钮 openSplitScreen；
  * 5. 「开工」「通过」「合并结单」「打回返工」「新建待办」「聊一个新任务」完整触发
  *    正确 callAction / openScreen，错误如实展示不吞错；
- * 6. TaskToolView 聊天内活体回执（实时列徽标 + 指示灯联动 board doc 与会话摘要、
- *    点击开抽屉或跳看板深链、错误首行如实、看板外任务诚实标注）；
- * 7. 移动端四胶囊「需我处理 / 待验收 / 进行中 / 待办」(+已完成) 过滤与 tab 参数联动；
+ * 6. TaskToolView 聊天内活体回执（实时列徽标色调随真实状态、指示灯联动 board doc 与会话摘要、
+ *    点击开抽屉或跳看板深链、in_review 直出「去验收」胶囊、错误首行如实、看板外任务诚实标注）；
+ * 7. 移动端横向状态胶囊条 + `all` 分组折叠视图（attention 聚合、done 默认折叠、tab 深链回写、
+ *    筛选抽屉折叠与激活计数）；
  * 7.5 审阅修订：非法 doc 显式无效面板与重载、通用后台徽标事实驱动 background 灯
  *     （停滞不误报）、看板外依赖不伪造阻塞、停滞任务显式继续（submitInput 人工触发）、
  *     mergePending 待验收互斥禁用、历史深链看板外任务显式提示 + inspect 加载完整记录、
@@ -87,6 +88,7 @@ interface SpyCtx extends PluginClientContextType {
   splitCalls: string[]
   actionCalls: ActionCallRecord[]
   notifyCalls: Array<{ message: string; tone?: string }>
+  artifactCalls: string[]
 }
 
 function makeSpyCtx(overrides: Partial<SpyCtx> = {}): SpyCtx {
@@ -95,6 +97,7 @@ function makeSpyCtx(overrides: Partial<SpyCtx> = {}): SpyCtx {
   const splitCalls: string[] = []
   const actionCalls: ActionCallRecord[] = []
   const notifyCalls: Array<{ message: string; tone?: string }> = []
+  const artifactCalls: string[] = []
   const base: PluginClientContextType = {
     pluginId: 'builtin:tasks',
     callAction: async (actionId, input) => {
@@ -111,7 +114,9 @@ function makeSpyCtx(overrides: Partial<SpyCtx> = {}): SpyCtx {
     openConversationDrawer: (id) => {
       drawerCalls.push(id)
     },
-    openArtifact: () => {},
+    openArtifact: (artifactId) => {
+      artifactCalls.push(artifactId)
+    },
     openWorkbench: () => {},
     closeWorkbench: () => {},
     notify: (message, tone) => {
@@ -126,7 +131,7 @@ function makeSpyCtx(overrides: Partial<SpyCtx> = {}): SpyCtx {
       return (text as { en?: string }).en ?? ''
     },
   }
-  return Object.assign(base, { drawerCalls, screenCalls, splitCalls, actionCalls, notifyCalls, ...overrides })
+  return Object.assign(base, { drawerCalls, screenCalls, splitCalls, actionCalls, notifyCalls, artifactCalls, ...overrides })
 }
 
 function conv(id: number, title: string, extra: Partial<ConversationSummary> = {}): ConversationSummary {
@@ -224,6 +229,11 @@ function boardHostPort(): PluginClientHostPort {
   return {
     authenticated: false,
     theme: 'dark',
+    // MarkdownView 经宿主端口注入真实实现；单测注入轻量 stub（文本直出，可断言内容）
+    markdown: {
+      view: (props: { text: string }) => e('div', { className: 'md-view-stub' }, props.text),
+      codeBlock: (props: { code: string }) => e('pre', null, props.code),
+    },
     conversations: stubConversations,
     conversationDetails: {},
     conversationLives: {},
@@ -639,38 +649,28 @@ test('筛选与深链：q/project/assignee/node 参数过滤、清除按钮回�
     },
   })
 
-  // 深链 project 过滤
+  // 深链 project 过滤（桌面列收敛；移动端 all 分组视图另行覆盖）
+  const desktopCards = (host: Element): string[] =>
+    [...host.querySelectorAll('.task-board-desktop .task-card')].map((c) => c.getAttribute('data-task-id') ?? '')
   const byProject = await mountBoard(makeSpyCtx(), mutableScreenProps({ project: 'helm' }).props)
   t.after(() => byProject.unmount())
-  assert.deepEqual(
-    [...byProject.host.querySelectorAll('.task-card')].map((c) => c.getAttribute('data-task-id')),
-    ['T-1'],
-  )
+  assert.deepEqual(desktopCards(byProject.host), ['T-1'])
   byProject.unmount()
 
   // 深链 q 过滤（标题关键字）
   const byQuery = await mountBoard(makeSpyCtx(), mutableScreenProps({ q: 'auth' }).props)
   t.after(() => byQuery.unmount())
-  assert.deepEqual(
-    [...byQuery.host.querySelectorAll('.task-card')].map((c) => c.getAttribute('data-task-id')),
-    ['T-3'],
-  )
+  assert.deepEqual(desktopCards(byQuery.host), ['T-3'])
   byQuery.unmount()
 
   // 深链 assignee / node 过滤
   const byAssignee = await mountBoard(makeSpyCtx(), mutableScreenProps({ assignee: 'lx' }).props)
   t.after(() => byAssignee.unmount())
-  assert.deepEqual(
-    [...byAssignee.host.querySelectorAll('.task-card')].map((c) => c.getAttribute('data-task-id')),
-    ['T-2'],
-  )
+  assert.deepEqual(desktopCards(byAssignee.host), ['T-2'])
   byAssignee.unmount()
   const byNode = await mountBoard(makeSpyCtx(), mutableScreenProps({ node: 'lx' }).props)
   t.after(() => byNode.unmount())
-  assert.deepEqual(
-    [...byNode.host.querySelectorAll('.task-card')].map((c) => c.getAttribute('data-task-id')),
-    ['T-2'],
-  )
+  assert.deepEqual(desktopCards(byNode.host), ['T-2'])
   byNode.unmount()
 
   // 触发器标签聚合（未过滤时显示 All；cwd basename 进入项目选项语境）
@@ -698,10 +698,7 @@ test('筛选与深链：q/project/assignee/node 参数过滤、清除按钮回�
   await click(clear)
   assert.equal(props.params['q'], undefined)
   await live.reRender()
-  assert.deepEqual(
-    [...live.host.querySelectorAll('.task-card')].map((c) => c.getAttribute('data-task-id')).sort(),
-    ['T-1', 'T-2', 'T-3'],
-  )
+  assert.deepEqual(desktopCards(live.host).sort(), ['T-1', 'T-2', 'T-3'])
   live.unmount()
 })
 
@@ -846,7 +843,7 @@ test('打回返工：弹窗输入意见提交 rework，空意见显式拦截', {
   unmount()
 })
 
-test('新建待办：表单校验、依赖解析、开关、后端错误如实展示', { timeout: 60_000 }, async (t) => {
+test('新建待办：核心字段直出、高级选项折叠、MultiSelect 依赖、校验与后端错误如实', { timeout: 60_000 }, async (t) => {
   setStubState({ conversations: standardConversations(), board: standardBoard() })
   const ctx = makeSpyCtx()
   const { host, unmount } = await mountBoard(ctx, mutableScreenProps().props)
@@ -857,13 +854,24 @@ test('新建待办：表单校验、依赖解析、开关、后端错误如实�
   let modal = document.querySelector('.task-modal')
   assert.ok(modal, '新建弹窗应挂载')
 
+  // 核心三件套直出：标题 / 简报 / 立即开工开关；高级字段默认折叠
   const inputs = [...modal.querySelectorAll<HTMLInputElement>('input')]
   const titleInput = inputs.find((i) => i.getAttribute('aria-label') === 'Title')
   const briefArea = modal.querySelector<HTMLTextAreaElement>('textarea')
-  const projectInput = inputs.find((i) => i.getAttribute('aria-label') === 'Project')
-  const depsInput = inputs.find((i) => i.getAttribute('aria-label') === 'Depends on')
+  const autoStartSwitch = [...modal.querySelectorAll<HTMLButtonElement>('[role="switch"]')]
+    .find((b) => b.getAttribute('aria-label') === 'Start immediately')
   const submit = [...modal.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Create task'))
-  assert.ok(titleInput && briefArea && projectInput && depsInput && submit)
+  assert.ok(titleInput && briefArea && autoStartSwitch && submit)
+  assert.equal(autoStartSwitch.getAttribute('aria-checked'), 'true', '立即开工默认开启')
+  assert.ok(modal.querySelector('input[aria-label="Project"]') === null, '高级字段默认不在 DOM')
+
+  const disclosure = [...modal.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('More options'))
+  assert.ok(disclosure)
+  assert.equal(disclosure.getAttribute('aria-expanded'), 'false')
+  await click(disclosure ?? null)
+  assert.equal(disclosure.getAttribute('aria-expanded'), 'true')
+  const projectInput = modal.querySelector<HTMLInputElement>('input[aria-label="Project"]')
+  assert.ok(projectInput, '展开后项目字段可见')
 
   // 空标题：显式校验错误，不发请求
   await click(submit)
@@ -873,7 +881,24 @@ test('新建待办：表单校验、依赖解析、开关、后端错误如实�
   setInputValue(titleInput, 'Add metrics endpoint')
   setInputValue(briefArea, 'Add /metrics with auth.')
   setInputValue(projectInput, 'helm')
-  setInputValue(depsInput, 'T-1, T-2， T-3')
+
+  // 依赖经 MultiSelect 选择（候选来自未完成任务），不再手输 ID
+  const depsTrigger = modal.querySelector<HTMLButtonElement>('.helmx-select-multi .helmx-select-trigger')
+  assert.ok(depsTrigger, '依赖 MultiSelect 应渲染（存在候选任务）')
+  await click(depsTrigger)
+  const optionByText = (text: string): HTMLElement | undefined =>
+    [...document.querySelectorAll<HTMLElement>('[role="option"]')].find((o) => o.textContent?.includes(text))
+  assert.ok(optionByText('T-1 · Task T-1'), '候选选项应含 id 与标题')
+  await click(optionByText('T-1') ?? null)
+  await click(optionByText('T-2') ?? null)
+  await click(optionByText('T-3') ?? null)
+  assert.match(depsTrigger.textContent ?? '', /3 selected/)
+
+  // 折叠高级选项：摘要芯片回显已设值（项目 + 依赖 + 先出方案）
+  await click(disclosure ?? null)
+  assert.match(disclosure.textContent ?? '', /helm/)
+  assert.match(disclosure.textContent ?? '', /T-1/)
+  await click(disclosure ?? null)
   // 打开 planFirst 开关
   const planSwitch = [...modal.querySelectorAll<HTMLButtonElement>('[role="switch"]')].find((b) => b.getAttribute('aria-label') === 'Plan first')
   await click(planSwitch ?? null)
@@ -953,7 +978,7 @@ function toolProps(overrides: Partial<ToolViewProps> = {}): ToolViewProps {
   }
 }
 
-test('TaskToolView 活体回执：实时列徽标与灯、点击开抽屉、看板深链、错误首行', { timeout: 60_000 }, async (t) => {
+test('TaskToolView 活体回执：实时列徽标色调、点击开抽屉、看板深链、错误首行', { timeout: 60_000 }, async (t) => {
   setStubState({
     conversations: [conv(10, 'T-1 exec', { status: 'working', doing: 'writing tests' })],
     board: {
@@ -963,7 +988,7 @@ test('TaskToolView 活体回执：实时列徽标与灯、点击开抽屉、看�
   })
   const ctx = makeSpyCtx()
 
-  // 有执行会话：点击打开抽屉；徽标实时为 In Progress；灯 working
+  // 有执行会话：点击打开抽屉；徽标实时为 In Progress（accent 色调）；灯 working
   const first = await mount(ctx, e(components.TaskToolView, toolProps({
     toolName: 'task_create',
     input: { title: 'Fix auth' },
@@ -974,12 +999,17 @@ test('TaskToolView 活体回执：实时列徽标与灯、点击开抽屉、看�
   assert.ok(row)
   assert.match(row.textContent ?? '', /T-1 · Fix auth/)
   assert.match(row.textContent ?? '', /In Progress/)
+  assert.ok(row.querySelector('.task-trace-badge')?.classList.contains('badge-accent'), '进行中运行徽标 accent 色调')
   assert.equal(row.querySelector('.helmx-status-light')?.getAttribute('data-tone'), 'working')
   await click(row)
   assert.deepEqual(ctx.drawerCalls, [10])
   first.unmount()
 
-  // 无执行会话：点击跳看板深链
+  // 无执行会话：点击跳看板深链（任务在板上、backlog 徽标中性）
+  setStubState({
+    conversations: [],
+    board: { tasks: [task('T-5', { title: 'Backlog only' })], updatedAt: 1 },
+  })
   const second = await mount(ctx, e(components.TaskToolView, toolProps({
     toolName: 'task_create',
     structuredOutput: { task: { id: 'T-5', title: 'Backlog only', column: 'backlog' } },
@@ -988,11 +1018,19 @@ test('TaskToolView 活体回执：实时列徽标与灯、点击开抽屉、看�
   const row2 = second.host.querySelector('.task-trace-row')
   assert.ok(row2)
   assert.match(row2.textContent ?? '', /Backlog/)
+  assert.ok(row2.querySelector('.task-trace-badge')?.classList.contains('badge-neutral'))
   await click(row2)
   assert.deepEqual(ctx.screenCalls, ['screen:builtin:tasks/board?task=T-5'])
   second.unmount()
 
-  // 错误态：错误首行如实展示
+  // 错误态：错误首行如实展示，徽标 err 色调
+  setStubState({
+    conversations: [conv(10, 'T-1 exec', { status: 'working', doing: 'writing tests' })],
+    board: {
+      tasks: [task('T-1', { column: 'in_progress', conversationId: 10, title: 'Fix auth' })],
+      updatedAt: 1,
+    },
+  })
   const third = await mount(ctx, e(components.TaskToolView, toolProps({
     toolName: 'task_start',
     status: 'error',
@@ -1003,10 +1041,61 @@ test('TaskToolView 活体回执：实时列徽标与灯、点击开抽屉、看�
   const row3 = third.host.querySelector('.task-trace-row')
   assert.ok(row3)
   assert.match(row3.textContent ?? '', /task_blocked_by_dependencies: T-9 not done/)
+  assert.ok(row3.querySelector('.task-trace-badge')?.classList.contains('badge-err'), '错误态徽标 err 色调')
   assert.equal(row3.querySelector('.helmx-status-light')?.getAttribute('data-tone'), 'failed')
   third.unmount()
 
+  // in_review：徽标 warn 色调直抓审阅视线；「去验收」胶囊深链看板，行点击仍开执行会话抽屉
+  setStubState({
+    conversations: [conv(30, 'T-3 exec')],
+    board: {
+      tasks: [task('T-3', { column: 'in_review', conversationId: 30, title: 'Auth module' })],
+      updatedAt: 1,
+    },
+  })
+  const review = await mount(ctx, e(components.TaskToolView, toolProps({
+    toolName: 'task_submit',
+    input: { taskId: 'T-3' },
+    structuredOutput: { task: { id: 'T-3', title: 'Auth module', column: 'in_review', conversationId: 30 }, conversationId: 30 },
+  })))
+  t.after(() => review.unmount())
+  const reviewRow = review.host.querySelector('.task-trace-row')
+  assert.ok(reviewRow)
+  assert.ok(reviewRow.querySelector('.task-trace-badge')?.classList.contains('badge-warn'), '待验收徽标 warn 色调')
+  const reviewPill = review.host.querySelector<HTMLButtonElement>('.task-trace-review')
+  assert.ok(reviewPill, '待验收回执应直出去验收胶囊')
+  assert.match(reviewPill.textContent ?? '', /Review/)
+  await click(reviewPill ?? null)
+  assert.deepEqual(ctx.screenCalls, ['screen:builtin:tasks/board?task=T-5', 'screen:builtin:tasks/board?task=T-3'], '验收胶囊深链看板任务抽屉')
+  await click(reviewRow)
+  assert.deepEqual(ctx.drawerCalls, [10, 30], '行主体点击仍打开执行会话抽屉')
+  review.unmount()
+
+  // done：徽标 ok 色调
+  setStubState({
+    conversations: [],
+    board: {
+      tasks: [task('T-6', { column: 'done', title: 'Shipped' })],
+      updatedAt: 1,
+    },
+  })
+  const done = await mount(ctx, e(components.TaskToolView, toolProps({
+    toolName: 'task_approve',
+    input: { taskId: 'T-6' },
+    structuredOutput: { task: { id: 'T-6', title: 'Shipped', column: 'done' } },
+  })))
+  t.after(() => done.unmount())
+  assert.ok(done.host.querySelector('.task-trace-badge')?.classList.contains('badge-ok'), '完成徽标 ok 色调')
+  done.unmount()
+
   // 哈希派生工具名（exposeAsTool 形如 tasks_create_ab12cd34）同样解析动词族
+  setStubState({
+    conversations: [conv(10, 'T-1 exec', { status: 'working', doing: 'writing tests' })],
+    board: {
+      tasks: [task('T-1', { column: 'in_progress', conversationId: 10, title: 'Fix auth' })],
+      updatedAt: 1,
+    },
+  })
   const hashed = await mount(ctx, e(components.TaskToolView, toolProps({
     toolName: 'tasks_create_ab12cd34',
     input: { title: 'Fix auth' },
@@ -1029,10 +1118,10 @@ test('TaskToolView 活体回执：实时列徽标与灯、点击开抽屉、看�
 })
 
 // ---------------------------------------------------------------------------
-// 7. Mobile clear-down flow
+// 7. Mobile board: horizontal status pills + grouped collapsible `all` view
 // ---------------------------------------------------------------------------
 
-test('移动端四胶囊清零流：attention 聚合、tab 切换 setParams 联动、done 可切看', { timeout: 60_000 }, async (t) => {
+test('移动端状态胶囊与 all 分组视图：默认分组、done 折叠、tab 深链回写', { timeout: 60_000 }, async (t) => {
   setStubState({
     conversations: [
       conv(20, 'T-2 exec', { status: 'blocked', pendingAskCount: 1 }),
@@ -1054,34 +1143,62 @@ test('移动端四胶囊清零流：attention 聚合、tab 切换 setParams 联�
   const { host, unmount, reRender } = await mountBoard(makeSpyCtx(), props)
   t.after(unmount)
 
-  const mobileList = (): Element[] => [...host.querySelectorAll('.task-board-mobile-list .task-card')]
-  const tabButton = (label: string): HTMLButtonElement | undefined =>
-    [...host.querySelectorAll<HTMLButtonElement>('.task-board-mobile-tabs .segmented-control-btn')]
-      .find((b) => b.textContent?.includes(label))
+  const mobileCards = (): string[] =>
+    [...host.querySelectorAll('.task-board-mobile-list .task-card')].map((c) => c.getAttribute('data-task-id') ?? '')
+  const pill = (label: string): HTMLButtonElement | undefined =>
+    [...host.querySelectorAll<HTMLButtonElement>('.task-mobile-pill')].find((b) => b.textContent?.includes(label))
+  const group = (id: string): Element | null => host.querySelector(`.task-mobile-group[data-group="${id}"]`)
 
-  // 默认 attention：仅需我处理任务（blocked T-2）
-  assert.deepEqual(mobileList().map((c) => c.getAttribute('data-task-id')), ['T-2'])
+  // 胶囊条计数如实（all=全部可见任务数，attention 聚合需处理）
+  assert.match(pill('All')?.textContent ?? '', /5/)
+  assert.match(pill('Needs me')?.textContent ?? '', /1/)
+  assert.match(pill('Review')?.textContent ?? '', /1/)
+  assert.match(pill('Running')?.textContent ?? '', /1/)
+  assert.match(pill('Backlog')?.textContent ?? '', /1/)
+  assert.match(pill('Done')?.textContent ?? '', /1/)
+  // 语义圆点存在于具体状态胶囊（all 无圆点）
+  assert.ok(pill('Review')?.querySelector('.task-tone-dot'))
+  assert.ok(pill('All')?.querySelector('.task-tone-dot') === null)
 
-  // 切到待验收 → setParams 回写 tab 并重渲染
-  await click(tabButton('Review') ?? null)
+  // 默认 all 分组视图：attention → review → running → backlog 展开；done 折叠不渲染卡片
+  assert.deepEqual(mobileCards(), ['T-2', 'T-3', 'T-1', 'T-4'])
+  assert.equal(group('done')?.querySelectorAll('.task-card').length, 0, 'done 分组默认折叠')
+  assert.equal(group('done')?.querySelector('.task-mobile-group-toggle')?.getAttribute('aria-expanded'), 'false')
+  await click(group('done')?.querySelector('.task-mobile-group-toggle') ?? null)
+  assert.deepEqual(
+    [...(group('done')?.querySelectorAll('.task-card') ?? [])].map((c) => c.getAttribute('data-task-id')),
+    ['T-6'],
+    '展开后 done 卡片可见',
+  )
+
+  // 点击具体状态胶囊 → setParams 回写 tab 并过滤到该组
+  await click(pill('Review') ?? null)
   assert.equal(props.params['tab'], 'in_review')
   await reRender()
-  assert.deepEqual(mobileList().map((c) => c.getAttribute('data-task-id')), ['T-3'])
-
-  // 切到进行中：attention 任务已归入需我处理胶囊，进行中仅剩普通运行任务
-  await click(tabButton('Running') ?? null)
+  assert.deepEqual(mobileCards(), ['T-3'])
+  await click(pill('Running') ?? null)
   assert.equal(props.params['tab'], 'in_progress')
   await reRender()
-  assert.deepEqual(mobileList().map((c) => c.getAttribute('data-task-id')), ['T-1'])
-  await click(tabButton('Backlog') ?? null)
+  assert.deepEqual(mobileCards(), ['T-1'], 'attention 任务归入需我处理胶囊，进行中仅剩普通运行任务')
+  await click(pill('Backlog') ?? null)
   await reRender()
-  assert.deepEqual(mobileList().map((c) => c.getAttribute('data-task-id')), ['T-4'])
-  await click(tabButton('Done') ?? null)
+  assert.deepEqual(mobileCards(), ['T-4'])
+  await click(pill('Needs me') ?? null)
+  assert.equal(props.params['tab'], 'attention')
   await reRender()
-  assert.deepEqual(mobileList().map((c) => c.getAttribute('data-task-id')), ['T-6'])
+  assert.deepEqual(mobileCards(), ['T-2'])
+  await click(pill('Done') ?? null)
+  await reRender()
+  assert.deepEqual(mobileCards(), ['T-6'])
+
+  // 点击 all 胶囊 → 清掉 tab 参数回到分组视图
+  await click(pill('All') ?? null)
+  assert.equal(props.params['tab'], undefined)
+  await reRender()
+  assert.deepEqual(mobileCards(), ['T-2', 'T-3', 'T-1', 'T-4', 'T-6'], '回到分组视图（用户展开过的分组在会话内保持展开）')
   unmount()
 
-  // 深链直达 tab=done
+  // 深链直达 tab=done 与 tab=all
   const deep = await mountBoard(makeSpyCtx(), mutableScreenProps({ tab: 'done' }).props)
   t.after(() => deep.unmount())
   assert.deepEqual(
@@ -1089,6 +1206,49 @@ test('移动端四胶囊清零流：attention 聚合、tab 切换 setParams 联�
     ['T-6'],
   )
   deep.unmount()
+  const deepAll = await mountBoard(makeSpyCtx(), mutableScreenProps({ tab: 'all' }).props)
+  t.after(() => deepAll.unmount())
+  assert.deepEqual(
+    [...deepAll.host.querySelectorAll('.task-board-mobile-list .task-card')].map((c) => c.getAttribute('data-task-id')),
+    ['T-2', 'T-3', 'T-1', 'T-4'],
+    '深链 all：分组视图且 done 折叠',
+  )
+  deepAll.unmount()
+})
+
+test('移动端筛选抽屉：默认折叠、开关回写 aria/data-open、激活计数徽标', { timeout: 60_000 }, async (t) => {
+  setStubState({
+    conversations: standardConversations(),
+    board: {
+      tasks: [
+        task('T-1', { column: 'in_progress', conversationId: 10, project: 'helm', nodeId: 'local', createdAt: 100 }),
+        task('T-2', { column: 'backlog', cwd: '/repo/ph', assigneeProfileId: 'lx', nodeId: 'lx', createdAt: 200 }),
+      ],
+      updatedAt: 1,
+    },
+  })
+  const { host, unmount } = await mountBoard(makeSpyCtx(), mutableScreenProps().props)
+  t.after(unmount)
+
+  const toggle = host.querySelector<HTMLButtonElement>('.task-board-filter-toggle')
+  assert.ok(toggle, '筛选开关应渲染')
+  assert.equal(toggle.getAttribute('aria-expanded'), 'false', '默认折叠')
+  assert.equal(host.querySelector('.task-board-filters')?.getAttribute('data-open'), 'false')
+  assert.ok(toggle.querySelector('.task-filter-count') === null, '无激活筛选时不显示计数')
+
+  await click(toggle)
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true')
+  assert.equal(host.querySelector('.task-board-filters')?.getAttribute('data-open'), 'true', '展开后筛选可选')
+  assert.equal(host.querySelectorAll('.task-board-filters .helmx-select-trigger').length, 3, '抽屉内三个属性筛选')
+  unmount()
+
+  // 深链激活筛选 → 计数徽标如实（project + assignee = 2）
+  const linked = await mountBoard(makeSpyCtx(), mutableScreenProps({ project: 'helm', assignee: 'assistant' }).props)
+  t.after(() => linked.unmount())
+  const badge = linked.host.querySelector('.task-board-filter-toggle .task-filter-count')
+  assert.ok(badge, '有激活筛选时应显示计数')
+  assert.equal(badge.textContent, '2')
+  linked.unmount()
 })
 
 // ---------------------------------------------------------------------------
@@ -1606,6 +1766,144 @@ test('合并确认文案对齐 merged 证据语义：仅明确 merged 确认可�
   assert.ok(modal)
   assert.match(modal.textContent ?? '', /merged: true/, '确认文案应言明仅 merged: true 明确证据结单')
   assert.match(modal.textContent ?? '', /manual review/, '失败路径应言明回到人工复核')
+  unmount()
+})
+
+// ---------------------------------------------------------------------------
+// 7.9 Notion board ergonomics: column actions / clean cards / drawer depth
+// ---------------------------------------------------------------------------
+
+test('看板人体工学：backlog 列快速新建幽灵行、done 列全部归档顺序派发', { timeout: 60_000 }, async (t) => {
+  const ctx = makeSpyCtx()
+  setStubState({
+    conversations: [conv(40, 'T-6 exec'), conv(41, 'T-7 exec')],
+    board: {
+      tasks: [
+        task('T-4', { createdAt: 400 }),
+        task('T-6', { column: 'done', conversationId: 40, completedAt: 600, createdAt: 600 }),
+        task('T-7', { column: 'done', conversationId: 41, completedAt: 700, createdAt: 700 }),
+      ],
+      updatedAt: 1,
+    },
+  })
+  const { host, unmount } = await mountBoard(ctx, mutableScreenProps().props)
+  t.after(unmount)
+
+  // backlog 列：头部 + 按钮与底部幽灵行都能打开新建弹窗（经典看板人体工学）
+  const ghostRow = host.querySelector<HTMLButtonElement>('[data-task-column="backlog"] .task-column-new-row')
+  assert.ok(ghostRow, 'backlog 列底部应有 + New task 幽灵行')
+  assert.match(ghostRow.textContent ?? '', /New task/)
+  await click(ghostRow ?? null)
+  assert.ok(document.querySelector('.task-modal'), '幽灵行应打开新建弹窗')
+  const closeBtn = [...(document.querySelector('.task-modal')?.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+    .find((b) => b.getAttribute('aria-label') === 'Close')
+  await click(closeBtn ?? null)
+
+  // done 列：存在未归档完成任务时直出「全部归档」，逐个顺序派发 archive
+  const doneHeader = host.querySelector('[data-task-column="done"]')
+  assert.ok(doneHeader)
+  const archiveBtn = [...(doneHeader.querySelectorAll<HTMLButtonElement>('button') ?? [])]
+    .find((b) => b.textContent?.includes('Archive all'))
+  assert.ok(archiveBtn, 'done 列头应有全部归档动作')
+  await click(archiveBtn ?? null)
+  assert.deepEqual(
+    ctx.actionCalls,
+    [
+      { actionId: 'archive', input: { taskId: 'T-7' } },
+      { actionId: 'archive', input: { taskId: 'T-6' } },
+    ],
+    '按列内顺序逐个归档',
+  )
+  unmount()
+})
+
+test('卡片清洁度：属性条 id/角色/项目、无 Isolated branch 常驻徽标、详情抽屉如实呈现', { timeout: 60_000 }, async (t) => {
+  setStubState({
+    conversations: [conv(10, 'T-1 exec', { status: 'working', doing: 'bash: pnpm test' })],
+    board: {
+      tasks: [
+        task('T-1', { column: 'in_progress', conversationId: 10, project: 'helm', nodeId: 'lx', autoMerge: false, createdAt: 100 }),
+      ],
+      updatedAt: 1,
+    },
+  })
+  const { props } = mutableScreenProps({}, { inlineDrawer: true })
+  const { host, unmount, reRender } = await mountBoard(makeSpyCtx(), props)
+  t.after(unmount)
+  const card = host.querySelector('[data-task-id="T-1"]')
+  assert.ok(card)
+
+  // 属性条：T-1 mono 编号 + 执行角色 + 远端节点 + 项目标签
+  const propsStrip = card.querySelector('.task-card-props')
+  assert.ok(propsStrip)
+  assert.match(propsStrip.textContent ?? '', /T-1/)
+  assert.match(propsStrip.textContent ?? '', /assistant/)
+  assert.match(propsStrip.textContent ?? '', /@lx/)
+  assert.match(propsStrip.textContent ?? '', /helm/)
+  // 卡面保持清洁：不再常驻 Isolated branch 徽标（抽屉保留真实合并模式事实）
+  assert.doesNotMatch(card.textContent ?? '', /Isolated branch/)
+  // 标题两行换行容器（line-clamp 由 CSS 承载，DOM 断言只锁结构）
+  assert.ok(card.querySelector('.task-card-title'))
+
+  const detailBtn = [...(card.querySelectorAll('button') ?? [])].find((b) => b.getAttribute('aria-label') === 'View task details')
+  await click(detailBtn ?? null)
+  await reRender()
+  const drawer = host.querySelector('.primary-drawer-content')
+  assert.ok(drawer)
+  assert.match(drawer.textContent ?? '', /Isolated branch/, '详情抽屉保留隔离分支事实')
+  unmount()
+})
+
+test('详情抽屉深度：MarkdownView 简报、可点产物芯片、改动文件列表展开', { timeout: 60_000 }, async (t) => {
+  const ctx = makeSpyCtx()
+  setStubState({
+    conversations: [conv(30, 'T-3 exec')],
+    board: {
+      tasks: [
+        task('T-3', {
+          column: 'in_review',
+          conversationId: 30,
+          title: 'Auth module',
+          brief: '## Goal\nShip the auth module.',
+          submission: {
+            summary: 'Auth module done',
+            verification: 'pnpm test passed',
+            branch: 'feat/auth',
+            changedFiles: ['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts', 'f.ts'],
+            artifactIds: ['art-1', 'art-2'],
+            submittedAt: 5000,
+          },
+          createdAt: 300,
+        }),
+      ],
+      updatedAt: 1,
+    },
+  })
+  const { host, unmount } = await mountBoard(ctx, mutableScreenProps({ task: 'T-3' }, { inlineDrawer: true }).props)
+  t.after(unmount)
+  const drawer = host.querySelector('.primary-drawer-content')
+  assert.ok(drawer, '深链任务详情抽屉应渲染')
+
+  // 简报经宿主 MarkdownView 渲染（stub 直出文本，标题语法不再裸露）
+  const briefBlock = drawer.querySelector('.task-detail-brief')
+  assert.ok(briefBlock)
+  assert.match(briefBlock.textContent ?? '', /Ship the auth module\./)
+
+  // 改动文件：默认前 5 个 + 展开全部
+  const fileList = drawer.querySelector('.task-detail-file-list')
+  assert.ok(fileList, '改动文件应渲染为紧凑列表')
+  assert.equal(fileList.querySelectorAll('li').length, 5, '默认只显示前 5 个')
+  const expand = drawer.querySelector<HTMLButtonElement>('.task-detail-files-toggle')
+  assert.ok(expand)
+  await click(expand ?? null)
+  assert.equal(drawer.querySelectorAll('.task-detail-file-list li').length, 6, '展开后显示全部')
+
+  // 产物芯片：点击调 ctx.openArtifact 就地查看交付
+  const chips = [...drawer.querySelectorAll<HTMLButtonElement>('.task-detail-artifact-chip')]
+  assert.equal(chips.length, 2)
+  await click(chips[0] ?? null)
+  await click(chips[1] ?? null)
+  assert.deepEqual(ctx.artifactCalls, ['art-1', 'art-2'])
   unmount()
 })
 

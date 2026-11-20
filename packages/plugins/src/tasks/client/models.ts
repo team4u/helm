@@ -32,6 +32,14 @@ export type TaskColumn = 'backlog' | 'in_progress' | 'in_review' | 'done'
 
 export const TASK_COLUMNS: readonly TaskColumn[] = ['backlog', 'in_progress', 'in_review', 'done']
 
+/** Semantic tone of every column header dot (data-tone vocabulary shared with the mobile pills). */
+export const TASK_COLUMN_TONE: Readonly<Record<TaskColumn, 'neutral' | 'accent' | 'warn' | 'ok'>> = {
+  backlog: 'neutral',
+  in_progress: 'accent',
+  in_review: 'warn',
+  done: 'ok',
+}
+
 export interface TaskSubmission {
   summary: string
   verification?: string
@@ -586,14 +594,38 @@ export function bucketByColumn(items: readonly TaskItem[]): TaskColumnBuckets {
   return buckets
 }
 
-export type TaskMobileTab = 'attention' | 'in_review' | 'in_progress' | 'backlog' | 'done'
+/**
+ * Mobile tab vocabulary: `all` is the Notion-style grouped collapsible list
+ * (attention -> in_review -> in_progress -> backlog -> done, done collapsed by
+ * default); the other tabs filter down to one bucket and persist `tab=<id>`
+ * in the URL for deep linking.
+ */
+export type TaskMobileTab = 'all' | 'attention' | 'in_review' | 'in_progress' | 'backlog' | 'done'
 
-export const TASK_MOBILE_TABS: readonly TaskMobileTab[] = ['attention', 'in_review', 'in_progress', 'backlog', 'done']
+export const TASK_MOBILE_TABS: readonly TaskMobileTab[] = ['all', 'attention', 'in_review', 'in_progress', 'backlog', 'done']
 
-export type TaskMobileBuckets = Record<TaskMobileTab, TaskItem[]>
+/** Group order inside the mobile `all` view (highest owner priority first). */
+export const TASK_MOBILE_GROUP_ORDER: readonly Exclude<TaskMobileTab, 'all'>[] = [
+  'attention',
+  'in_review',
+  'in_progress',
+  'backlog',
+  'done',
+]
+
+/** Semantic tone of every mobile pill dot (`all` carries no dot by design). */
+export const TASK_MOBILE_TAB_TONE: Readonly<Record<Exclude<TaskMobileTab, 'all'>, 'err' | 'warn' | 'accent' | 'neutral' | 'ok'>> = {
+  attention: 'err',
+  in_review: 'warn',
+  in_progress: 'accent',
+  backlog: 'neutral',
+  done: 'ok',
+}
+
+export type TaskMobileBuckets = Record<Exclude<TaskMobileTab, 'all'>, TaskItem[]>
 
 /**
- * Mobile four-pillar clear-down flow (+ optional done view):
+ * Mobile five-bucket clear-down flow (+ optional grouped done view):
  * - attention: every task needing the owner (blocked / error / stalled / missing conversation);
  * - the rest follow their workflow column.
  */
@@ -603,8 +635,17 @@ export function bucketMobile(items: readonly TaskItem[]): TaskMobileBuckets {
     if (item.live.needsAttention) buckets.attention.push(item)
     else buckets[item.task.column].push(item)
   }
-  for (const key of TASK_MOBILE_TABS) buckets[key].sort(compareTaskItems)
+  for (const key of TASK_MOBILE_GROUP_ORDER) buckets[key].sort(compareTaskItems)
   return buckets
+}
+
+/**
+ * Resolve the effective mobile tab: an explicit URL tab always wins (deep-link
+ * fidelity); an unset param defaults to the grouped `all` view so the board
+ * never lands on an empty bucket while other columns hold work.
+ */
+export function resolveDefaultMobileTab(explicit: TaskMobileTab | undefined): TaskMobileTab {
+  return explicit ?? 'all'
 }
 
 // ---------------------------------------------------------------------------
@@ -634,9 +675,21 @@ export function parseTaskScreenParams(params: Readonly<Record<string, string>>):
       assignee: params['assignee'] ?? '',
       node: params['node'] ?? '',
     },
-    tab: typeof tab === 'string' && (TASK_MOBILE_TABS as readonly string[]).includes(tab) ? (tab as TaskMobileTab) : 'attention',
+    tab:
+      typeof tab === 'string' && (TASK_MOBILE_TABS as readonly string[]).includes(tab)
+        ? (tab as TaskMobileTab)
+        : resolveDefaultMobileTab(undefined),
     taskId: params['task'] !== undefined && params['task'] !== '' ? params['task'] : undefined,
   }
+}
+
+/** Count active property filters (project / assignee / node) for the mobile filter toggle badge. */
+export function countActivePropertyFilters(filter: TaskFilterState): number {
+  let count = 0
+  if (filter.project !== '') count += 1
+  if (filter.assignee !== '') count += 1
+  if (filter.node !== '') count += 1
+  return count
 }
 
 /** Keyword filter across real task facts (title / id / project / assignee / cwd). */

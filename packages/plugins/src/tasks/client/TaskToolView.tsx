@@ -6,8 +6,12 @@
  * - re-derives the *current* live state from the public board doc +
  *   conversation summaries, so the receipt keeps tracking the real column and
  *   light long after the tool call finished (zero fabricated progress);
- * - click behavior: a resolvable execution conversation opens the drawer,
- *   otherwise the board screen deep-links to the task.
+ * - the column badge is tone-coded by the real state (in_review = warn,
+ *   done = ok, in_progress = accent / warn / err by severity, backlog =
+ *   neutral) so awaiting-review work is instantly visible in the planning chat;
+ * - in_review receipts carry a compact "Review" pill (outside the row button)
+ *   that deep-links to `screen:builtin:tasks/board?task=<id>`; the main row
+ *   click keeps opening the execution conversation drawer.
  *
  * Component & type exports only (Fast Refresh compliant).
  */
@@ -31,8 +35,11 @@ import {
   parseTaskToolFacts,
   parseTaskToolVerb,
   type TaskLightStatus,
+  type TaskRecord,
 } from './models.ts'
 import {
+  TASK_TOOL_REVIEW,
+  TASK_TOOL_REVIEW_TITLE,
   TASK_TOOL_STATUS_DONE,
   TASK_TOOL_STATUS_ERROR,
   TASK_TOOL_STATUS_RUNNING,
@@ -53,6 +60,19 @@ function lightWord(status: TaskLightStatus): string {
   if (status === 'running' || status === 'background') return 'working'
   if (status === 'done') return 'done'
   return 'idle'
+}
+
+/** Column badge tone from the real live state (drives the badge-* class). */
+function columnBadgeTone(task: TaskRecord | undefined, lightStatus: TaskLightStatus | undefined): string {
+  if (task === undefined) return 'badge-neutral'
+  if (task.column === 'in_review') return 'badge-warn'
+  if (task.column === 'done') return 'badge-ok'
+  if (task.column === 'in_progress') {
+    if (lightStatus === 'error') return 'badge-err'
+    if (lightStatus === 'blocked') return 'badge-warn'
+    return 'badge-accent'
+  }
+  return 'badge-neutral'
 }
 
 export function TaskToolView(props: ToolViewProps): ReactNode {
@@ -109,7 +129,11 @@ export function TaskToolView(props: ToolViewProps): ReactNode {
         : resolveLocalizedText(TASK_TOOL_STATUS_DONE, locale)
 
   const columnBadge = task !== undefined ? taskColumnLabel(task.column, locale) : undefined
+  const columnBadgeClass = isError
+    ? 'badge-err'
+    : columnBadgeTone(task, live?.lightStatus)
   const missingNote = task === undefined && facts.taskId !== undefined && !isRunning
+  const showReviewPill = task?.column === 'in_review' && facts.taskId !== undefined
 
   const handleActivate = (): void => {
     if (conversationId !== undefined) {
@@ -129,7 +153,7 @@ export function TaskToolView(props: ToolViewProps): ReactNode {
         : undefined
 
   return (
-    <div className="trace-entry">
+    <div className="trace-entry task-trace-entry">
       <button
         type="button"
         className={`trace-row task-trace-row${isError ? ' trace-row-error' : ''}`}
@@ -152,7 +176,7 @@ export function TaskToolView(props: ToolViewProps): ReactNode {
         </span>
         <span className="trace-row-right">
           {columnBadge !== undefined ? (
-            <span className="badge badge-neutral task-trace-badge">{columnBadge}</span>
+            <span className={`badge ${columnBadgeClass} task-trace-badge`}>{columnBadge}</span>
           ) : null}
           <StatusLight status={lightStatus} label={lightLabel} />
           {!isRunning && props.durationMs !== undefined ? (
@@ -164,6 +188,21 @@ export function TaskToolView(props: ToolViewProps): ReactNode {
           />
         </span>
       </button>
+      {showReviewPill ? (
+        <button
+          type="button"
+          className="btn btn-xs btn-ghost task-trace-review"
+          title={resolveLocalizedText(TASK_TOOL_REVIEW_TITLE, locale)}
+          onClick={() => {
+            if (facts.taskId !== undefined) {
+              ctx.openScreen(`screen:builtin:tasks/board?task=${encodeURIComponent(facts.taskId)}`)
+            }
+          }}
+        >
+          <HelmxIcon name="check-square" size={11} />
+          <span>{resolveLocalizedText(TASK_TOOL_REVIEW, locale)}</span>
+        </button>
+      ) : null}
     </div>
   )
 }

@@ -16,7 +16,6 @@ const L = (en: string, zh: string): LocalizedText => ({ en, 'zh-CN': zh })
 // Board header & toolbar
 // ---------------------------------------------------------------------------
 
-export const TASK_BOARD_TITLE: LocalizedText = L('Task Board', '任务看板')
 export const TASK_SEARCH_PLACEHOLDER: LocalizedText = L('Search tasks by title, ID, project…', '搜索任务标题、编号、项目…')
 export const TASK_SEARCH_LABEL: LocalizedText = L('Search tasks', '搜索任务')
 export const TASK_SEARCH_CLEAR: LocalizedText = L('Clear search', '清空搜索')
@@ -27,6 +26,13 @@ export const TASK_FILTER_NODE: LocalizedText = L('Node', '节点')
 export const TASK_FILTER_ALL: LocalizedText = L('All', '全部')
 export const TASK_FILTER_RESET: LocalizedText = L('Reset filters', '重置筛选')
 
+/** Mobile filter toggle (collapsible tray with the three property selects). */
+export const TASK_FILTER_TOGGLE_LABEL: LocalizedText = L('Filters', '筛选')
+export const TASK_FILTER_TOGGLE_TITLE: LocalizedText = L('Toggle project / assignee / node filters', '展开或收起项目/角色/节点筛选')
+export function taskFilterActiveCount(count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText({ en: `${count} active`, 'zh-CN': `${count} 项生效` }, locale)
+}
+
 export const TASK_NEW_TASK: LocalizedText = L('New task', '新建待办')
 export const TASK_NEW_TASK_TITLE: LocalizedText = L('Create a backlog task', '新建一条待办任务')
 export const TASK_CHAT_TASK: LocalizedText = L('Plan a task', '聊一个新任务')
@@ -34,6 +40,14 @@ export const TASK_CHAT_TASK_TITLE: LocalizedText = L(
   'Open a planning conversation to shape the requirement first',
   '打开规划对话，先聊清需求再落单',
 )
+
+/** Batch archive of every visible unarchived done card (sequential, honest errors). */
+export const TASK_ARCHIVE_ALL: LocalizedText = L('Archive all', '全部归档')
+export const TASK_ARCHIVE_ALL_TITLE: LocalizedText = L(
+  'Archive every done task currently on the board (sequential; failures stop and surface)',
+  '归档看板上全部已完成任务（逐个执行；失败即停并如实报错）',
+)
+export const TASK_ARCHIVING: LocalizedText = L('Archiving…', '正在归档…')
 
 /** Board stats line (`N tasks · M in flight · K awaiting review`). */
 export function taskBoardStats(total: number, inFlight: number, inReview: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
@@ -59,6 +73,7 @@ export function taskColumnLabel(column: TaskColumn, locale: HelmxLocale = DEFAUL
 }
 
 export const TASK_MOBILE_TAB_LABELS: Readonly<Record<TaskMobileTab, LocalizedText>> = {
+  all: L('All', '全部'),
   attention: L('Needs me', '需我处理'),
   in_review: L('Review', '待验收'),
   in_progress: L('Running', '进行中'),
@@ -70,7 +85,11 @@ export function taskMobileTabLabel(tab: TaskMobileTab, locale: HelmxLocale = DEF
   return resolveLocalizedText(TASK_MOBILE_TAB_LABELS[tab], locale)
 }
 
-export const TASK_MOBILE_TABS_ARIA: LocalizedText = L('Task filters', '任务过滤')
+/** Horizontal scrollable status pill strip + grouped collapsible sections (mobile). */
+export const TASK_MOBILE_PILLS_ARIA: LocalizedText = L('Task status filters', '任务状态过滤')
+
+/** Mobile collapsible group section (used in the `all` grouped view). */
+export const TASK_MOBILE_GROUP_ARIA: LocalizedText = L('Task group', '任务分组')
 
 // ---------------------------------------------------------------------------
 // Card live facts
@@ -194,9 +213,18 @@ export function taskChangedFiles(count: number, locale: HelmxLocale = DEFAULT_HE
   )
 }
 
+/** Artifact count pill (submission deliverables openable from the detail drawer). */
+export function taskArtifactCount(count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText(
+    { en: `${count} artifact${count === 1 ? '' : 's'}`, 'zh-CN': `${count} 个产物` },
+    locale,
+  )
+}
+
 export const TASK_FLAG_PLAN_FIRST: LocalizedText = L('Plan first', '先出方案')
 export const TASK_FLAG_ISOLATED_BRANCH: LocalizedText = L('Isolated branch', '隔离分支')
 export const TASK_FLAG_MERGE_PENDING: LocalizedText = L('Merge in progress', '合并收尾中')
+export const TASK_FLAG_AUTO_MERGE_SHORT: LocalizedText = L('Auto merge', '自动合并')
 
 export function taskReworkedTimes(count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(
@@ -264,7 +292,13 @@ export const TASK_FIELD_NODE_PLACEHOLDER: LocalizedText = L('Node ID, defaults t
 export const TASK_FIELD_CWD: LocalizedText = L('Working directory', '工作目录')
 export const TASK_FIELD_CWD_PLACEHOLDER: LocalizedText = L('Absolute path on the target node', '目标节点上的绝对路径')
 export const TASK_FIELD_DEPENDS_ON: LocalizedText = L('Depends on', '前置依赖')
-export const TASK_FIELD_DEPENDS_ON_PLACEHOLDER: LocalizedText = L('Task IDs separated by commas, e.g. T-1, T-2', '任务编号，逗号分隔，如 T-1, T-2')
+export const TASK_DEPS_CANDIDATES_EMPTY: LocalizedText = L(
+  'No other unfinished tasks yet — dependencies can also be set later via edit',
+  '暂无可选的未完成任务——也可稍后通过编辑补充依赖',
+)
+
+/** Collapsible advanced options disclosure in the create dialog. */
+export const TASK_MORE_OPTIONS: LocalizedText = L('More options', '高级选项')
 
 export const TASK_FIELD_AUTO_START: LocalizedText = L('Start immediately', '立即开工')
 export const TASK_FIELD_AUTO_START_DESC: LocalizedText = L('Create the execution conversation right away', '创建后立即启动执行会话')
@@ -317,6 +351,20 @@ export const TASK_KV_SUBMITTED_AT: LocalizedText = L('Submitted at', '交卷时�
 export const TASK_SECTION_BRIEF: LocalizedText = L('Brief', '任务简报')
 export const TASK_SECTION_SUBMISSION: LocalizedText = L('Submission', '交付信息')
 export const TASK_SECTION_LAST_REWORK: LocalizedText = L('Last rework feedback', '最近返工意见')
+
+/** Submission artifacts section (clickable ctx.openArtifact chips in the detail drawer). */
+export const TASK_SUBMISSION_ARTIFACTS: LocalizedText = L('Artifacts', '交付产物')
+export function taskArtifactOpenTitle(artifactId: string, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  return resolveLocalizedText({ en: `Open artifact ${artifactId}`, 'zh-CN': `打开产物 ${artifactId}` }, locale)
+}
+
+/** Submission changed-files list (first 5 + expand toggle). */
+export const TASK_CHANGED_FILES_LABEL: LocalizedText = L('Changed files', '改动文件')
+export const TASK_CHANGED_FILES_EXPAND: LocalizedText = L('Show all', '显示全部')
+export const TASK_CHANGED_FILES_COLLAPSE: LocalizedText = L('Show less', '收起')
+
+/** Drawer merge-mode kv row (honest branch semantics after the card badge cleanup). */
+export const TASK_KV_MERGE_MODE: LocalizedText = L('Merge mode', '合并模式')
 
 export function taskOriginJumpTitle(conversationId: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(
@@ -467,6 +515,13 @@ export function taskToolOpenConversationLabel(taskId: string, locale: HelmxLocal
 }
 
 export const TASK_TOOL_TASK_MISSING: LocalizedText = L('Not on the current board (archived or deleted)', '不在当前看板（已归档或删除）')
+
+/** Compact review affordance on in_review receipts: jumps straight to the board review drawer. */
+export const TASK_TOOL_REVIEW: LocalizedText = L('Review', '去验收')
+export const TASK_TOOL_REVIEW_TITLE: LocalizedText = L(
+  'Open this task on the board for acceptance',
+  '在看板打开该任务进行验收',
+)
 
 export function taskToolUnblocked(count: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(
