@@ -48,6 +48,7 @@ import {
   parseTaskBoardDoc,
   parseTaskRecordLenient,
   parseTaskScreenParams,
+  taskLightWord,
   TASK_COLUMNS,
   TASK_COLUMN_TONE,
   TASK_MOBILE_GROUP_ORDER,
@@ -56,7 +57,6 @@ import {
   type TaskColumn,
   type TaskFilterState,
   type TaskItem,
-  type TaskLightStatus,
   type TaskMobileTab,
   type TaskRecord,
 } from './models.ts'
@@ -145,15 +145,6 @@ import {
   taskWaitingForDeps,
 } from './copy.ts'
 import { TaskCreateDialog, TaskDetailDrawer, TaskMergeConfirmDialog, TaskReworkDialog } from './TaskDialogs.tsx'
-
-/** Light word for the shared StatusLight (tone normalization lives in the SDK). */
-function lightWord(status: TaskLightStatus): string {
-  if (status === 'error') return 'error'
-  if (status === 'blocked') return 'blocked'
-  if (status === 'running' || status === 'background') return 'working'
-  if (status === 'done') return 'done'
-  return 'idle'
-}
 
 function TaskCard(props: {
   item: TaskItem
@@ -366,7 +357,7 @@ function TaskCard(props: {
       }}
     >
       <div className="task-card-header">
-        <StatusLight status={lightWord(live.lightStatus)} label={taskCardLightLabel(live.lightStatus, live.approvalPending, locale)} />
+        <StatusLight status={taskLightWord(live.lightStatus)} label={taskCardLightLabel(live.lightStatus, live.approvalPending, locale)} />
         <span className="task-card-title" title={task.title}>{task.title}</span>
         <span className="task-card-tools">
           <button
@@ -763,6 +754,9 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
   }
 
   const inFlightCount = columns.in_progress.length
+  // 统计口径与下方列轨一致：当前可见集合（默认未归档；打开归档开关时含归档卡），
+  // 不用 board.tasks.length（含被收起的归档历史，会造成「总数≠可见」的错觉）。
+  const visibleCount = (showArchivedHistory ? filtered : activeItems).length
   const renderCard = (item: TaskItem): ReactNode => (
     <TaskCard
       key={item.task.id}
@@ -913,7 +907,7 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
       <div className="task-board-topbar">
         <span className="task-board-subtitle text-subtle">
           {boardLoaded && board !== undefined
-            ? taskBoardStats(board.tasks.length, inFlightCount, columns.in_review.length, locale)
+            ? taskBoardStats(visibleCount, inFlightCount, columns.in_review.length, locale)
             : t(TASK_EMPTY_LOADING)}
         </span>
         <div className="task-board-actions">
@@ -1157,6 +1151,7 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
           inline={props.inlineDrawer}
           onClose={() => props.setParams({ task: undefined })}
           onRework={(taskId) => setReworkTaskId(taskId)}
+          onMerge={(taskId) => setMergeConfirmId(taskId)}
           onResumeKickoff={(taskId) =>
             runTaskAction(taskId, () => ctx.callAction('resume_kickoff', { taskId }))
           }

@@ -2,11 +2,11 @@
  * builtin:tasks 动作与模型工具统一注册入口。
  *
  * 双轨暴露（与 builtin:swarm 同款纪律）：
- * - 10 个 `ctx.action`（exposeAsTool: false）承载 HTTP / CLI / Workflow / Web 五端，
+ * - 12 个 `ctx.action`（exposeAsTool: false）承载 HTTP / CLI / Workflow / Web 五端，
  *   CLI 自动映射 `helmx tasks <cmd>`；
- * - 7 个 `ctx.tool` 以精确短名（task_create / task_list / task_inspect / task_start /
- *   task_submit / task_approve / task_rework）直接进模型工具列表——不用 exposeAsTool
- *   派生（派生名带哈希后缀，无法满足共享契约的精确短名）。
+ * - 8 个 `ctx.tool` 以精确短名（task_create / task_list / task_inspect / task_start /
+ *   task_submit / task_request_plan_approval / task_approve / task_rework）直接进模型
+ *   工具列表——不用 exposeAsTool 派生（派生名带哈希后缀，无法满足共享契约的精确短名）。
  *
  * 诚实性边界：
  * - 任务执行会话保持 `ownedBy: 'human'`、零 parentConversationId（完整保留
@@ -266,6 +266,11 @@ interface ResolvedCoordinates {
   cwd?: string
 }
 
+/** 可指派执行者判定（create 解析链与 update 显式修改同一口径）。 */
+function isAssignableTaskProfile(profile: { humanSelectable?: boolean; runtime?: unknown }): boolean {
+  return profile.humanSelectable !== false && profile.runtime === undefined
+}
+
 /**
  * 解析执行角色：显式指定时同样强校验（存在、humanSelectable !== false、未绑定外部
  * runtime——外部 runtime Profile 的生命周期归其宿主插件管理，不能作为看板执行者）；
@@ -285,9 +290,6 @@ async function resolveAssigneeProfile(
         ? [runtime.readConversationOrUndefined(originConversationId)?.profileId]
         : []), 'assistant']
 
-  const assignable = (profile: { humanSelectable?: boolean; runtime?: unknown }): boolean =>
-    profile.humanSelectable !== false && profile.runtime === undefined
-
   let lastMissing: string | undefined
   let lastReason: 'missing' | 'not_assignable' | undefined
   for (const candidate of candidates) {
@@ -298,7 +300,7 @@ async function resolveAssigneeProfile(
       lastReason = 'missing'
       continue
     }
-    if (!assignable(profile)) {
+    if (!isAssignableTaskProfile(profile)) {
       lastMissing = candidate
       lastReason = 'not_assignable'
       continue
@@ -363,6 +365,8 @@ export function resolveCoordinates(input: {
  * 3. 串行 mutation 绑定 conversationId + startedAt（write+flush，先于任务书投递）；
  * 4. `submitInput` 任务书（origin 'agent'、requestId 按 taskId 幂等）；失败显式回滚
  *    （会话标 task-archived 保留现场、任务回 backlog 记 lastError 可重试），绝不静默。
+ * 回滚覆盖**整个**两阶段窗口——含建会话前的坐标解析 / Profile 读取失败（否则占位
+ * 卡死 in_progress 无会话，start 拒绝重入只能等重启恢复）。
  * 崩溃窗口：步骤 2/3 之间重启 → service.start 的 recoverInterruptedStartups 诚实回滚。
  */
 async function launchTaskExecution(
@@ -375,34 +379,35 @@ async function launchTaskExecution(
   if (task === undefined) {
     throw new HelmxError('not_found', `任务 '${taskId}' 不存在`, 404, { pluginId: TASKS_PLUGIN_ID, taskId })
   }
-  const profile = await ctx.host.profiles.get(task.assigneeProfileId)
-  const coordinates = resolveCoordinates({
-    explicitNodeId: task.nodeId,
-    explicitCwd: task.cwd,
-    profileNodeId: profile?.nodeId,
-    profileCwd: profile?.cwd,
-    originConversation:
-      task.originConversationId !== undefined
-        ? runtime.readConversationOrUndefined(task.originConversationId)
-        : undefined,
-  })
-
-  const created = await ctx.host.createConversation({
-    title: task.title,
-    profileId: task.assigneeProfileId,
-    tags: [TASK_ACTIVE_TAG],
-    ...(coordinates.cwd !== undefined ? { cwd: coordinates.cwd } : {}),
-    nodeId: coordinates.nodeId,
-    ...(task.model !== undefined && task.model !== '' ? { model: task.model } : {}),
-  })
+  let created: Awaited<ReturnType<typeof ctx.host.createConversation>> | undefined
   try {
+    const profile = await ctx.host.profiles.get(task.assigneeProfileId)
+    const coordinates = resolveCoordinates({
+      explicitNodeId: task.nodeId,
+      explicitCwd: task.cwd,
+      profileNodeId: profile?.nodeId,
+      profileCwd: profile?.cwd,
+      originConversation:
+        task.originConversationId !== undefined
+          ? runtime.readConversationOrUndefined(task.originConversationId)
+          : undefined,
+    })
+
+    created = await ctx.host.createConversation({
+      title: task.title,
+      profileId: task.assigneeProfileId,
+      tags: [TASK_ACTIVE_TAG],
+      ...(coordinates.cwd !== undefined ? { cwd: coordinates.cwd } : {}),
+      nodeId: coordinates.nodeId,
+      ...(task.model !== undefined && task.model !== '' ? { model: task.model } : {}),
+    })
     if (task.thinkingLevel !== undefined && task.thinkingLevel !== '') {
       await ctx.host.updateConversation(created.id, { thinkingLevel: task.thinkingLevel })
     }
     await runtime.store.enqueueMutation((draft) => {
       const target = draft.tasks[taskId]
       if (target === undefined || target.conversationId !== undefined) return
-      target.conversationId = created.id
+      target.conversationId = created!.id
       target.startedAt = Date.now()
       target.updatedAt = target.startedAt
       delete target.conversationMissing
@@ -411,7 +416,7 @@ async function launchTaskExecution(
     // 即 kickoffUndelivered 事实源（若实际已送达，用户显式重投会被 requestId 幂等去重，安全）。
     await runtime.store.enqueueMutation((draft) => {
       const target = draft.tasks[taskId]
-      if (target !== undefined && target.conversationId === created.id) target.kickoffPending = true
+      if (target !== undefined && target.conversationId === created!.id) target.kickoffPending = true
     })
     await runtime.flushRecords()
     // 初始投递用 reject：新会话必 idle，若创建与投递之间被人类抢先输入（接管窗口），
@@ -429,23 +434,28 @@ async function launchTaskExecution(
       }
     })
   } catch (err) {
-    // 干净回滚：任务回待办记 lastError（flush 后可重试 start）；显式抛错。
+    // 干净回滚：任务回待办记 lastError（flush 后可重试 start）；显式抛错。回滚覆盖整个
+    // 两阶段窗口（含建会话前失败）；绑定关系仅在「未绑定」或「绑定的正是本次会话」时
+    // 才动，绝不误伤并发新绑定；kickoffPending 残留同步清除（防重试串味）。
     // 接管窗口（whenBusy reject 命中 conversation_busy：人在创建与投递之间抢先输入）不贴
     // task-archived——会话已被人类接管，保留 task 标签避免分组跳变，归位由后续流程处理。
     const takeover = err instanceof HelmxError && err.code === 'conversation_busy'
     runtime.reportError(
       takeover
-        ? `任务 ${taskId} 初始任务书被拒（会话 #${created.id} 已被用户接管，kickoff 未串入）`
-        : `任务 ${taskId} 启动投递失败，执行回滚（会话 #${created.id} 已归档标记）`,
+        ? `任务 ${taskId} 初始任务书被拒（会话 #${created?.id ?? '?'} 已被用户接管，kickoff 未串入）`
+        : `任务 ${taskId} 启动失败，执行回滚${created !== undefined ? `（会话 #${created.id} 已归档标记）` : '（会话尚未创建）'}`,
       err,
     )
+    const createdId = created?.id
     await runtime.store
       .enqueueMutation((draft) => {
         const target = draft.tasks[taskId]
-        if (target === undefined || target.conversationId !== created.id) return
+        if (target === undefined) return
+        if (target.conversationId !== undefined && target.conversationId !== createdId) return
         target.column = 'backlog'
         delete target.conversationId
         delete target.startedAt
+        delete target.kickoffPending
         target.silenceState = {
           ...(target.silenceState ?? {}),
           lastError: err instanceof Error ? err.message : String(err),
@@ -454,7 +464,7 @@ async function launchTaskExecution(
       })
       .catch(() => undefined)
     await runtime.flushRecords().catch(() => undefined)
-    if (!takeover) {
+    if (!takeover && created !== undefined) {
       await swapConversationTag(ctx, runtime, created.id, TASK_ARCHIVED_TAG).catch(() => {})
     }
     throw err instanceof HelmxError
@@ -462,10 +472,10 @@ async function launchTaskExecution(
       : new HelmxError('task_start_failed', `任务 ${taskId} 启动失败：${err instanceof Error ? err.message : String(err)}`, 500, {
           pluginId: TASKS_PLUGIN_ID,
           taskId,
-          conversationId: created.id,
+          ...(created !== undefined ? { conversationId: created.id } : {}),
         })
   }
-  return created.id
+  return created!.id
 }
 
 // ---------------------------------------------------------------------------
@@ -694,6 +704,9 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
           ...(parsed.planFirst !== undefined ? { planFirst: parsed.planFirst } : {}),
           ...(parsed.autoMerge !== undefined ? { autoMerge: parsed.autoMerge } : {}),
           dependsOn: parsed.dependsOn,
+          // 幂等键随记录落盘（含被阻塞 / 不自动启动 / 并发占满等所有不立即启动路径——
+          // 晚于提前 return 赋值会让这些路径的重复 create 静默双开）。
+          ...(parsed.createKey !== undefined ? { createKey: parsed.createKey } : {}),
           ...(context.conversationId !== undefined ? { originConversationId: context.conversationId } : {}),
           reworkCount: 0,
           createdAt: now,
@@ -714,7 +727,6 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         if (maxConcurrentTasks > 0 && inProgress >= maxConcurrentTasks) {
           return { taskId, launch: false as const, blockedBy, notStartedReason: 'concurrency_limit' as const }
         }
-        if (parsed.createKey !== undefined) task.createKey = parsed.createKey
         // 两阶段启动占位：in_progress 无 conversationId 先落盘（串行队列内原子占并发额度，杜绝双开）
         task.column = 'in_progress'
         task.startedAt = Date.now()
@@ -888,6 +900,14 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
           const profile = await ctx.host.profiles.get(profileId)
           if (profile === undefined) {
             throw new HelmxError('not_found', `执行角色 Profile '${profileId}' 不存在`, 404, { profileId })
+          }
+          if (!isAssignableTaskProfile(profile)) {
+            throw new HelmxError(
+              'validation_error',
+              `执行角色 Profile '${profileId}' 不可被指派（humanSelectable 为 false 或绑定了外部 runtime，生命周期归其宿主插件管理）`,
+              400,
+              { pluginId: TASKS_PLUGIN_ID, profileId },
+            )
           }
           task.assigneeProfileId = profileId
         }
@@ -1296,13 +1316,17 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
       }
 
       // close_only：在途收紧——待验收且无在途放行；在途一律 409（先等待或人工中止）；
-      // 进行中任务仅经明示 confirmStopped 且无在途放行（人工确认停止后的手动收尾动作）。
+      // 进行中任务仅经明示 confirmStopped 且无在途放行（人工确认停止后的手动收尾动作）；
+      // 已完成任务幂等返回当前事实（刷新延迟双击不报错，不重复触发下游接棒）。
       {
         const task = getTaskOrThrow(runtime, input.taskId)
-        if (task.column !== 'in_review' && task.column !== 'in_progress' && task.column !== 'done') {
+        if (task.column === 'done') {
+          return { task, unblockedTaskIds: [], autoStartedTaskIds: [] }
+        }
+        if (task.column !== 'in_review' && task.column !== 'in_progress') {
           throw new HelmxError(
             'task_invalid_column',
-            `任务 ${task.id} 当前位于 ${task.column} 列，仅待验收 / 已完成任务可验收通过`,
+            `任务 ${task.id} 当前位于 ${task.column} 列，仅待验收（或确认中的进行中）任务可验收通过；已完成无需重复验收，待办卡请先 start`,
             409,
             { pluginId: TASKS_PLUGIN_ID, taskId: task.id, column: task.column },
           )
@@ -1377,7 +1401,8 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
 
         if (!conversationMissing) {
           const conversationId = task.conversationId!
-          await ctx.host.submitInput(conversationId, buildReworkDeliveryPrompt(task, input.feedback), {
+          // 投递统一用脱敏后的 feedback（与 lastReworkFeedback 落盘同源），绝不把原文串进会话历史
+          await ctx.host.submitInput(conversationId, buildReworkDeliveryPrompt(task, feedback), {
             origin: 'agent',
             whenBusy: 'followUp',
             requestId: `${TASKS_PLUGIN_ID}:rework:${task.id}:${task.reworkCount}`,
@@ -1455,16 +1480,25 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
       runtime.store.enqueueMutation(async (draft) => {
         const task = requireTaskInDraft(draft.tasks, input.taskId)
         if (task.column === 'in_progress' || task.column === 'in_review') {
-          const conv =
-            task.conversationId !== undefined ? runtime.readConversationOrUndefined(task.conversationId) : undefined
-          if (conv === undefined || conv.status === 'working' || conv.status === 'blocked') {
+          if (task.conversationId === undefined) {
+            // 启动占位态（两阶段窗口内）：回滚/绑定可能仍在途，拒绝删除防状态撕裂
             throw new HelmxError(
               'task_in_progress',
-              `任务 ${task.id} 执行中（column=${task.column}${conv !== undefined ? `，会话状态 ${conv.status}` : '，会话缺失'}），不可删除`,
+              `任务 ${task.id} 处于启动占位态（尚未绑定执行会话），不可删除（稍等启动完成或失败回滚后再试）`,
               409,
               { pluginId: TASKS_PLUGIN_ID, taskId: task.id, column: task.column },
             )
           }
+          const conv = runtime.readConversationOrUndefined(task.conversationId)
+          if (conv !== undefined && (conv.status === 'working' || conv.status === 'blocked')) {
+            throw new HelmxError(
+              'task_in_progress',
+              `任务 ${task.id} 执行中（column=${task.column}，会话状态 ${conv.status}），不可删除`,
+              409,
+              { pluginId: TASKS_PLUGIN_ID, taskId: task.id, column: task.column },
+            )
+          }
+          // conv === undefined：绑定会话已被删除——允许删除死卡（rework 错误文案指引的出口之一）
         }
         // 前置引用守卫：仍被其他未删除任务 dependsOn 引用时拒删（先解除引用或删除引用方）
         const referencedBy = Object.values(draft.tasks)
@@ -1576,12 +1610,13 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         taskId: taskIdSchema,
         title: { type: 'string', minLength: 1, maxLength: 120 },
         brief: { type: 'string', minLength: 1 },
-        project: { type: 'string', maxLength: 120, description: 'Pass null or empty to clear' },
+        // 可清空字段显式接受 null（前端清空即置 null；handler 对 null / 空串同语义清除回默认链）
+        project: { anyOf: [{ type: 'string', maxLength: 120 }, { type: 'null' }], description: 'Pass null or empty to clear' },
         assigneeProfileId: { type: 'string', maxLength: 64 },
-        nodeId: { type: 'string', maxLength: 120, description: 'Pass null or empty to clear (pre-start only)' },
-        cwd: { type: 'string', description: 'Pass null or empty to clear (pre-start only)' },
-        model: { type: 'string', maxLength: 128 },
-        thinkingLevel: { type: 'string', maxLength: 16 },
+        nodeId: { anyOf: [{ type: 'string', maxLength: 64 }, { type: 'null' }], description: 'Pass null or empty to clear (pre-start only)' },
+        cwd: { anyOf: [{ type: 'string' }, { type: 'null' }], description: 'Pass null or empty to clear (pre-start only)' },
+        model: { anyOf: [{ type: 'string', maxLength: 128 }, { type: 'null' }], description: 'Pass null or empty to clear' },
+        thinkingLevel: { anyOf: [{ type: 'string', maxLength: 16 }, { type: 'null' }], description: 'Pass null or empty to clear' },
         planFirst: { type: 'boolean' },
         autoMerge: { type: 'boolean' },
         dependsOn: { type: 'array', items: taskIdSchema },
@@ -1823,10 +1858,11 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
     replay: 'unsafe',
     execute: async (input: never, toolContext: PluginToolContext) => {
       const res = await createTask(input as CreateTaskInput, toolIo(toolContext))
+      const reason = res.notStartedReason ?? 'already created'
       const tail =
         res.started
           ? `started on conversation #${res.conversationId}`
-          : `kept in backlog (${res.notStartedReason}${res.blockedBy.length > 0 ? `: blocked by ${res.blockedBy.join(', ')}` : ''})`
+          : `kept in backlog (${reason}${res.blockedBy.length > 0 ? `: blocked by ${res.blockedBy.join(', ')}` : ''})`
       return { output: `Task ${res.task.id} "${res.task.title}" ${tail}.`, structuredOutput: res }
     },
   })
@@ -1926,6 +1962,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
       additionalProperties: false,
     } as never,
     structuredOutputSchema: { type: 'object' } as never,
+    scope: { tags: [TASK_ACTIVE_TAG] },
     replay: 'unsafe',
     execute: async (input: never, toolContext: PluginToolContext) => {
       const res = await submitTask(input as Parameters<typeof submitTask>[0], toolIo(toolContext))

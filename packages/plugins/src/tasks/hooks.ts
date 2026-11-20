@@ -34,7 +34,7 @@ export function filterTaskToolsForTurn<T extends { name: string }>(
     for (const name of PLANNER_TASK_TOOL_NAMES) hide(name)
     return next
   }
-  // 非任务会话：task_submit 不可见（scope 已硬拦，此处兜底）
+  // 非任务会话：task_submit 不可见（ctx.tool scope tags ['task'] 在注册处硬拦，此处过滤兜底双保险）
   hide('task_submit')
   const isSubOrAutomated =
     conversation.parentConversationId !== undefined ||

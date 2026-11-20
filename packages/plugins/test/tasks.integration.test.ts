@@ -542,7 +542,6 @@ test('tasks-int5: quiescent turn without submission marks stalled with ZERO auto
     })
     const stalled = await taskFromAction(env, 'T-1')
     assert.equal(stalled.column, 'in_progress')
-    assert.equal(stalled.silenceState!.nudgedAt, undefined, 'no nudge marker must ever be written')
 
     // ...and NO automatic input was delivered to the human-owned conversation (AGENTS red line)
     await new Promise((r) => setTimeout(r, 600))
@@ -1264,6 +1263,169 @@ test('tasks-int11: board badge projection tracks the lifecycle live; submit noti
       'exactly one info notification per submit into in_review',
     )
     unsubscribe()
+  } finally {
+    await env.close()
+  }
+})
+
+test('tasks-int12: bugfix round — update null clears, idempotency on non-launch paths, pre-creation launch rollback, dead-card delete, done-approve idempotence, assignee assignability, rework redaction, task_submit tool scope', { timeout: 60_000 }, async (t) => {
+  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int12-'))
+  try {
+    const { kernel } = env.app
+    setRoutedResponses(env.faux, {
+      assignee: [
+        // T-5 (dead-card probe): submit into review, then stand by
+        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'dead-card draft' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('standing by'),
+        // T-6 (approve idempotence probe)
+        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'idempotent-approve draft' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('standing by'),
+        // T-7 (rework redaction probe): first draft, then post-rework draft
+        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'redaction probe draft' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('standing by'),
+        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'fixed per feedback' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('standing by'),
+        fauxAssistantMessage('idle'),
+      ],
+      planner: [fauxAssistantMessage('planner idle')],
+      child: [fauxAssistantMessage('ok')],
+    })
+
+    // --- 1) update with explicit null clears optional fields (schema must accept null end-to-end) ---
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Nullable fields',
+      brief: 'update null clears optional coordinates',
+      project: 'proj-x',
+      cwd: '/tmp/nullable-cwd',
+      autoStart: false,
+    })
+    const cleared = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'update', {
+      taskId: 'T-1',
+      project: null,
+      cwd: null,
+    })) as { task: TaskRecord }
+    assert.equal(cleared.task.project, undefined, 'project cleared by explicit null')
+    assert.equal(cleared.task.cwd, undefined, 'cwd cleared by explicit null')
+
+    // --- 2) idempotency key persists on non-launch paths (autoStart disabled AND dependency-blocked) ---
+    const keptFirst = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Kept in backlog',
+      brief: 'no auto start',
+      autoStart: false,
+      idempotencyKey: 'kept-key-1',
+    })) as { task: TaskRecord }
+    const keptReplay = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Kept in backlog',
+      brief: 'no auto start',
+      autoStart: false,
+      idempotencyKey: 'kept-key-1',
+    })) as { task: TaskRecord }
+    assert.equal(keptReplay.task.id, keptFirst.task.id, 'idempotent replay on the autoStart=false path returns the same task')
+
+    const blockedFirst = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Dependency blocked',
+      brief: 'waits for T-1',
+      dependsOn: ['T-1'],
+      idempotencyKey: 'blocked-key-1',
+    })) as { task: TaskRecord }
+    assert.equal(blockedFirst.task.column, 'backlog', 'dependency-blocked create stays in backlog')
+    const blockedReplay = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Dependency blocked',
+      brief: 'waits for T-1',
+      dependsOn: ['T-1'],
+      idempotencyKey: 'blocked-key-1',
+    })) as { task: TaskRecord }
+    assert.equal(blockedReplay.task.id, blockedFirst.task.id, 'idempotent replay on the dependency-blocked path returns the same task')
+
+    // --- 3) launch failure BEFORE conversation creation rolls the two-phase placeholder back ---
+    const ghost = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Ghost node',
+      brief: 'remote node without a paired cwd',
+      nodeId: 'ghost-node',
+      autoStart: false,
+    })) as { task: TaskRecord }
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'start', { taskId: ghost.task.id }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+      'remote node without cwd must be rejected by resolveCoordinates',
+    )
+    const ghostAfter = await taskFromAction(env, ghost.task.id)
+    assert.equal(ghostAfter.column, 'backlog', 'placeholder rolled back after a pre-creation launch failure')
+    assert.equal(ghostAfter.conversationId, undefined, 'no conversation was ever bound')
+    assert.ok(ghostAfter.silenceState?.lastError !== undefined && ghostAfter.silenceState.lastError !== '', 'lastError recorded for retry diagnostics')
+
+    // --- 4) dead card: bound conversation deleted -> task delete is the honest exit ---
+    const dead = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Dead card probe',
+      brief: 'conversation will be deleted while the card lives on',
+    })) as { task: TaskRecord; conversationId: number }
+    await kernel.waitForIdle(dead.conversationId)
+    await waitFor(async () => (await taskFromAction(env, dead.task.id)).column === 'in_review')
+    await kernel.deleteConversation(dead.conversationId)
+    await waitFor(async () => (await taskFromAction(env, dead.task.id)).conversationMissing === true)
+    const deletedDead = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'delete', {
+      taskId: dead.task.id,
+    })) as { deleted: boolean }
+    assert.equal(deletedDead.deleted, true, 'a task whose conversation is gone can be deleted (no zombie cards)')
+
+    // --- 5) approve close_only on an already-done task is idempotent ---
+    const once = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Approve twice',
+      brief: 'double approval must not error or double-fire downstream',
+    })) as { task: TaskRecord; conversationId: number }
+    await kernel.waitForIdle(once.conversationId)
+    await waitFor(async () => (await taskFromAction(env, once.task.id)).column === 'in_review')
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: once.task.id, mergeAction: 'close_only' })
+    await waitFor(async () => (await taskFromAction(env, once.task.id)).column === 'done')
+    const again = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', {
+      taskId: once.task.id,
+      mergeAction: 'close_only',
+    })) as { task: TaskRecord; unblockedTaskIds: string[]; autoStartedTaskIds: string[] }
+    assert.equal(again.task.column, 'done', 'repeat close_only on done returns the current facts')
+    assert.deepEqual(again.autoStartedTaskIds, [], 'repeat approval never re-fires downstream auto-start')
+
+    // --- 6) update to a non-assignable profile is rejected (same rule as create) ---
+    await kernel.profiles.save({ id: 'sys-role', name: 'sys-role', humanSelectable: false })
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'update', { taskId: 'T-1', assigneeProfileId: 'sys-role' }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+      'humanSelectable=false profiles cannot become board executors via update',
+    )
+
+    // --- 7) rework delivers only the sanitized feedback to the execution conversation ---
+    const SECRET = 'sk-test-do-not-leak-9f1c'
+    const unregister = kernel.stash.addRedaction(SECRET)
+    const redactProbe = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Rework redaction probe',
+      brief: 'feedback carrying a secret must be redacted before delivery',
+    })) as { task: TaskRecord; conversationId: number }
+    await kernel.waitForIdle(redactProbe.conversationId)
+    await waitFor(async () => (await taskFromAction(env, redactProbe.task.id)).column === 'in_review')
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'rework', {
+      taskId: redactProbe.task.id,
+      feedback: `fix the leak: use ${SECRET} from the vault instead`,
+    })
+    await waitFor(async () => {
+      const task = await taskFromAction(env, redactProbe.task.id)
+      return task.reworkCount === 1 && task.column === 'in_review'
+    })
+    const stored = await taskFromAction(env, redactProbe.task.id)
+    assert.ok((stored.lastReworkFeedback ?? '').includes('[REDACTED]'), 'persisted feedback carries the redaction marker')
+    assert.ok(!(stored.lastReworkFeedback ?? '').includes(SECRET), 'persisted feedback never carries the raw secret')
+    const detail = await kernel.getConversationDetail(redactProbe.conversationId, { limit: 100 })
+    const deliveredText = JSON.stringify(detail.entries)
+    assert.ok(!deliveredText.includes(SECRET), 'the raw secret is never delivered into the conversation history')
+    assert.ok(deliveredText.includes('[REDACTED]'), 'the delivered rework prompt carries the redaction marker')
+    unregister()
+
+    // --- 8) task_submit tool is scope-gated at registration (not only hidden by before_turn) ---
+    const plannerConv = await kernel.createConversation({ title: 'Planner', profileId: 'assistant' })
+    const plannerNames = kernel.plugins.listTools(kernel.getConversation(plannerConv.id)).map((tool) => tool.name)
+    const taskConvSummary = kernel.getConversation(redactProbe.conversationId)
+    const taskNames = kernel.plugins.listTools(taskConvSummary).map((tool) => tool.name)
+    assert.equal(plannerNames.includes('task_submit'), false, 'plain conversations never list task_submit (scope, not just hook filtering)')
+    assert.equal(taskNames.includes('task_submit'), true, 'task execution conversations keep task_submit')
+    assert.equal(plannerNames.includes('task_create'), true, 'sanity: planner tools stay listed')
   } finally {
     await env.close()
   }

@@ -41,7 +41,6 @@ export interface TaskSubmission {
 }
 
 export interface TaskSilenceState {
-  nudgedAt?: number
   stalledAt?: number
   lastError?: string
 }
@@ -128,9 +127,8 @@ export interface TaskBoardDoc {
 
 /**
  * `task-board` sidebarItem 徽标声明（字段名对齐宿主通用 `SidebarItemBadgeSpec` 契约：
- * doc + countField/toneField/dotField/summaryField）。本 worktree 的 `SidebarItemSpec`
- * 尚无 `badge` 字段（由徽标基础设施切片并行补齐）——集成合并时在 `tasks/ui.ts` 的
- * sidebarItem 注册处补一行 `badge: TASK_BOARD_SIDEBAR_BADGE` 即接线，禁止 any 造型。
+ * doc + countField/toneField/dotField/summaryField）。`ui.ts` 注册处已声明
+ * `badge: TASK_BOARD_SIDEBAR_BADGE` 完成接线（宿主订阅本插件公开 doc `board` 渲染）。
  */
 export const TASK_BOARD_SIDEBAR_BADGE = {
   doc: TASK_BOARD_DOC,
@@ -307,7 +305,7 @@ function assertTaskSilenceState(value: unknown, where: string): TaskSilenceState
   if (!isJsonObject(value)) {
     throw new HelmxError('tasks_doc_corrupt', `${where}.silenceState 结构非法`, 500, { pluginId: TASKS_PLUGIN_ID })
   }
-  for (const key of ['nudgedAt', 'stalledAt'] as const) {
+  for (const key of ['stalledAt'] as const) {
     const v = value[key]
     if (v !== undefined && !isFiniteTime(v)) {
       throw new HelmxError('tasks_doc_corrupt', `${where}.silenceState.${key} 必须是有限时间戳`, 500, {
