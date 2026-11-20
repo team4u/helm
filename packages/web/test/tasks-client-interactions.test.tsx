@@ -856,6 +856,7 @@ test('新建待办：表单校验、依赖解析、开关、后端错误如实�
   await click(newBtn ?? null)
   let modal = document.querySelector('.task-modal')
   assert.ok(modal, '新建弹窗应挂载')
+  assert.ok(modal.closest('.modal-backdrop'), '创建弹窗内容应处于宿主遮罩的居中布局层中')
 
   const inputs = [...modal.querySelectorAll<HTMLInputElement>('input')]
   const titleInput = inputs.find((i) => i.getAttribute('aria-label') === 'Title')

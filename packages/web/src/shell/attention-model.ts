@@ -23,7 +23,7 @@
 
 import type { ConversationSummary, Profile } from '@helmx/protocol/browser'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
-import type { ResolvedTarget } from '../lib/types.js'
+import type { ActiveModal, ResolvedTarget } from '../lib/types.js'
 import {
   resolveStandingStatusIndicator,
   type ConversationBackgroundIndex,
@@ -367,10 +367,15 @@ export interface AttentionModelResult {
 export function collectViewedConversationIds(input: {
   primaryTarget: ResolvedTarget | null
   splitTarget: ResolvedTarget | null
+  activeModal?: ActiveModal
 }): Set<number> {
   const viewed = new Set<number>()
   for (const target of [input.primaryTarget, input.splitTarget]) {
     if (target?.kind === 'conversation') viewed.add(target.conversationId)
+  }
+  const modal = input.activeModal
+  if (modal?.kind === 'conversation-drawer' || modal?.kind === 'artifact-preview' || modal?.kind === 'workspace-file') {
+    if (modal.conversationId !== undefined) viewed.add(modal.conversationId)
   }
   return viewed
 }
