@@ -2,15 +2,11 @@
  * builtin:tasks 生命周期 Hook（纯事件驱动，零定时器，零自动输入投递）：
  * - before_turn：规划/执行工具动态隔离 + 任务执行会话注入 100% 字节恒定的
  *   <active_task> 系统段落（仅含任务生命周期不变事实）；
- * - turn_settled：failed 记录 lastError；completed 且完全静止（无待答、子树无
- *   working/blocked、无 Workflow 在途 run）未交卷时诚实标记 stalledAt——
- *   **绝不向 human-owned 会话投递任何自动输入**（AGENTS Watchdog 红线），
- *   「停下未交卷」仅呈现于看板，由用户显式打开会话继续或 rework；
  * - conversation.deleted：诚实标记 conversationMissing（不捏造、不自动删任务）。
  */
-import { HelmxError, type ConversationSummary, type HelmxPluginContext } from '@helmx/protocol'
-import { ACTIVE_TASK_SECTION_ID, subtreeHasWorkingOrBlocked, type TaskRecord } from './contracts.js'
-import { findActiveTaskByConversation, workflowHasRunningRuns, type TasksRuntime } from './actions.js'
+import type { ConversationSummary, HelmxPluginContext } from '@helmx/protocol'
+import { ACTIVE_TASK_SECTION_ID, type TaskRecord } from './contracts.js'
+import { findActiveTaskByConversation, type TasksRuntime } from './actions.js'
 import { activeTaskSection } from './prompts.js'
 
 /** 规划者专属模型工具名（任务执行会话 / 子会话 / 自动化会话隐藏）。 */
@@ -45,29 +41,6 @@ export function filterTaskToolsForTurn<T extends { name: string }>(
   return next
 }
 
-/**
- * 静止判定纯函数：任务仍在进行且本回合正常结束、无待答 Ask、子树与 Workflow
- * 均无在途时返回 true（调用方据此诚实标记 stalledAt；不做任何投递）。
- * `workflowBusy: 'unknown'`（在途查询失败且非停用类错误）时保守返回 false，宁漏报不误报。
- */
-export function shouldMarkStalled(input: {
-  task: TaskRecord
-  conversation: Pick<ConversationSummary, 'id' | 'status' | 'pendingAskCount'>
-  subtreeBusy: boolean
-  workflowBusy: boolean | 'unknown'
-}): boolean {
-  if (input.task.column !== 'in_progress' || input.task.conversationId !== input.conversation.id) return false
-  if (input.task.silenceState?.stalledAt !== undefined) return false
-  if (input.conversation.pendingAskCount > 0) return false
-  if (input.subtreeBusy) return false
-  if (input.workflowBusy !== false) return false
-  return true
-}
-
-export { workflowHasRunningRuns }
-
-export { subtreeHasWorkingOrBlocked }
-
 export function registerTasksHooks(ctx: HelmxPluginContext, runtime: TasksRuntime): void {
   const { isActive } = runtime
 
@@ -95,55 +68,6 @@ export function registerTasksHooks(ctx: HelmxPluginContext, runtime: TasksRuntim
         ...(sections !== undefined ? { sections } : {}),
       },
     }
-  })
-
-  // ------------------------------------------------------------------
-  // turn_settled：纯事件驱动的诚实标记（零定时器、零投递、零强杀）
-  // ------------------------------------------------------------------
-  ctx.hook.onTurnSettled(async (payload) => {
-    if (!isActive()) return
-    const conversation = payload.conversation
-    const boundTask = findActiveTaskByConversation(runtime, conversation.id)
-    if (boundTask === undefined) return
-
-    if (payload.outcome === 'failed') {
-      await runtime.store.enqueueMutation((draft) => {
-        const task = draft.tasks[boundTask.id]
-        if (task === undefined || task.conversationId !== conversation.id || task.column !== 'in_progress') return
-        task.silenceState = {
-          ...(task.silenceState ?? {}),
-          lastError: payload.error ?? 'turn_failed',
-        }
-        task.updatedAt = Date.now()
-      })
-      return
-    }
-    if (payload.outcome !== 'completed') return
-
-    const fresh = runtime.readConversationOrUndefined(conversation.id)
-    if (fresh === undefined) return
-    const subtreeBusy = subtreeHasWorkingOrBlocked(conversation.id, ctx.host.listConversations())
-    const workflowBusy = await workflowHasRunningRuns(ctx, conversation.id)
-    if (
-      !shouldMarkStalled({
-        task: runtime.store.get(boundTask.id) ?? boundTask,
-        conversation: fresh,
-        subtreeBusy,
-        workflowBusy,
-      })
-    ) {
-      return
-    }
-    await runtime.store.enqueueMutation((draft) => {
-      const task = draft.tasks[boundTask.id]
-      if (task === undefined || task.conversationId !== conversation.id || task.column !== 'in_progress') return
-      if (task.silenceState?.stalledAt !== undefined) return
-      task.silenceState = {
-        ...(task.silenceState ?? {}),
-        stalledAt: Date.now(),
-      }
-      task.updatedAt = Date.now()
-    })
   })
 }
 

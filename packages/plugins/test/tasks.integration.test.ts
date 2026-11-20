@@ -3,15 +3,17 @@
  * 1) 默认启用、启动零常驻会话、空闲不阻塞 disable('builtin:workflow')、受管技能 tasks 随启停显隐、inUse 保护；
  * 2) create(autoStart) 建独立顶层 human-owned 执行会话（无 parentConversationId、tags 含 task），
  *    任务书投递 + <active_task> 恒定段落 + 规划/执行工具隔离 + 执行会话内实测派 subagent 子代理；
- * 3) 完整闭环 create → submit → rework → submit → approve(close_only)（tag 换 task-archived、下游依赖自动接棒）；
- * 4) merge_and_close（mergePending + 合并指令投递 + 再次 submit 收口）；
- * 5) 依赖阻塞 / 环拒绝 / 并发上限；
- * 6) 静止未交卷零投递诚实标记 stalled（turn_settled 纯事件驱动，无自动轻推）、
- *    Workflow 在途不误标、conversation.deleted 诚实标记与 rework 重建；
- * 7) 停用后工具 / UI / 受管技能即时消失且已有执行会话完整保留；
- * 8) 看板徽标投影全生命周期实时跟踪（planFirst 待答 Ask 纯会话事件驱动 warn →
- *    in_review 验收计数 → approve 归零 neutral）、交卷进 in_review 发 info 通知、
- *    徽标无关会话扰动零 board doc 重写（脏检查零 SSE 写放大）。
+ * 3) 完整闭环 create → submit → rework → submit → approve（tag 换 task-archived）；
+ * 4) conversation.deleted 诚实标记 + rework recreate 重建（单条合成任务书）+ 空闲未交卷零自动投递；
+ * 5) 停用后工具 / UI / 受管技能即时消失且已有执行会话完整保留；
+ * 6) 验收在途守卫（主会话 working 拒绝、confirmStopped 明示收尾）与重启零自动投递
+ *    （重置清空的会话被启动恢复诚实回滚 backlog + 贴 task-archived）；
+ * 7) 建单幂等键全路径、孤儿会话恢复；
+ * 8) 看板徽标投影全生命周期实时跟踪（健康在跑 accent → in_review 验收计数 → 主会话报错
+ *    error 升级 → approve 归零 neutral）、交卷进 in_review 发 info 通知、
+ *    徽标无关会话扰动零 board doc 重写（脏检查零 SSE 写放大）；
+ * 9) 评审修复轮：update null 清空、非启动路径幂等键、建会话前启动失败留 backlog、
+ *    死卡删除、done 幂等、可指派性校验、脱敏投递、task_submit scope。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -257,6 +259,7 @@ test('tasks-int2: autoStart creates an independent top-level human-owned convers
           assert.equal(meta.toolNames.includes('task_approve'), false)
           assert.equal(meta.toolNames.includes('task_rework'), false)
           assert.equal(meta.toolNames.includes('task_start'), false)
+          assert.equal(meta.toolNames.includes('task_request_plan_approval'), false, 'planFirst tool is gone for good')
           for (const expected of ['task_submit', 'task_list', 'task_inspect', 'subagent', 'SubagentWorkflow', 'swarm_create_group', 'bash']) {
             assert.ok(meta.toolNames.includes(expected), `assignee must keep ${expected} (actual: ${meta.toolNames.join(',')})`)
           }
@@ -323,7 +326,7 @@ test('tasks-int2: autoStart creates an independent top-level human-owned convers
   }
 })
 
-test('tasks-int3: full loop create → submit → rework → submit → approve with downstream auto-start', { timeout: 60_000 }, async (t) => {
+test('tasks-int3: full loop create → submit → rework → submit → approve', { timeout: 60_000 }, async (t) => {
   const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int3-'))
   try {
     const { kernel } = env.app
@@ -343,30 +346,16 @@ test('tasks-int3: full loop create → submit → rework → submit → approve 
           })
         },
         fauxAssistantMessage('Handed in again.'),
-        // T-2 auto-starts after T-1 is approved: its kickoff + submit beats
-        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'T-2 documentation delivered' })], {
-          stopReason: 'toolUse',
-        }),
-        fauxAssistantMessage('T-2 handed in.'),
         fauxAssistantMessage('Standing by.'),
       ],
       planner: [fauxAssistantMessage('planner idle')],
       child: [fauxAssistantMessage('ok')],
     })
 
-    // T-1 (immediate) + T-2 (blocked by T-1, auto-start on unblock)
     const first = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
       title: 'Implement feature A',
       brief: 'Implement feature A. Acceptance: works.',
     })) as { task: TaskRecord; conversationId?: number }
-    const second = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
-      title: 'Document feature A',
-      brief: 'Document feature A. Acceptance: docs updated.',
-      dependsOn: ['T-1'],
-    })) as { task: TaskRecord }
-    assert.equal(second.task.column, 'backlog')
-    assert.equal(second.task.autoStartOnUnblock, true)
-
     const firstConvId = first.conversationId!
     await kernel.waitForIdle(firstConvId)
     await waitFor(async () => (await taskFromAction(env, 'T-1')).column === 'in_review')
@@ -380,151 +369,26 @@ test('tasks-int3: full loop create → submit → rework → submit → approve 
     assert.equal(reworked.reworkCount, 1)
     assert.match(reworked.lastReworkFeedback!, /Add tests/)
 
-    // Approve close_only: done + conversation tag swap + downstream T-2 auto-starts
+    // Approve: done + conversation tag swap
     const approved = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', {
       taskId: 'T-1',
-      mergeAction: 'close_only',
-    })) as { task: TaskRecord; unblockedTaskIds: string[]; autoStartedTaskIds: string[] }
+    })) as { task: TaskRecord }
     assert.equal(approved.task.column, 'done')
-    assert.deepEqual(approved.unblockedTaskIds, ['T-2'])
-    assert.deepEqual(approved.autoStartedTaskIds, ['T-2'])
-
-    await waitFor(async () => (await taskFromAction(env, 'T-2')).column === 'in_progress')
     const firstConv = kernel.listConversations().find((c) => c.id === firstConvId)
     assert.equal(firstConv!.tags.includes(TASK_ARCHIVED_TAG), true, 'done task conversation swaps to task-archived')
     assert.equal(firstConv!.tags.includes(TASK_ACTIVE_TAG), false)
-
-    const secondTask = await taskFromAction(env, 'T-2')
-    assert.ok(secondTask.conversationId !== undefined, 'T-2 auto-started its own conversation')
-    const secondConv = kernel.listConversations().find((c) => c.id === secondTask.conversationId)
-    assert.equal(secondConv!.parentConversationId, undefined)
-    assert.equal(secondConv!.tags.includes(TASK_ACTIVE_TAG), true)
-
-    await kernel.waitForIdle(secondTask.conversationId!)
-    await waitFor(async () => (await taskFromAction(env, 'T-2')).column === 'in_review')
     void observed
   } finally {
     await env.close()
   }
 })
 
-test('tasks-int4: merge_and_close loop, dependency cycle rejection, blocked start, concurrency limit', { timeout: 60_000 }, async (t) => {
-  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int4-'))
-  try {
-    const { kernel } = env.app
-
-    // --- Cycle rejection on update ---
-    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
-      title: 'A',
-      brief: 'a',
-      autoStart: false,
-    })
-    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
-      title: 'B',
-      brief: 'b',
-      autoStart: false,
-      dependsOn: ['T-1'],
-    })
-    await assert.rejects(
-      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'update', { taskId: 'T-1', dependsOn: ['T-2'] }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
-    )
-
-    // --- Blocked start ---
-    await assert.rejects(
-      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'start', { taskId: 'T-2' }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'task_blocked_by_dependencies' && err.status === 409,
-    )
-
-    // --- Missing dependency reference ---
-    await assert.rejects(
-      () =>
-        kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
-          title: 'C',
-          brief: 'c',
-          dependsOn: ['T-404'],
-        }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
-    )
-
-    // --- Concurrency limit ---
-    await kernel.plugins.setConfig(TASKS_PLUGIN_ID, { maxConcurrentTasks: 1 })
-    setRoutedResponses(env.faux, {
-      assignee: [
-        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'ok' })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('done'),
-        // merge_and_close beat: merge, clean up, then submit again with the explicit declaration
-        fauxAssistantMessage(
-          [
-            fauxToolCall('task_submit', {
-              summary: 'Merged to main, worktree cleaned, checks green',
-              branch: 'feat/t-1',
-              merged: true,
-            }),
-          ],
-          { stopReason: 'toolUse' },
-        ),
-        fauxAssistantMessage('Merged and cleaned up.'),
-        fauxAssistantMessage('Standing by.'),
-      ],
-      planner: [fauxAssistantMessage('idle')],
-      child: [fauxAssistantMessage('ok')],
-    })
-    const started = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'start', { taskId: 'T-1' })) as {
-      conversationId: number
-    }
-    // T-2 stays blocked anyway; create a fresh independent task to hit the concurrency ceiling
-    const extra = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
-      title: 'D',
-      brief: 'd',
-    })) as { task: TaskRecord; started: boolean; notStartedReason?: string }
-    assert.equal(extra.started, false)
-    assert.equal(extra.notStartedReason, 'concurrency_limit')
-    await assert.rejects(
-      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'start', { taskId: extra.task.id }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'task_concurrency_limit' && err.status === 409,
-    )
-
-    // --- merge_and_close: mergePending + instruction + resubmit clears it ---
-    const convId = started.conversationId
-    await kernel.waitForIdle(convId)
-    await waitFor(async () => (await taskFromAction(env, 'T-1')).column === 'in_review')
-    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', {
-      taskId: 'T-1',
-      mergeAction: 'merge_and_close',
-      note: 'merge to main',
-    })
-    const merging = await taskFromAction(env, 'T-1')
-    assert.equal(merging.column, 'in_progress')
-    assert.equal(merging.mergePending, true)
-    // The merge instruction was delivered as a follow-up input
-    const detail = await kernel.getConversationDetail(convId, { limit: 50 })
-    const mergeDelivered = detail.entries.some(
-      (e) => JSON.stringify(e.model ?? e.data ?? null).includes('task_merge_closing'),
-    )
-    assert.equal(mergeDelivered, true, 'merge closing instruction must be delivered')
-    await kernel.waitForIdle(convId)
-    // Evidence-bearing submit under merge authorization completes the task in one step (no second manual click)
-    await waitFor(async () => {
-      const task = await taskFromAction(env, 'T-1')
-      return task.column === 'done' && task.mergePending === undefined
-    })
-    const merged = await taskFromAction(env, 'T-1')
-    assert.equal(merged.column, 'done')
-    assert.match(merged.submission?.branch ?? '', /feat\/t-1/)
-    const mergedConv = kernel.listConversations().find((c) => c.id === convId)
-    assert.equal(mergedConv!.tags.includes(TASK_ARCHIVED_TAG), true, 'one-step merge closure archives the conversation')
-  } finally {
-    await env.close()
-  }
-})
-
-test('tasks-int5: quiescent turn without submission marks stalled with ZERO auto-input; failed records lastError; conversation.deleted marks missing', { timeout: 60_000 }, async (t) => {
+test('tasks-int5: idle-not-submitted stays honest with ZERO auto-input; conversation.deleted marks missing; recreate delivers one composed briefing', { timeout: 60_000 }, async (t) => {
   const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int5-'))
   try {
     const { kernel } = env.app
     setRoutedResponses(env.faux, {
-      assignee: [fauxAssistantMessage('I did some work but will not submit yet.')],
+      assignee: [fauxAssistantMessage('I did some work but will not submit yet.'), fauxAssistantMessage('Standing by.')],
       planner: [fauxAssistantMessage('planner idle')],
       child: [fauxAssistantMessage('ok')],
     })
@@ -534,25 +398,22 @@ test('tasks-int5: quiescent turn without submission marks stalled with ZERO auto
     })) as { conversationId?: number }
     const convId = created.conversationId!
 
-    // Turn completes without submission -> honestly marked stalled on the board...
+    // Turn completes without submission: the card stays in_progress honestly (no fabricated
+    // state, no server-side stall bookkeeping) and NO automatic input is ever delivered
+    // to the human-owned conversation (AGENTS red line) — "idle, not submitted" is a
+    // pure frontend derivation over the main conversation facts.
     await kernel.waitForIdle(convId)
-    await waitFor(async () => {
-      const task = await taskFromAction(env, 'T-1')
-      return task.silenceState?.stalledAt !== undefined
-    })
-    const stalled = await taskFromAction(env, 'T-1')
-    assert.equal(stalled.column, 'in_progress')
-
-    // ...and NO automatic input was delivered to the human-owned conversation (AGENTS red line)
     await new Promise((r) => setTimeout(r, 600))
+    const task = await taskFromAction(env, 'T-1')
+    assert.equal(task.column, 'in_progress')
     const detail = await kernel.getConversationDetail(convId, { limit: 50 })
     const inputEntries = detail.entries.filter((e) => e.kind === 'helmx.input')
     assert.equal(inputEntries.length, 1, 'exactly the kickoff input, zero auto-nudge deliveries')
     const convNow = kernel.listConversations().find((c) => c.id === convId)
     assert.equal(convNow!.status !== 'working', true)
 
-    // Board projection reflects the stalled state for the frontend
-    assert.equal(boardDoc(env).tasks.some((task) => task.silenceState?.stalledAt !== undefined), true)
+    // Board projection keeps the card visible and running-healthy (idle main is not an error)
+    assert.equal(boardDoc(env).tasks.some((entry) => entry.id === 'T-1' && entry.column === 'in_progress'), true)
 
     // Deleting the bound conversation honestly marks conversationMissing
     await kernel.deleteConversation(convId)
@@ -578,100 +439,14 @@ test('tasks-int5: quiescent turn without submission marks stalled with ZERO auto
     const afterRecreate = await taskFromAction(env, 'T-1')
     assert.equal(afterRecreate.reworkCount, 1)
     assert.equal(afterRecreate.conversationMissing, undefined)
-  } finally {
-    await env.close()
-  }
-})
-
-test('tasks-int5b: a failed assignee turn records silenceState.lastError honestly', { timeout: 60_000 }, async (t) => {
-  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int5b-'))
-  try {
-    const { kernel } = env.app
-    env.faux.setResponses([
-      async () => {
-        throw new Error('faux model exploded')
-      },
-    ])
-    const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
-      title: 'Failing task',
-      brief: 'Do it. Acceptance: thing done.',
-    })) as { conversationId?: number }
-    const convId = created.conversationId!
-    await kernel.waitForIdle(convId).catch(() => undefined)
-    await waitFor(async () => {
-      const task = await taskFromAction(env, 'T-1')
-      return typeof task.silenceState?.lastError === 'string' && task.silenceState.lastError.length > 0
-    })
-    const task = await taskFromAction(env, 'T-1')
-    assert.equal(task.column, 'in_progress', 'failed turn must not fake any column change')
-  } finally {
-    await env.close()
-  }
-})
-
-test('tasks-int5c: a live background workflow run under the task conversation prevents the stalled mark', { timeout: 60_000 }, async (t) => {
-  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int5c-'))
-  try {
-    const { kernel } = env.app
-    setRoutedResponses(env.faux, {
-      assignee: [
-        (ctx) => {
-          // Kick off a background workflow run (valid DSL: pure-literal meta + top-level statements),
-          // then end the turn with plain text (no submission)
-          return fauxAssistantMessage(
-            [
-              fauxToolCall('SubagentWorkflow', {
-                script:
-                  'export const meta = { name: "bg-probe", description: "t" }\nconst a = await agent("probe child"); return { done: a }',
-                background: true,
-                label: 'bg-probe',
-              }),
-            ],
-            { stopReason: 'toolUse' },
-          )
-        },
-        fauxAssistantMessage('Background work delegated; not submitting yet.'),
-      ],
-      planner: [fauxAssistantMessage('planner idle')],
-      // Slow child answer keeps the background run (and its subtree entry) live long enough
-      // for the guard assertions to hit the in-flight window deterministically.
-      child: [
-        async () => {
-          await new Promise((r) => setTimeout(r, 1200))
-          return fauxAssistantMessage('child probe done')
-        },
-      ],
-    })
-    const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
-      title: 'Delegating task',
-      brief: 'Delegate background work. Acceptance: done.',
-    })) as { conversationId?: number }
-    const convId = created.conversationId!
-    await kernel.waitForIdle(convId)
-    // Deterministically wait until the in-flight fact is OBSERVABLE (child conversation working
-    // or the run record reporting running) before asserting the guard — under heavy load the
-    // run registration lags behind waitForIdle and an immediate probe would race (AGENTS: no timing bets).
-    await waitFor(async () => {
-      const childBusy = kernel
-        .listConversations()
-        .some((c) => c.parentConversationId === convId && (c.status === 'working' || c.status === 'blocked'))
-      if (childBusy) return true
-      const runs = (await kernel.plugins.invokeAction('builtin:workflow', 'runs', { conversationId: convId })) as {
-        runs?: Array<{ status?: string }>
-      }
-      return runs.runs?.some((r) => r.status === 'running') === true
-    })
-    // P3-B/P3-A: with the live subtree/run fact visible, the approve guard refuses (same scope
-    // as the stalled marking; unknown probe failures are conservatively refused too).
-    await assert.rejects(
-      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1', mergeAction: 'close_only' }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'task_still_running' && err.status === 409,
-    )
-    // After the background work fully settles, no stalled mark was ever written
-    // (live work is never misreported as silent) and the guard no longer blocks.
-    await new Promise((r) => setTimeout(r, 800))
-    const task = await taskFromAction(env, 'T-1')
-    assert.equal(task.silenceState?.stalledAt, undefined, 'must not mark stalled while workflow work is live')
+    // #36: recreate delivers exactly ONE composed briefing (brief + feedback), not kickoff + a second delivery
+    await kernel.waitForIdle(recreated.conversationId!)
+    const reproDetail = await kernel.getConversationDetail(recreated.conversationId!, { limit: 20 })
+    const inputs = reproDetail.entries.filter((e) => e.kind === 'helmx.input')
+    assert.equal(inputs.length, 1, 'recreate must deliver a single composed briefing')
+    const joined = JSON.stringify(inputs[0]?.model ?? inputs[0]?.data ?? '')
+    assert.match(joined, /Do the thing/)
+    assert.match(joined, /restart from scratch/)
   } finally {
     await env.close()
   }
@@ -747,144 +522,10 @@ test('tasks-int6: disable hides tools/UI/skill immediately while execution conve
   }
 })
 
-test('tasks-int7: planFirst real AskDoc approval gate (request tool blocks until answered; submit refused until approved)', { timeout: 60_000 }, async (t) => {
-  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int7-'))
-  try {
-    const { kernel } = env.app
-    setRoutedResponses(env.faux, {
-      assignee: [
-        (ctx) => {
-          const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
-          assert.ok(
-            meta.toolNames.includes('task_request_plan_approval'),
-            'assignee must see task_request_plan_approval on a planFirst task',
-          )
-          assert.match(meta.sectionsById[ACTIVE_TASK_SECTION_ID]!, /task_request_plan_approval/)
-          return fauxAssistantMessage(
-            [fauxToolCall('task_request_plan_approval', { plan: '1) probe repo 2) implement fix 3) run tests' })],
-            { stopReason: 'toolUse' },
-          )
-        },
-        (ctx) => {
-          const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
-          assert.match(meta.sectionsById[ACTIVE_TASK_SECTION_ID]!, /task_request_plan_approval/)
-          return fauxAssistantMessage(
-            [fauxToolCall('task_submit', { summary: 'implemented per approved plan', verification: 'tests green' })],
-            { stopReason: 'toolUse' },
-          )
-        },
-        fauxAssistantMessage('Handed in.'),
-      ],
-      planner: [fauxAssistantMessage('planner idle')],
-      child: [fauxAssistantMessage('ok')],
-    })
-    const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
-      title: 'Risky refactor',
-      brief: 'Refactor the auth path. Acceptance: tests pass.',
-      planFirst: true,
-    })) as { conversationId?: number }
-    const convId = created.conversationId!
-
-    // Gate proof before any approval: a direct submit is refused (same handler the model tool hits)
-    await assert.rejects(
-      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'submit', { taskId: 'T-1', summary: 'premature' }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'task_plan_not_approved' && err.status === 409,
-    )
-
-    // The approval tool call blocks the turn on a real pending Ask; answer it from the test side (same chain as HTTP)
-    let askId: string | undefined
-    await waitFor(async () => {
-      const pending = kernel.listAsks('pending').find((a) => a.conversationId === convId)
-      if (pending === undefined) return false
-      askId = pending.id
-      return true
-    })
-    assert.match(askId!, /^builtin:tasks:plan:T-1:/)
-    const pendingAsk = kernel.listAsks('pending').find((a) => a.id === askId)!
-    assert.equal(pendingAsk.fields[0]!.type, 'confirm')
-    await kernel.answerAsk(askId!, { approve: 'true' })
-
-    await kernel.waitForIdle(convId)
-    await waitFor(async () => (await taskFromAction(env, 'T-1')).column === 'in_review')
-    const task = await taskFromAction(env, 'T-1')
-    assert.equal(task.planApproval?.decision, 'approved')
-    assert.equal(task.planApproval?.askId, askId)
-    assert.equal(task.pendingPlanAskId, undefined, 'in-flight ask marker cleared after the ask settled')
-    assert.equal(task.submission?.summary, 'implemented per approved plan')
-  } finally {
-    await env.close()
-  }
-})
-
-test('tasks-int7b: rejected plan keeps the submit gate closed; the ask stays visible until answered', { timeout: 60_000 }, async (t) => {
-  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int7b-'))
-  try {
-    const { kernel } = env.app
-    setRoutedResponses(env.faux, {
-      assignee: [
-        fauxAssistantMessage(
-          [fauxToolCall('task_request_plan_approval', { plan: 'rewrite everything from scratch' })],
-          { stopReason: 'toolUse' },
-        ),
-        fauxAssistantMessage('User rejected; I will revise the plan and stay put.'),
-      ],
-      planner: [fauxAssistantMessage('planner idle')],
-      child: [fauxAssistantMessage('ok')],
-    })
-    const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
-      title: 'Contested change',
-      brief: 'Change the storage layer. Acceptance: migration passes.',
-      planFirst: true,
-    })) as { conversationId?: number }
-    const convId = created.conversationId!
-    let askId: string | undefined
-    await waitFor(async () => {
-      const pending = kernel.listAsks('pending').find((a) => a.conversationId === convId)
-      if (pending === undefined) return false
-      askId = pending.id
-      return true
-    })
-    await kernel.answerAsk(askId!, { approve: 'false' })
-    await kernel.waitForIdle(convId)
-    const task = await taskFromAction(env, 'T-1')
-    assert.equal(task.planApproval?.decision, 'rejected')
-    assert.equal(task.column, 'in_progress', 'rejection must not fake progress')
-    // Direct submit attempt still refused after rejection
-    await assert.rejects(
-      () =>
-        kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'submit', {
-          taskId: 'T-1',
-          summary: 'went ahead anyway',
-        }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'task_plan_not_approved' && err.status === 409,
-    )
-  } finally {
-    await env.close()
-  }
-})
-
-test('tasks-int8: dependency-referenced delete guard, force-disable drops the active_task section, recreate delivers ONE composed briefing', { timeout: 60_000 }, async (t) => {
+test('tasks-int8: force-disable drops the active_task section; the section carries no phantom plan/merge flags', { timeout: 60_000 }, async (t) => {
   const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int8-'))
   try {
     const { kernel } = env.app
-    // --- delete guard: T-1 still referenced by T-2 ---
-    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', { title: 'A', brief: 'a', autoStart: false })
-    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
-      title: 'B',
-      brief: 'b',
-      autoStart: false,
-      dependsOn: ['T-1'],
-    })
-    await assert.rejects(
-      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'delete', { taskId: 'T-1' }),
-      (err: unknown) =>
-        err instanceof HelmxError && err.code === 'task_dependency_referenced' && err.status === 409,
-    )
-    // Removing the reference unblocks deletion
-    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'update', { taskId: 'T-2', dependsOn: [] })
-    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'delete', { taskId: 'T-1' })
-
-    // --- force-disable while a task is running: the injected section disappears on the next turn ---
     const sections: Array<Record<string, string>> = []
     env.faux.setResponses(
       Array.from({ length: 8 }, () => async (ctx) => {
@@ -900,39 +541,19 @@ test('tasks-int8: dependency-referenced delete guard, force-disable drops the ac
     const convId = created.conversationId!
     await kernel.waitForIdle(convId)
     assert.ok(sections[0]![ACTIVE_TASK_SECTION_ID] !== undefined, 'section injected while enabled')
+    assert.doesNotMatch(sections[0]![ACTIVE_TASK_SECTION_ID]!, /plan-first|auto-merge|task_request_plan_approval/, 'deleted flags leave no phantom prompt residue')
     await kernel.plugins.disable(TASKS_PLUGIN_ID, { force: true })
     assert.equal(kernel.plugins.list().find((p) => p.id === TASKS_PLUGIN_ID)?.enabled, false)
     await kernel.submitInput(convId, 'still there?')
     await kernel.waitForIdle(convId)
     assert.equal(sections[sections.length - 1]![ACTIVE_TASK_SECTION_ID], undefined, 'no phantom section after disable')
     await kernel.plugins.enable(TASKS_PLUGIN_ID)
-
-    // --- recreate delivers both the fresh kickoff brief and the rework feedback ---
-    const repro = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
-      title: 'Recreate probe',
-      brief: 'Original brief body.',
-    })) as { task: TaskRecord; conversationId?: number }
-    await kernel.deleteConversation(repro.conversationId!)
-    await waitFor(async () => (await taskFromAction(env, repro.task.id)).conversationMissing === true)
-    const recreated = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'rework', {
-      taskId: repro.task.id,
-      feedback: 'please redo it carefully',
-      recreateConversation: true,
-    })) as { conversationId?: number }
-    await kernel.waitForIdle(recreated.conversationId!)
-    const detail = await kernel.getConversationDetail(recreated.conversationId!, { limit: 20 })
-    const inputs = detail.entries.filter((e) => e.kind === 'helmx.input')
-    // #36: recreate delivers exactly ONE composed briefing (brief + feedback), not kickoff + a second delivery
-    assert.equal(inputs.length, 1, 'recreate must deliver a single composed briefing')
-    const joined = JSON.stringify(inputs[0]?.model ?? inputs[0]?.data ?? '')
-    assert.match(joined, /Original brief body\./)
-    assert.match(joined, /please redo it carefully/)
   } finally {
     await env.close()
   }
 })
 
-test('tasks-int9: approve quiescence guard (still-running refused, explicit confirmStopped path) and restart zero-auto-delivery (reset intent preserved)', { timeout: 60_000 }, async (t) => {
+test('tasks-int9: approve quiescence guard (still-running refused, explicit confirmStopped path) and restart recovery (zero-input rollback, zero auto-delivery)', { timeout: 60_000 }, async (t) => {
   const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int9-'))
   try {
     const { kernel } = env.app
@@ -956,28 +577,25 @@ test('tasks-int9: approve quiescence guard (still-running refused, explicit conf
     })) as { conversationId?: number }
     const convId = created.conversationId!
 
-    // While the conversation is still working, close_only must be refused (409 task_still_running)
+    // While the main conversation is still working, approve must be refused (409 task_still_running)
     await waitFor(async () => {
       const conv = kernel.listConversations().find((c) => c.id === convId)
       return conv?.status === 'working'
     })
     await assert.rejects(
-      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1', mergeAction: 'close_only' }),
+      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1' }),
       (err: unknown) => err instanceof HelmxError && err.code === 'task_still_running' && err.status === 409,
     )
 
     // After the turn settles without submission: in_progress still refuses a bare close (no confirmStopped)
     await kernel.waitForIdle(convId)
     await assert.rejects(
-      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1', mergeAction: 'close_only' }),
+      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1' }),
       (err: unknown) => err instanceof HelmxError && err.code === 'task_invalid_column' && err.status === 409,
     )
 
-    // Restart recovery (#59 red-line scope): a reset conversation (user-cleared history) must NEVER
-    // receive an automatic re-delivery (user reset intent preserved); a task whose kickoff was
-    // already delivered is NOT mis-marked undelivered, and resume_kickoff refuses it explicitly.
-    await kernel.resetConversation(convId)
-    const inputsAfterReset = (await kernel.getConversationDetail(convId, { limit: 20 })).entries.filter(
+    // Delivered kickoff survives a restart untouched: no re-delivery, task stays in_progress
+    const inputsBefore = (await kernel.getConversationDetail(convId, { limit: 20 })).entries.filter(
       (e) => e.kind === 'helmx.input',
     ).length
     await kernel.plugins.disable(TASKS_PLUGIN_ID, { force: true })
@@ -986,20 +604,30 @@ test('tasks-int9: approve quiescence guard (still-running refused, explicit conf
     const afterRestart = await kernel.getConversationDetail(convId, { limit: 20 })
     assert.equal(
       afterRestart.entries.filter((e) => e.kind === 'helmx.input').length,
-      inputsAfterReset,
-      'restart must NOT add any input into the human-owned conversation (reset context intent preserved)',
+      inputsBefore,
+      'restart must NOT add any input into the human-owned conversation',
     )
-    const notMarked = await taskFromAction(env, 'T-1')
-    assert.equal(notMarked.kickoffUndelivered, undefined, 'already-delivered kickoff is never mis-marked')
-    await assert.rejects(
-      () => kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'resume_kickoff', { taskId: 'T-1' }),
-      (err: unknown) => err instanceof HelmxError && err.code === 'validation_error' && err.status === 400,
+    assert.equal((await taskFromAction(env, 'T-1')).column, 'in_progress', 'delivered kickoff keeps the card running')
+
+    // A user-reset conversation keeps its entry history (context reset ≠ entry wipe), so the
+    // startup recovery honestly leaves it alone: never re-delivers, never rolls the card back
+    // (the zero-helmx.input crash window is the only rollback trigger).
+    await kernel.resetConversation(convId)
+    await kernel.plugins.disable(TASKS_PLUGIN_ID, { force: true })
+    await kernel.plugins.enable(TASKS_PLUGIN_ID)
+    await new Promise((r) => setTimeout(r, 500))
+    const resetTask = await taskFromAction(env, 'T-1')
+    assert.equal(resetTask.column, 'in_progress', 'a reset-but-delivered conversation is not misjudged as a crash window')
+    const afterReset = await kernel.getConversationDetail(convId, { limit: 20 })
+    assert.equal(
+      afterReset.entries.filter((e) => e.kind === 'helmx.input').length,
+      inputsBefore,
+      'zero auto re-delivery (reset intent preserved)',
     )
 
-    // Explicit manual close of an in_progress (quiescent) task via confirmStamped proceeds to done
+    // Explicit manual close of an in_progress (quiescent) task via confirmStopped proceeds to done
     const closed = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', {
       taskId: 'T-1',
-      mergeAction: 'close_only',
       confirmStopped: true,
     })) as { task: TaskRecord }
     assert.equal(closed.task.column, 'done')
@@ -1008,7 +636,7 @@ test('tasks-int9: approve quiescence guard (still-running refused, explicit conf
   }
 })
 
-test('tasks-int10: create idempotency key, explicit merged declaration for merge closure, orphan conversation recovery', { timeout: 60_000 }, async (t) => {
+test('tasks-int10: create idempotency key and orphan conversation recovery', { timeout: 60_000 }, async (t) => {
   const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int10-'))
   try {
     const { kernel } = env.app
@@ -1016,15 +644,6 @@ test('tasks-int10: create idempotency key, explicit merged declaration for merge
       assignee: [
         fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'initial delivery' })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('initial handed in'),
-        fauxAssistantMessage(
-          [fauxToolCall('task_submit', { summary: 'honest failure', verification: 'merge FAILED: conflicts remain' })],
-          { stopReason: 'toolUse' },
-        ),
-        fauxAssistantMessage('honest failure reported'),
-        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'branch delivered', branch: 'feat/t-1' })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('branch handed over'),
-        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'merged cleanly', merged: true })], { stopReason: 'toolUse' }),
-        fauxAssistantMessage('merged and closed'),
         fauxAssistantMessage('standing by'),
       ],
       planner: [fauxAssistantMessage('planner idle')],
@@ -1047,37 +666,10 @@ test('tasks-int10: create idempotency key, explicit merged declaration for merge
     const listed = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'list', {})) as { total: number }
     assert.equal(listed.total, 1, 'exactly one card exists after a double-click')
 
-    // --- merge closure requires explicit evidence: honest failure text stays in_review ---
     const convId = first.conversationId!
     const taskId = first.task.id
     await kernel.waitForIdle(convId)
     await waitFor(async () => (await taskFromAction(env, taskId)).column === 'in_review')
-    // Authorize merge -> the assignee honestly reports a merge FAILURE (verification-only, no branch, no merged)
-    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId, mergeAction: 'merge_and_close' })
-    await kernel.waitForIdle(convId)
-    await waitFor(async () => {
-      const task = await taskFromAction(env, taskId)
-      return task.submission?.summary === 'honest failure' && task.column === 'in_review'
-    })
-    const afterFailure = await taskFromAction(env, taskId)
-    assert.equal(afterFailure.column, 'in_review', 'honest merge-failure verification must not auto-close the task')
-    assert.equal(afterFailure.mergePending, true, 'merge authorization stays pending until real evidence arrives')
-    // Reviewer re-issues the merge instruction; a branch-only delivery still proves nothing (#59-3)
-    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId, mergeAction: 'merge_and_close' })
-    await kernel.waitForIdle(convId)
-    await waitFor(async () => {
-      const task = await taskFromAction(env, taskId)
-      return task.submission?.summary === 'branch delivered'
-    })
-    const branchOnly = await taskFromAction(env, taskId)
-    assert.equal(branchOnly.column, 'in_review', 'branch alone must not prove the merge happened')
-    assert.equal(branchOnly.mergePending, true, 'merge authorization stays pending')
-    // One more re-issue; the explicit merged: true declaration completes in one step
-    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId, mergeAction: 'merge_and_close' })
-    await kernel.waitForIdle(convId)
-    await waitFor(async () => (await taskFromAction(env, taskId)).column === 'done')
-    const done = await taskFromAction(env, taskId)
-    assert.equal(done.column, 'done')
 
     // --- orphan conversation recovery: an unbound, zero-input, task-tagged conversation gets archived on restart ---
     const orphan = await kernel.createConversation({ title: 'Orphan', profileId: 'assistant', tags: ['task'] })
@@ -1089,7 +681,7 @@ test('tasks-int10: create idempotency key, explicit merged declaration for merge
     })
     const survivor = kernel.listConversations().find((c) => c.id === convId)
     assert.ok(survivor, 'bound execution conversation untouched by orphan recovery')
-    assert.equal(survivor!.tags.includes('task-archived'), true, 'bound done conversation keeps its archived tag')
+    assert.equal(survivor!.tags.includes(TASK_ACTIVE_TAG), true, 'bound in_review conversation keeps its active tag')
   } finally {
     await env.close()
   }
@@ -1132,64 +724,57 @@ test('tasks-int11: board badge projection tracks the lifecycle live; submit noti
     assert.equal(initial.badgeTone, 'neutral')
     assert.equal(initial.badgeSummary, undefined)
 
+    let submitCount = 0
     setRoutedResponses(env.faux, {
       assignee: [
-        (ctx) =>
-          fauxAssistantMessage([fauxToolCall('task_request_plan_approval', { plan: '1) probe 2) fix 3) verify' })], {
-            stopReason: 'toolUse',
-          }),
-        (ctx) => fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'First draft' })], { stopReason: 'toolUse' }),
+        // Turn 1: settles without submitting -> healthy running (idle main is not attention)
+        fauxAssistantMessage('Working on it; not submitting yet.'),
+        fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'First draft' })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('Handed in.'),
         (ctx) => {
           const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
           assert.match(meta.lastUserText, /<task_rework id="T-1">/)
+          submitCount += 1
           return fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'Second draft' })], {
             stopReason: 'toolUse',
           })
         },
         fauxAssistantMessage('Handed in again.'),
-      ],
-      planner: [fauxAssistantMessage('planner idle'), fauxAssistantMessage('planner idle again')],
-      // The only child-route turn is the deliberate subtree-error probe below (pure conversation-event path)
-      child: [
+        // Second rework: the turn fails -> the main conversation enters error state
         async () => {
-          throw new Error('child probe exploded')
+          submitCount += 1
+          throw new Error('faux model exploded on the second rework')
         },
       ],
+      planner: [fauxAssistantMessage('planner idle'), fauxAssistantMessage('planner idle again')],
+      child: [fauxAssistantMessage('ok')],
     })
 
-    // planFirst task: the pending approval Ask drives the badge purely via conversation events
     const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
       title: 'Badge lifecycle probe',
       brief: 'Drive the board badge across the lifecycle. Acceptance: badge fields stay honest.',
-      planFirst: true,
     })) as { conversationId?: number }
     const convId = created.conversationId!
 
-    let askId = ''
-    await waitFor(async () => {
-      const pending = kernel.listAsks('pending').find((a) => a.conversationId === convId)
-      if (pending === undefined) return false
-      askId = pending.id
-      return true
-    })
+    // Turn settles idle without a submission -> quiet accent dot with a running summary
+    await kernel.waitForIdle(convId)
     await waitFor(() => {
       const board = boardDoc(env)
       return (
-        board.attentionCount === 1 &&
-        board.reviewCount === 0 &&
-        board.runningCount === 0 &&
-        board.badgeTone === 'warn' &&
+        board.attentionCount === 0 &&
+        board.runningCount === 1 &&
+        board.hasRunning === true &&
+        board.badgeTone === 'accent' &&
         board.tasks.some((entry) => entry.id === 'T-1' && entry.column === 'in_progress')
       )
     })
-    assert.deepEqual(boardDoc(env).badgeSummary, { en: '1 needs attention', 'zh-CN': '1 个需处理' })
+    assert.deepEqual(boardDoc(env).badgeSummary, { en: '1 running', 'zh-CN': '1 个进行中' })
 
     // Badge-neutral churn: a planner conversation turn fires conversation.upsert frames but must NOT
     // rewrite the board doc (badge tuple unchanged -> zero SSE plugin.doc write amplification)
     const boardFramesBeforeChurn = boardDocFrames.length
     plannerConvId = (await kernel.createConversation({ title: 'Planner', profileId: 'assistant' })).id
-    await kernel.submitInput(plannerConvId, 'Chatter while a review-waiting task sits on the board')
+    await kernel.submitInput(plannerConvId, 'Chatter while a running task sits on the board')
     await kernel.waitForIdle(plannerConvId)
     await waitFor(() => plannerUpserts.length >= 2)
     assert.ok(boardDocFrames.length > 0, 'board doc must have been written during the lifecycle so far')
@@ -1199,8 +784,8 @@ test('tasks-int11: board badge projection tracks the lifecycle live; submit noti
       'badge-neutral conversation churn must not rewrite the board doc',
     )
 
-    // Approve the plan; the assignee turn resumes and hands in -> in_review badge + notification
-    await kernel.answerAsk(askId, { approve: 'true' })
+    // Submit -> in_review badge + notification
+    await kernel.submitInput(convId, 'Please hand it in now')
     await kernel.waitForIdle(convId)
     await waitFor(() => {
       const board = boardDoc(env)
@@ -1223,26 +808,22 @@ test('tasks-int11: board badge projection tracks the lifecycle live; submit noti
       return board.attentionCount === 1 && board.reviewCount === 1 && board.badgeTone === 'warn'
     })
 
-    // Pure conversation-event proof: a descendant of the task conversation enters error state
-    // (no task record mutation involved) -> the event subscription alone must escalate the
-    // badge tone warn -> error while the review counts stay honest
-    const childConv = await kernel.createConversation({
-      title: 'Subtree error probe',
-      profileId: 'assistant',
-      parentConversationId: convId,
+    // Pure conversation-event proof: the MAIN execution conversation enters error state on the
+    // second rework turn -> the event subscription alone escalates the badge tone warn -> error
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'rework', { taskId: 'T-1', feedback: 'One more polish round.' })
+    await kernel.waitForIdle(convId).catch(() => undefined)
+    await waitFor(() => {
+      const conv = kernel.listConversations().find((c) => c.id === convId)
+      return conv?.status === 'error'
     })
-    await kernel.submitInput(childConv.id, 'Explode please')
-    await kernel.waitForIdle(childConv.id).catch(() => undefined)
     await waitFor(() => {
       const board = boardDoc(env)
-      return board.attentionCount === 1 && board.reviewCount === 1 && board.runningCount === 0 && board.badgeTone === 'error'
+      return board.attentionCount === 1 && board.runningCount === 0 && board.badgeTone === 'error'
     })
-    assert.deepEqual(boardDoc(env).badgeSummary, { en: '1 awaiting review', 'zh-CN': '1 个待验收' })
-    const childSummary = kernel.listConversations().find((c) => c.id === childConv.id)
-    assert.equal(childSummary?.status, 'error', 'the probe child conversation must really be in error state')
+    assert.deepEqual(boardDoc(env).badgeSummary, { en: '1 needs attention', 'zh-CN': '1 个需处理' })
 
-    // Approve close_only: board goes fully quiet (done cards carry no badge weight)
-    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1', mergeAction: 'close_only' })
+    // Explicit manual close via confirmStopped: board goes fully quiet (done cards carry no badge weight)
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1', confirmStopped: true })
     await waitFor(() => {
       const board = boardDoc(env)
       return (
@@ -1274,13 +855,13 @@ test('tasks-int12: bugfix round — update null clears, idempotency on non-launc
     const { kernel } = env.app
     setRoutedResponses(env.faux, {
       assignee: [
-        // T-5 (dead-card probe): submit into review, then stand by
+        // T-3 (dead-card probe): submit into review, then stand by
         fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'dead-card draft' })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('standing by'),
-        // T-6 (approve idempotence probe)
+        // T-4 (approve idempotence probe)
         fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'idempotent-approve draft' })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('standing by'),
-        // T-7 (rework redaction probe): first draft, then post-rework draft
+        // T-5 (rework redaction probe): first draft, then post-rework draft
         fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'redaction probe draft' })], { stopReason: 'toolUse' }),
         fauxAssistantMessage('standing by'),
         fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'fixed per feedback' })], { stopReason: 'toolUse' }),
@@ -1307,7 +888,7 @@ test('tasks-int12: bugfix round — update null clears, idempotency on non-launc
     assert.equal(cleared.task.project, undefined, 'project cleared by explicit null')
     assert.equal(cleared.task.cwd, undefined, 'cwd cleared by explicit null')
 
-    // --- 2) idempotency key persists on non-launch paths (autoStart disabled AND dependency-blocked) ---
+    // --- 2) idempotency key persists on non-launch paths (autoStart disabled) ---
     const keptFirst = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
       title: 'Kept in backlog',
       brief: 'no auto start',
@@ -1322,22 +903,7 @@ test('tasks-int12: bugfix round — update null clears, idempotency on non-launc
     })) as { task: TaskRecord }
     assert.equal(keptReplay.task.id, keptFirst.task.id, 'idempotent replay on the autoStart=false path returns the same task')
 
-    const blockedFirst = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
-      title: 'Dependency blocked',
-      brief: 'waits for T-1',
-      dependsOn: ['T-1'],
-      idempotencyKey: 'blocked-key-1',
-    })) as { task: TaskRecord }
-    assert.equal(blockedFirst.task.column, 'backlog', 'dependency-blocked create stays in backlog')
-    const blockedReplay = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
-      title: 'Dependency blocked',
-      brief: 'waits for T-1',
-      dependsOn: ['T-1'],
-      idempotencyKey: 'blocked-key-1',
-    })) as { task: TaskRecord }
-    assert.equal(blockedReplay.task.id, blockedFirst.task.id, 'idempotent replay on the dependency-blocked path returns the same task')
-
-    // --- 3) launch failure BEFORE conversation creation rolls the two-phase placeholder back ---
+    // --- 3) launch failure BEFORE conversation creation leaves the card in backlog ---
     const ghost = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
       title: 'Ghost node',
       brief: 'remote node without a paired cwd',
@@ -1350,9 +916,8 @@ test('tasks-int12: bugfix round — update null clears, idempotency on non-launc
       'remote node without cwd must be rejected by resolveCoordinates',
     )
     const ghostAfter = await taskFromAction(env, ghost.task.id)
-    assert.equal(ghostAfter.column, 'backlog', 'placeholder rolled back after a pre-creation launch failure')
+    assert.equal(ghostAfter.column, 'backlog', 'task stays in backlog after a pre-creation launch failure')
     assert.equal(ghostAfter.conversationId, undefined, 'no conversation was ever bound')
-    assert.ok(ghostAfter.silenceState?.lastError !== undefined && ghostAfter.silenceState.lastError !== '', 'lastError recorded for retry diagnostics')
 
     // --- 4) dead card: bound conversation deleted -> task delete is the honest exit ---
     const dead = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
@@ -1368,21 +933,19 @@ test('tasks-int12: bugfix round — update null clears, idempotency on non-launc
     })) as { deleted: boolean }
     assert.equal(deletedDead.deleted, true, 'a task whose conversation is gone can be deleted (no zombie cards)')
 
-    // --- 5) approve close_only on an already-done task is idempotent ---
+    // --- 5) approve on an already-done task is idempotent ---
     const once = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
       title: 'Approve twice',
-      brief: 'double approval must not error or double-fire downstream',
+      brief: 'double approval must not error',
     })) as { task: TaskRecord; conversationId: number }
     await kernel.waitForIdle(once.conversationId)
     await waitFor(async () => (await taskFromAction(env, once.task.id)).column === 'in_review')
-    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: once.task.id, mergeAction: 'close_only' })
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: once.task.id })
     await waitFor(async () => (await taskFromAction(env, once.task.id)).column === 'done')
     const again = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', {
       taskId: once.task.id,
-      mergeAction: 'close_only',
-    })) as { task: TaskRecord; unblockedTaskIds: string[]; autoStartedTaskIds: string[] }
-    assert.equal(again.task.column, 'done', 'repeat close_only on done returns the current facts')
-    assert.deepEqual(again.autoStartedTaskIds, [], 'repeat approval never re-fires downstream auto-start')
+    })) as { task: TaskRecord }
+    assert.equal(again.task.column, 'done', 'repeat approve on done returns the current facts')
 
     // --- 6) update to a non-assignable profile is rejected (same rule as create) ---
     await kernel.profiles.save({ id: 'sys-role', name: 'sys-role', humanSelectable: false })

@@ -1,8 +1,8 @@
 /**
  * builtin:tasks 共享契约：常量、数据模型与边界强校验。
  *
- * Slice 2（后端）与 Slice 3（前端）唯一对齐事实源——字段、语义与默认值
- * 严格锁定 #1 板书共享契约；新增字段必须双方同步。看板投影携带徽标聚合
+ * 纯台账定位：任务卡 + 1:1 独立顶层执行会话 + 人工验收闭环（submit/approve/rework）。
+ * Slice 2（后端）与 Slice 3（前端）唯一对齐事实源；看板投影携带徽标聚合
  * （attention/review/running/tone/summary）与 sidebarItem 徽标声明常量。
  */
 import { HelmxError, type ConversationSummary, type LocalizedText } from '@helmx/protocol'
@@ -40,22 +40,6 @@ export interface TaskSubmission {
   submittedAt: number
 }
 
-export interface TaskSilenceState {
-  stalledAt?: number
-  lastError?: string
-}
-
-/**
- * planFirst 任务的真实方案审批记录（经 task_request_plan_approval -> ctx.host.createAsk
- * 的 confirm Ask 由用户明确批准/拒绝；task_submit 前置门禁校验 approved）。
- */
-export interface TaskPlanApproval {
-  decision: 'approved' | 'rejected'
-  askedAt: number
-  decidedAt: number
-  askId: string
-}
-
 export interface TaskRecord {
   id: string
   title: string
@@ -67,27 +51,14 @@ export interface TaskRecord {
   cwd?: string
   model?: string
   thinkingLevel?: string
-  planFirst?: boolean
-  autoMerge?: boolean
-  dependsOn: string[]
-  autoStartOnUnblock?: boolean
   originConversationId?: number
   conversationId?: number
   conversationMissing?: boolean
   submission?: TaskSubmission
   reworkCount: number
   lastReworkFeedback?: string
-  mergePending?: boolean
-  /** 任务书投递前落盘的持久标记（投递成功后清除；重启残留即「开工未送达」事实源）。 */
-  kickoffPending?: boolean
-  /** 重启恢复呈现态：开工任务书未送达，等待用户显式继续（resume_kickoff），绝不自动投递。 */
-  kickoffUndelivered?: boolean
-  planApproval?: TaskPlanApproval
-  /** 发起中的方案审批 Ask ID（新一轮发起前先 cancelAsk 旧的，防重试遗留 pending 卡）。 */
-  pendingPlanAskId?: string
   /** 建单幂等键（同 key 的重复 create 返回已建任务，防双击双开）。 */
   createKey?: string
-  silenceState?: TaskSilenceState
   archived?: boolean
   createdAt: number
   updatedAt: number
@@ -101,15 +72,12 @@ export interface TaskStoreDoc {
   tasks: Record<string, TaskRecord>
 }
 
-/** 公开看板投影的单张卡片：任务记录 + 依赖真值（板书截断后 UI 无需自算 blockedBy）。 */
-export type TaskBoardEntry = TaskRecord & { blockedBy: string[] }
-
 /** 看板徽标色调：error（会话缺失/报错）> warn（需处理）> accent（健康在跑）> neutral。 */
 export type TaskBoardBadgeTone = 'error' | 'warn' | 'accent' | 'neutral'
 
 /** 公开看板投影 doc 形状。 */
 export interface TaskBoardDoc {
-  tasks: TaskBoardEntry[]
+  tasks: TaskRecord[]
   updatedAt: number
   /** 当前需要人工介入的任务数：全部未归档 in_review + 携任一诚实注意信号的未归档 in_progress。 */
   attentionCount: number
@@ -141,13 +109,11 @@ export const TASK_BOARD_SIDEBAR_BADGE = {
 export interface TasksConfig {
   defaultPlannerProfile: string
   defaultAssigneeProfile: string
-  maxConcurrentTasks: number
 }
 
 export const DEFAULT_TASKS_CONFIG: TasksConfig = {
   defaultPlannerProfile: 'assistant',
   defaultAssigneeProfile: 'assistant',
-  maxConcurrentTasks: 0,
 }
 
 /** 任务 ID：系统单调分配 `T-<seq>`；输入按通用安全字符集校验（防穿越），查无显式 not_found。 */
@@ -156,64 +122,6 @@ export const TASK_ID_RE = /^[A-Za-z0-9_-]{1,64}$/
 // ---------------------------------------------------------------------------
 // 边界守卫与纯校验函数
 // ---------------------------------------------------------------------------
-
-/** 环防御子树遍历器：一次性构建 id/邻接表，可对多个根节点复用（遍历含根自身）。 */
-function makeSubtreeWalker(
-  all: readonly ConversationSummary[],
-): (rootId: number, visit: (conv: ConversationSummary) => void) => void {
-  const byId = new Map<number, ConversationSummary>()
-  const childrenOf = new Map<number, number[]>()
-  for (const conv of all) {
-    byId.set(conv.id, conv)
-    if (conv.parentConversationId === undefined) continue
-    const siblings = childrenOf.get(conv.parentConversationId)
-    if (siblings === undefined) childrenOf.set(conv.parentConversationId, [conv.id])
-    else siblings.push(conv.id)
-  }
-  return (rootId, visit) => {
-    const seen = new Set<number>()
-    const queue = [rootId]
-    while (queue.length > 0) {
-      const id = queue.shift()!
-      if (seen.has(id)) continue
-      seen.add(id)
-      const conv = byId.get(id)
-      if (conv !== undefined) visit(conv)
-      for (const child of childrenOf.get(id) ?? []) queue.push(child)
-    }
-  }
-}
-
-/** 单次子树扫描同时收集注意事实：error = 子树（含根）存在报错态会话；blockedOrAsk = 存在 blocked 或待答 Ask 会话。 */
-function collectAttentionFlags(
-  walk: (rootId: number, visit: (conv: ConversationSummary) => void) => void,
-  rootId: number,
-): { error: boolean; blockedOrAsk: boolean } {
-  let error = false
-  let blockedOrAsk = false
-  walk(rootId, (conv) => {
-    if (conv.status === 'error') error = true
-    if (conv.status === 'blocked' || conv.pendingAskCount > 0) blockedOrAsk = true
-  })
-  return { error, blockedOrAsk }
-}
-
-/** 会话整棵后代子树是否存在 working / blocked（沿 parentConversationId 遍历，带环防御）。 */
-export function subtreeHasWorkingOrBlocked(rootId: number, all: readonly ConversationSummary[]): boolean {
-  let found = false
-  makeSubtreeWalker(all)(rootId, (conv) => {
-    if (!found && (conv.status === 'working' || conv.status === 'blocked')) found = true
-  })
-  return found
-}
-
-/** 注意口径子树扫描（含根自身、带环防御）：error（报错态）/ blockedOrAsk（blocked 或待答）。 */
-export function subtreeAttentionFlags(
-  rootId: number,
-  all: readonly ConversationSummary[],
-): { error: boolean; blockedOrAsk: boolean } {
-  return collectAttentionFlags(makeSubtreeWalker(all), rootId)
-}
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
@@ -242,18 +150,9 @@ export function resolveTasksConfig(raw: Record<string, unknown>): TasksConfig {
     }
     return fallback
   }
-  let maxConcurrentTasks = DEFAULT_TASKS_CONFIG.maxConcurrentTasks
-  if ('maxConcurrentTasks' in raw && raw.maxConcurrentTasks !== undefined) {
-    const v = raw.maxConcurrentTasks
-    if (typeof v !== 'number' || !Number.isInteger(v) || !Number.isFinite(v) || v < 0 || v > 50) {
-      throw err(`字段 maxConcurrentTasks 必须是 0..50 整数，0 表示不限制（实际：${String(v)}）`)
-    }
-    maxConcurrentTasks = v
-  }
   return {
     defaultPlannerProfile: readProfileId('defaultPlannerProfile'),
     defaultAssigneeProfile: readProfileId('defaultAssigneeProfile'),
-    maxConcurrentTasks,
   }
 }
 
@@ -301,26 +200,6 @@ function assertTaskSubmission(value: unknown, where: string): TaskSubmission {
   return value as unknown as TaskSubmission
 }
 
-function assertTaskSilenceState(value: unknown, where: string): TaskSilenceState {
-  if (!isJsonObject(value)) {
-    throw new HelmxError('tasks_doc_corrupt', `${where}.silenceState 结构非法`, 500, { pluginId: TASKS_PLUGIN_ID })
-  }
-  for (const key of ['stalledAt'] as const) {
-    const v = value[key]
-    if (v !== undefined && !isFiniteTime(v)) {
-      throw new HelmxError('tasks_doc_corrupt', `${where}.silenceState.${key} 必须是有限时间戳`, 500, {
-        pluginId: TASKS_PLUGIN_ID,
-      })
-    }
-  }
-  if (value.lastError !== undefined && typeof value.lastError !== 'string') {
-    throw new HelmxError('tasks_doc_corrupt', `${where}.silenceState.lastError 必须是字符串`, 500, {
-      pluginId: TASKS_PLUGIN_ID,
-    })
-  }
-  return value as TaskSilenceState
-}
-
 /** 单条任务记录边界强校验（读档 / 写档共用；非法显式抛错，绝不静默丢弃字段）。 */
 export function assertTaskRecord(value: unknown): TaskRecord {
   if (!isJsonObject(value)) {
@@ -351,9 +230,6 @@ export function assertTaskRecord(value: unknown): TaskRecord {
       pluginId: TASKS_PLUGIN_ID,
     })
   }
-  if (!Array.isArray(value.dependsOn) || value.dependsOn.some((d) => typeof d !== 'string')) {
-    throw new HelmxError('tasks_doc_corrupt', `${where}.dependsOn 必须是字符串数组`, 500, { pluginId: TASKS_PLUGIN_ID })
-  }
   if (typeof value.reworkCount !== 'number' || !Number.isInteger(value.reworkCount) || value.reworkCount < 0) {
     throw new HelmxError('tasks_doc_corrupt', `${where}.reworkCount 必须是非负整数`, 500, { pluginId: TASKS_PLUGIN_ID })
   }
@@ -362,13 +238,13 @@ export function assertTaskRecord(value: unknown): TaskRecord {
       pluginId: TASKS_PLUGIN_ID,
     })
   }
-  for (const key of ['project', 'nodeId', 'cwd', 'model', 'thinkingLevel', 'lastReworkFeedback', 'pendingPlanAskId', 'createKey'] as const) {
+  for (const key of ['project', 'nodeId', 'cwd', 'model', 'thinkingLevel', 'lastReworkFeedback', 'createKey'] as const) {
     const v = value[key]
     if (v !== undefined && typeof v !== 'string') {
       throw new HelmxError('tasks_doc_corrupt', `${where}.${key} 必须是字符串`, 500, { pluginId: TASKS_PLUGIN_ID })
     }
   }
-  for (const key of ['planFirst', 'autoMerge', 'autoStartOnUnblock', 'conversationMissing', 'mergePending', 'archived', 'kickoffPending', 'kickoffUndelivered'] as const) {
+  for (const key of ['conversationMissing', 'archived'] as const) {
     const v = value[key]
     if (v !== undefined && typeof v !== 'boolean') {
       throw new HelmxError('tasks_doc_corrupt', `${where}.${key} 必须是布尔值`, 500, { pluginId: TASKS_PLUGIN_ID })
@@ -387,20 +263,6 @@ export function assertTaskRecord(value: unknown): TaskRecord {
     }
   }
   if (value.submission !== undefined) assertTaskSubmission(value.submission, where)
-  if (value.silenceState !== undefined) assertTaskSilenceState(value.silenceState, where)
-  const planApproval = value.planApproval
-  if (planApproval !== undefined) {
-    if (
-      !isJsonObject(planApproval) ||
-      (planApproval.decision !== 'approved' && planApproval.decision !== 'rejected') ||
-      typeof planApproval.askId !== 'string' ||
-      planApproval.askId.trim() === '' ||
-      !isFiniteTime(planApproval.askedAt) ||
-      !isFiniteTime(planApproval.decidedAt)
-    ) {
-      throw new HelmxError('tasks_doc_corrupt', `${where}.planApproval 结构非法`, 500, { pluginId: TASKS_PLUGIN_ID })
-    }
-  }
   return value as unknown as TaskRecord
 }
 
@@ -438,96 +300,36 @@ export function asConversationDeletedEvent(payload: unknown): number | undefined
   return isPosIntId(conversationId) ? conversationId : undefined
 }
 
-/**
- * 依赖环检测（DFS 三色标记）：返回环路径（首尾同 ID，如 ['T-1','T-2','T-1']）或 null。
- * 引用不存在的任务 ID 不算环（由调用方先行存在性校验）。
- */
-export function detectDependencyCycle(tasks: Record<string, TaskRecord>): string[] | null {
-  const color = new Map<string, 1 | 2>()
-  const path: string[] = []
-  const visit = (id: string): string[] | null => {
-    const c = color.get(id)
-    if (c === 2) return null
-    if (c === 1) {
-      const start = path.indexOf(id)
-      return [...path.slice(start < 0 ? 0 : start), id]
-    }
-    color.set(id, 1)
-    path.push(id)
-    const record = tasks[id]
-    if (record !== undefined) {
-      for (const dep of record.dependsOn) {
-        const cycle = visit(dep)
-        if (cycle !== null) return cycle
-      }
-    }
-    path.pop()
-    color.set(id, 2)
-    return null
-  }
-  for (const id of Object.keys(tasks)) {
-    const cycle = visit(id)
-    if (cycle !== null) return cycle
-  }
-  return null
-}
-
-/** 未 done 的前置依赖 ID 列表（阻塞开工的任务）。 */
-export function blockedDependenciesOf(task: Pick<TaskRecord, 'dependsOn'>, tasks: Record<string, TaskRecord>): string[] {
-  return task.dependsOn.filter((dep) => tasks[dep]?.column !== 'done')
-}
-
-/** 会话事实快照（投影专用）：byId 查缺失 + 复用同一子树遍历器扫注意事实。 */
-interface TaskConversationFacts {
-  byId: Map<number, ConversationSummary>
-  attentionOf(rootId: number): { error: boolean; blockedOrAsk: boolean }
-}
-
-function makeTaskConversationFacts(
-  conversations: ReadonlyArray<ConversationSummary> | undefined,
-): TaskConversationFacts | undefined {
-  if (conversations === undefined) return undefined
-  const walk = makeSubtreeWalker(conversations)
-  return {
-    byId: new Map(conversations.map((conv) => [conv.id, conv] as const)),
-    attentionOf: (rootId) => collectAttentionFlags(walk, rootId),
-  }
-}
-
-/** 绑定会话缺失或子树（含根）报错态：注意卡里的最高严重度事实（error 色）。 */
-function taskConversationMissingOrErrored(task: TaskRecord, facts?: TaskConversationFacts): boolean {
+/** 绑定会话缺失或主会话报错态：注意卡里的最高严重度事实（error 色）。 */
+function taskConversationMissingOrErrored(
+  task: TaskRecord,
+  conversations?: ReadonlyArray<ConversationSummary>,
+): boolean {
   if (task.conversationMissing === true) return true
-  if (facts === undefined || task.conversationId === undefined) return false
-  const conv = facts.byId.get(task.conversationId)
-  if (conv === undefined) return true
-  return facts.attentionOf(conv.id).error
+  if (conversations === undefined || task.conversationId === undefined) return false
+  const conv = conversations.find((c) => c.id === task.conversationId)
+  return conv === undefined || conv.status === 'error'
 }
 
 /**
- * 单卡诚实注意判定（未归档）：in_review 整列等待人工验收；in_progress 按信号逐条判定
- * （会话缺失/报错、子树 blocked 或待答 Ask、stalledAt、lastError、开工未送达、方案审批待答）。
+ * 单卡诚实注意判定（未归档）：in_review 整列等待人工验收；in_progress 只看主会话事实
+ * （conversationMissing / 会话缺失 / error / blocked / 待答 Ask → 需处理，否则健康在跑）。
  */
 function classifyTaskAttention(
   task: TaskRecord,
-  facts?: TaskConversationFacts,
+  conversations?: ReadonlyArray<ConversationSummary>,
 ): { attention: boolean; error: boolean } {
   if (task.column === 'in_review') {
-    return { attention: true, error: taskConversationMissingOrErrored(task, facts) }
+    return { attention: true, error: taskConversationMissingOrErrored(task, conversations) }
   }
   if (task.column !== 'in_progress') return { attention: false, error: false }
-  const error = taskConversationMissingOrErrored(task, facts)
-  const blockedOrAsk =
-    facts !== undefined &&
-    task.conversationId !== undefined &&
-    facts.attentionOf(task.conversationId).blockedOrAsk
-  const attention =
-    error ||
-    blockedOrAsk ||
-    task.silenceState?.stalledAt !== undefined ||
-    (task.silenceState?.lastError !== undefined && task.silenceState.lastError !== '') ||
-    task.kickoffUndelivered === true ||
-    (task.pendingPlanAskId !== undefined && task.planApproval === undefined)
-  return { attention, error }
+  const error = taskConversationMissingOrErrored(task, conversations)
+  const conv =
+    conversations !== undefined && task.conversationId !== undefined
+      ? conversations.find((c) => c.id === task.conversationId)
+      : undefined
+  const blockedOrAsk = conv !== undefined && (conv.status === 'blocked' || conv.pendingAskCount > 0)
+  return { attention: error || blockedOrAsk, error }
 }
 
 /** 徽标双语摘要：待验收 + 其他需处理组合；仅健康在跑时给进行中；全静默为 undefined。 */
@@ -566,11 +368,9 @@ export function taskBoardBadgeKey(
   return `${doc.attentionCount}|${doc.reviewCount}|${doc.runningCount}|${doc.hasRunning}|${doc.badgeTone}`
 }
 
-/** 公开看板投影：全部未归档任务 + 最近 N 条已归档 / 已完成历史（updatedAt 降序）。
- * 每卡附依赖真值 blockedBy（未 done 的前置 ID）：板书截断后前端无法看到被截掉的
- * 依赖卡状态，必须由投影携带真值，杜绝 UI 误判「未知依赖」为已完成。
+/** 公开看板投影：全部未归档任务 + 最近 N 条已归档 / 已完成历史（createdAt 降序）。
  * 徽标聚合（attention/review/running/tone/summary）只统计未归档任务；`conversations`
- * 可选——提供时按实时会话事实（缺失 / error / blocked / 待答 Ask，含子树）诚实判定，
+ * 可选——提供时按主会话实时事实（缺失 / error / blocked / 待答 Ask）诚实判定，
  * 缺省时仅按记录内持久信号判定（纯单测无会话源仍可用）。 */
 export function projectBoardDoc(
   store: TaskStoreDoc,
@@ -583,14 +383,9 @@ export function projectBoardDoc(
     else active.push(record)
   }
   doneHistory.sort((a, b) => b.updatedAt - a.updatedAt || (a.id < b.id ? 1 : -1))
-  const selected = [...active, ...doneHistory.slice(0, TASK_BOARD_DONE_HISTORY_LIMIT)]
-  selected.sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1))
-  const tasks = selected.map((record) => ({
-    ...record,
-    blockedBy: record.dependsOn.filter((dep) => store.tasks[dep]?.column !== 'done'),
-  }))
+  const tasks = [...active, ...doneHistory.slice(0, TASK_BOARD_DONE_HISTORY_LIMIT)]
+  tasks.sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1))
 
-  const facts = makeTaskConversationFacts(conversations)
   let attentionCount = 0
   let reviewCount = 0
   let runningCount = 0
@@ -599,11 +394,11 @@ export function projectBoardDoc(
     if (record.column === 'in_review') {
       reviewCount += 1
       attentionCount += 1
-      if (taskConversationMissingOrErrored(record, facts)) errorSeverity = true
+      if (taskConversationMissingOrErrored(record, conversations)) errorSeverity = true
       continue
     }
     if (record.column !== 'in_progress') continue
-    const { attention, error } = classifyTaskAttention(record, facts)
+    const { attention, error } = classifyTaskAttention(record, conversations)
     if (attention) {
       attentionCount += 1
       if (error) errorSeverity = true

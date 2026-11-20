@@ -7,8 +7,9 @@
  *   Swarm 自主编排决策权；
  * - 无静态 dependencies：空闲时不阻塞 builtin:workflow / builtin:swarm 停用；
  * - 单真源私有持久 doc `records` 派生公开瞬态投影 `board`（防 2 MiB 写放大）；
- * - 纯事件驱动诚实标记（turn_settled 静止未交卷仅标 stalledAt 供看板呈现，
- *   零投递零定时器零强杀——human-owned 会话红线：绝不自动轻推，由用户显式继续）；
+ * - 纯事件驱动诚实标记（conversation.deleted 落 conversationMissing；主会话
+ *   error/blocked/待答 Ask 由投影按实时事实折进徽标），零投递零定时器零强杀——
+ *   human-owned 会话红线：绝不自动轻推，由用户显式继续；
  * - 受管技能 `tasks` 随启停自举/消失，赋予任意 Profile 需求拆解与派单能力。
  */
 import {
@@ -31,7 +32,7 @@ import {
   type TaskStoreDoc,
   type TasksConfig,
 } from './tasks/contracts.js'
-import { createTasksStore, recoverInterruptedStartups, recoverKickoffMarkers } from './tasks/store.js'
+import { createTasksStore } from './tasks/store.js'
 import { registerTasksActions, type TasksRuntime } from './tasks/actions.js'
 import { onTasksConversationDeleted, registerTasksHooks } from './tasks/hooks.js'
 import { registerTasksUi } from './tasks/ui.js'
@@ -42,8 +43,8 @@ export function createTasksPlugin(): PluginDefinition {
     id: TASKS_PLUGIN_ID,
     name: { en: 'Task Board', 'zh-CN': '任务看板' },
     description: {
-      en: 'Delegate well-defined work units to independent task execution conversations tracked on a 4-column board: dependency chains with auto-start, event-driven silence recovery, submit/approve/rework review loops, and a managed planning skill.',
-      'zh-CN': '把定义清晰的工作单元派发到独立任务执行会话并在四列看板上跟踪：依赖链自动接棒、事件驱动防沉默、交卷/验收/返工闭环与受管规划技能。',
+      en: 'Delegate well-defined work units to independent task execution conversations tracked on a 4-column board: submit/approve/rework review loops and a managed planning skill.',
+      'zh-CN': '把定义清晰的工作单元派发到独立任务执行会话并在四列看板上跟踪：交卷/验收/返工闭环与受管规划技能。',
     },
     icon: 'check-square',
     version: '0.1.0',
@@ -175,18 +176,6 @@ export function createTasksPlugin(): PluginDefinition {
           },
           default: 'assistant',
         },
-        maxConcurrentTasks: {
-          type: 'number',
-          label: { en: 'Max concurrent tasks', 'zh-CN': '并发开工上限' },
-          description: {
-            en: 'Maximum simultaneously in-progress tasks (integer 0..50; 0 means unlimited)',
-            'zh-CN': '同时处于进行中的任务数上限（整数 0..50；0 表示不限制）',
-          },
-          default: 0,
-          minimum: 0,
-          maximum: 50,
-          integer: true,
-        },
       })
 
       ctx.service({
@@ -209,20 +198,53 @@ export function createTasksPlugin(): PluginDefinition {
           getConfig()
           store.read()
           await ctx.host.skills.ensureSkill(readTasksSkillAsset())
-          // 先置活再执行恢复三块（回滚 / 孤儿收口 / 任务书补投）：补投触发的首回合
+          // 先置活再执行恢复两块（启动中断回滚 / 孤儿会话收口）：补投触发的首回合
           // 必须命中 before_turn 的 isActive() 门，携带 <active_task> 段落与正确的工具隔离。
           active = true
-          // 启动中断恢复（两阶段窗口）：
-          // a) 占位后、绑定前重启 -> in_progress 无会话：诚实回滚 backlog 并记 lastError（绝不假装在跑）；
-          // b) 绑定后、任务书接纳前重启 -> 已绑会话但零 helmx.input：补投任务书
-          //    （requestId 按会话幂等，重复补投被内核 dedup，安全）。
-          const interruptedIds = await runtime.store.enqueueMutation((draft) =>
-            recoverInterruptedStartups(draft),
-          )
-          if (interruptedIds.length > 0) {
+          // 启动中断恢复（单会话原子化启动的崩溃窗口，诚实回滚绝不自动重投）：
+          // a) in_progress 未绑定会话（recreate 绑定前崩溃）→ 诚实回滚 backlog；
+          // b) 已绑定会话但零 helmx.input（任务书投递前崩溃）→ 回滚 backlog + 会话贴
+          //    task-archived 保留现场（绝不向 human-owned 会话自动提交任何输入，
+          //    用户 reset 清空的意图同样得到尊重）。
+          const interrupted = new Map<string, number | undefined>()
+          for (const task of Object.values(runtime.store.read().tasks)) {
+            if (task.column !== 'in_progress') continue
+            if (task.conversationId === undefined) {
+              interrupted.set(task.id, undefined)
+              continue
+            }
+            try {
+              const detail = await ctx.host.getConversationDetail(task.conversationId, { limit: 50 })
+              if (!detail.entries.some((e) => e.kind === 'helmx.input')) {
+                interrupted.set(task.id, task.conversationId)
+              }
+            } catch (err) {
+              if (err instanceof HelmxError && err.code === 'not_found') continue
+              reportError(`启动恢复检查任务 ${task.id} 绑定会话 #${task.conversationId} 失败`, err)
+            }
+          }
+          if (interrupted.size > 0) {
+            await runtime.store.enqueueMutation((draft) => {
+              for (const id of interrupted.keys()) {
+                const task = draft.tasks[id]
+                if (task === undefined || task.column !== 'in_progress') continue
+                task.column = 'backlog'
+                delete task.conversationId
+                delete task.startedAt
+                delete task.conversationMissing
+                task.updatedAt = Date.now()
+              }
+            })
             await runtime.flushRecords()
+            for (const conversationId of interrupted.values()) {
+              if (conversationId === undefined) continue
+              const conv = readConversationOrUndefined(conversationId)
+              if (conv === undefined) continue
+              const nextTags = [...conv.tags.filter((tg) => tg !== TASK_ACTIVE_TAG), TASK_ARCHIVED_TAG]
+              await ctx.host.updateConversation(conversationId, { tags: nextTags }).catch(() => undefined)
+            }
             console.error(
-              `[tasks] 启动恢复：${interruptedIds.length} 个启动中断任务已回滚待办（${interruptedIds.join(', ')}），可手动重新开工`,
+              `[tasks] 启动恢复：${interrupted.size} 个启动中断任务已回滚待办（${[...interrupted.keys()].join(', ')}），可手动重新开工`,
             )
           }
           // Q1 孤儿会话恢复：绑定前崩溃遗留的「task 标签 + 零输入 + 不绑任何任务」会话——
@@ -246,17 +268,6 @@ export function createTasksPlugin(): PluginDefinition {
               if (err instanceof HelmxError && err.code === 'not_found') continue
               reportError(`孤儿执行会话 #${conv.id} 恢复检查失败`, err)
             }
-          }
-          // 开工未送达恢复（#59-2 红线口径）：kickoffPending 持久标记的残留 = 投递未完成的事实源，
-          // 重启后仅落 kickoffUndelivered 呈现态供看板显示「开工未送达，点继续」——绝不向
-          // human-owned 会话自动提交任何输入（尊重用户 reset 清空的意图，也不事件自唤醒）；
-          // 显式继续由 resume_kickoff 动作承担（requestId 幂等：若实际已送达则内核去重跳过）。
-          const undeliveredIds = await runtime.store.enqueueMutation((draft) => recoverKickoffMarkers(draft))
-          if (undeliveredIds.length > 0) {
-            await runtime.flushRecords()
-            console.error(
-              `[tasks] 启动恢复：${undeliveredIds.length} 个任务的开工任务书未送达（${undeliveredIds.join(', ')}），看板已标记待用户显式继续（tasks resume-kickoff）`,
-            )
           }
           deletedUnsubscribe = ctx.host.onEvent('conversation.deleted', (payload) => {
             if (!active || shutdown) return
@@ -308,23 +319,12 @@ export {
   assertTaskId,
   assertTaskRecord,
   assertTaskStoreDoc,
-  detectDependencyCycle,
-  blockedDependenciesOf,
   projectBoardDoc,
-  subtreeAttentionFlags,
   taskBoardBadgeKey,
   type TaskBoardBadgeTone,
   type TaskColumn,
   type TaskRecord,
   type TaskSubmission,
-  type TaskSilenceState,
-  type TaskPlanApproval,
-  type TaskBoardEntry,
 } from './tasks/contracts.js'
 export { activeTaskSection, buildTaskKickoffPrompt } from './tasks/prompts.js'
-export {
-  filterTaskToolsForTurn,
-  subtreeHasWorkingOrBlocked,
-  shouldMarkStalled,
-  workflowHasRunningRuns,
-} from './tasks/hooks.js'
+export { filterTaskToolsForTurn } from './tasks/hooks.js'
