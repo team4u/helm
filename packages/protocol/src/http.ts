@@ -71,6 +71,7 @@ export const CORE_CLI_COMMAND_PATHS = [
   'start',
   'stop',
   'restart',
+  'service',
   'update',
   'events watch',
   'conversations list',
