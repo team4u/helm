@@ -88,7 +88,8 @@ export const shellMessages = {
   'shell.theme.currentLight': { en: 'Light', 'zh-CN': '浅色' },
 
   // Toast overlay
-  'shell.toast.viewConversation': { en: 'View conversation #{id}', 'zh-CN': '查看会话 #{id}' },
+  'shell.toast.view': { en: 'View', 'zh-CN': '查看' },
+  'shell.toast.dismiss': { en: 'Dismiss', 'zh-CN': '关闭' },
 
   // Shared sidebar row copy (agent standings + archived group)
   'shell.conversationFallback': { en: 'Conversation #{id}', 'zh-CN': '会话 #{id}' },
@@ -250,6 +251,10 @@ export const shellMessages = {
   'shell.overview.quickNavGroup': { en: 'Quick navigation', 'zh-CN': '快捷导航' },
   'shell.overview.moreDescendants': { en: '+{count} more', 'zh-CN': '还有 {count} 个' },
   'shell.overview.railTooltip': { en: 'Conversation overview', 'zh-CN': '会话总览' },
+  'shell.overview.batchProtected': {
+    en: 'Managed or protected conversations are excluded from bulk management',
+    'zh-CN': '托管或受保护会话不参与批量管理',
+  },
 
   // Batch archive/restore notices (verb interpolated: Archive/Restore, 归档/恢复)
   'shell.archive.verbArchive': { en: 'Archive', 'zh-CN': '归档' },

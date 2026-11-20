@@ -76,6 +76,26 @@ describe('assembleHelmxEvent', { timeout: 60_000 }, () => {
     const event = assembleHelmxEvent('notification', { level: 'warning', title: 't' }, identity)
     assert.deepEqual(event, { type: 'notification', level: 'warning', title: 't' })
   })
+
+  it('notification accepts an optional deep-link view string and rejects malformed values', { timeout: 60_000 }, () => {
+    const withView = assembleHelmxEvent(
+      'notification',
+      { level: 'info', title: 't', view: 'screen:builtin:tasks/board?task=T-1' },
+      identity,
+    )
+    assert.deepEqual(withView, {
+      type: 'notification',
+      level: 'info',
+      title: 't',
+      view: 'screen:builtin:tasks/board?task=T-1',
+    })
+    for (const bad of ['', 42, null, {}, []]) {
+      assert.throws(
+        () => assembleHelmxEvent('notification', { level: 'info', title: 't', view: bad }, identity),
+        HelmxError,
+      )
+    }
+  })
 })
 
 describe('validateAndRedactConversationLive', { timeout: 60_000 }, () => {
