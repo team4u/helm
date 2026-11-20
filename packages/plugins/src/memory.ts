@@ -10,7 +10,12 @@
  *   update_memory tool; with it on, inject memory.content / memory.guide / memory.assets-missing by content;
  * - the update_memory tool: the execute entry re-checks the per-Profile switch (off -> 403);
  * - three ctx.actions (get / set / configure) auto-map to HTTP / CLI (helmx memory
- *   get|set|configure) / Agent Tool / Web invokeAction -- five ends.
+ *   get|set|configure) / Agent Tool / Web invokeAction -- five ends;
+ * - the daily Dream (see memory/dream.ts): turn_settled collects bounded redacted candidates into
+ *   the plugin-private dataDir; one ctx.service timer dreams every eligible Profile once a day
+ *   (restart recovery by persisted nextRunAt), consolidating MEMORY.md through ctx.host.completeText
+ *   (no conversation turn is ever created or submitted) with a strict JSON contract and an in-lock
+ *   CAS write-back; actions dream / dream_status / dream_configure expose it on all five ends.
  *
  * Honesty discipline:
  * - MEMORY.md of an initialized Profile deleted externally: an explicit warning notification + the
@@ -22,8 +27,39 @@
 import { HelmxError, PROFILE_DETAIL_SECTION_SLOT, type HelmxHostProfilesPort, type PluginActionContext, type PluginDefinition } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
 import { MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MemoryStore } from './memory/store.js'
+import {
+  createDreamEngine,
+  defaultDreamTimezone,
+  type DreamDoc,
+  type DreamEngineOptions,
+  type DreamRunSummary,
+  type DreamStatusView,
+} from './memory/dream.js'
 
-export { MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MEMORY_DEFAULT, MemoryStore } from './memory/store.js'
+export {
+  MEMORY_PLUGIN_ID,
+  MAX_MEMORY_CHARS,
+  MEMORY_DEFAULT,
+  MemoryStore,
+} from './memory/store.js'
+export {
+  createDreamEngine,
+  dreamBudgetChars,
+  parseDreamModelOutput,
+  nextDailyRunAt,
+  looksLikeLowValueHumanInput,
+  extractFinalAssistantText,
+  DREAM_TARGET_CHARS,
+  type DreamCandidate,
+  type DreamClock,
+  type DreamConfig,
+  type DreamDoc,
+  type DreamHostPorts,
+  type DreamProfileRunRecord,
+  type DreamRunSummary,
+  type DreamRuntime,
+  type DreamStatusView,
+} from './memory/dream.js'
 
 /** Compact persistent state of per-Profile memory switches and initialization markers (private doc, no full text). */
 export interface MemoryPluginDoc {
@@ -71,7 +107,7 @@ function resolveActionProfileId(
   )
 }
 
-export function createMemoryPlugin(): PluginDefinition {
+export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {}): PluginDefinition {
   return {
     id: MEMORY_PLUGIN_ID,
     name: { en: 'Long-term Memory', 'zh-CN': '长期记忆' },
@@ -350,6 +386,182 @@ export function createMemoryPlugin(): PluginDefinition {
           const content = await store.updateMemory(profileId, input.text, input.mode)
           markInitialized(profileId)
           return { updated: true, profileId, length: content.length }
+        },
+      })
+
+      // ------------------------------------------------------------------
+      // Daily Dream (memory consolidation): engine + collector + service + actions
+      // ------------------------------------------------------------------
+
+      const dreamDoc = ctx.doc<DreamDoc>('dream', {
+        version: 1,
+        config: { enabled: true, hour: 3, timezone: defaultDreamTimezone() },
+        runs: {},
+      })
+      const dream = createDreamEngine({
+        dataDir: ctx.dataDir,
+        doc: dreamDoc,
+        redact: (text) => ctx.host.redact(text),
+        completeText: (input) => ctx.host.completeText(input),
+        listConversations: (filter) => ctx.host.listConversations(filter),
+        getConversationDetail: (id, options) => ctx.host.getConversationDetail(id, options),
+        store,
+        profiles: { list: async () => ctx.host.profiles.list() },
+        isMemoryEnabled: isEnabled,
+        emitError: (title, detail) => {
+          const message = detail instanceof Error ? detail.message : String(detail)
+          try {
+            ctx.host.emitEvent('notification', {
+              type: 'notification',
+              level: 'error',
+              title,
+              body: `[memory-dream] ${message}`,
+            })
+          } catch {
+            // Best-effort reporting only; never recurse.
+          }
+          console.error(`[memory-dream] ${title}：${message}`)
+        },
+      }, options.dream)
+
+      // Lightweight candidate collection on settled human turns (bounded, redacted, private).
+      ctx.hook.onTurnSettled((payload) => dream.collectFromSettledTurn(payload))
+
+      // One timer for the whole plugin: daily sweep + restart recovery; stop aborts and waits.
+      ctx.service({
+        id: 'memory-dream',
+        liveTasks: () => dream.liveTasks(),
+        start: () => dream.start(),
+        stop: () => dream.stop(),
+      })
+
+      ctx.action<{ profileId?: string }, DreamRunSummary>({
+        id: 'dream',
+        description:
+          'Run the memory Dream (consolidation) for one Profile now: merges collected candidates into MEMORY.md via a strict model JSON contract with CAS write-back; skips honestly with a reason when there are no candidates or no model conversation (pass --profile-id, or use --current for the current conversation)',
+        inputSchema: {
+          type: 'object',
+          properties: { profileId: { type: 'string', minLength: 1 } },
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            profileId: { type: 'string' },
+            ran: { type: 'boolean' },
+            reason: { type: 'string' },
+            applied: { type: 'boolean' },
+            conflict: { type: 'boolean' },
+            candidateCount: { type: 'number' },
+            beforeChars: { type: 'number' },
+            afterChars: { type: 'number' },
+            consumed: { type: 'number' },
+          },
+          required: ['profileId', 'ran', 'candidateCount'],
+          additionalProperties: false,
+        },
+        async handler(input, context) {
+          const profileId = resolveActionProfileId(input.profileId, context, (id) => ctx.host.getConversation(id))
+          await requireProfile(profiles, profileId)
+          if (!isEnabled(profileId)) {
+            throw new HelmxError(
+              'memory_disabled_for_profile',
+              `Profile '${profileId}' has long-term memory disabled; dreaming (which writes MEMORY.md) is forbidden`,
+              403,
+              { profileId },
+            )
+          }
+          return dream.dreamFor(profileId)
+        },
+      })
+
+      ctx.action<{ profileId?: string }, DreamStatusView & { profileId?: string }>({
+        id: 'dream_status',
+        description:
+          'Dream status: schedule config, next run, in-flight profiles, and per-Profile candidate count / memory length / last run (optionally focused with --profile-id or --current; without a target the global view is returned)',
+        inputSchema: {
+          type: 'object',
+          properties: { profileId: { type: 'string', minLength: 1 } },
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            profileId: { type: 'string' },
+            config: {
+              type: 'object',
+              properties: {
+                enabled: { type: 'boolean' },
+                hour: { type: 'number' },
+                timezone: { type: 'string' },
+              },
+              required: ['enabled', 'hour', 'timezone'],
+              additionalProperties: false,
+            },
+            nextRunAt: { type: 'number' },
+            running: { type: 'array', items: { type: 'string' } },
+            profiles: {
+              type: 'array',
+              items: {
+                type: 'object',
+                properties: {
+                  profileId: { type: 'string' },
+                  candidateCount: { type: 'number' },
+                  memoryChars: { type: ['number', 'null'] },
+                  lastRun: { type: 'object' },
+                },
+                required: ['profileId', 'candidateCount', 'memoryChars'],
+                additionalProperties: false,
+              },
+            },
+          },
+          required: ['config', 'running', 'profiles'],
+          additionalProperties: false,
+        },
+        idempotent: true,
+        async handler(input, context) {
+          const view = await dream.status()
+          const focus =
+            input.profileId !== undefined
+              ? input.profileId
+              : context.conversationId !== undefined
+                ? ctx.host.getConversation(context.conversationId).profileId
+                : undefined
+          if (focus !== undefined) await requireProfile(profiles, focus)
+          return focus === undefined ? view : { ...view, profileId: focus }
+        },
+      })
+
+      ctx.action<
+        { enabled?: boolean; hour?: number; timezone?: string },
+        { enabled: boolean; hour: number; timezone: string; nextRunAt?: number }
+      >({
+        id: 'dream_configure',
+        description:
+          'Configure the daily Dream schedule (global): --enabled <bool> pauses/resumes auto consolidation; --hour <0-23> and --timezone <IANA> set the daily low-peak point; at least one field required',
+        inputSchema: {
+          type: 'object',
+          properties: {
+            enabled: { type: 'boolean' },
+            hour: { type: 'integer', minimum: 0, maximum: 23 },
+            timezone: { type: 'string', minLength: 1 },
+          },
+          additionalProperties: false,
+        },
+        outputSchema: {
+          type: 'object',
+          properties: {
+            enabled: { type: 'boolean' },
+            hour: { type: 'number' },
+            timezone: { type: 'string' },
+            nextRunAt: { type: 'number' },
+          },
+          required: ['enabled', 'hour', 'timezone'],
+          additionalProperties: false,
+        },
+        idempotent: true,
+        async handler(input) {
+          return dream.configure(input)
         },
       })
 

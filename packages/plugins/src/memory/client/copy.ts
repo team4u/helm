@@ -66,3 +66,111 @@ export const MEMORY_DIRTY_HINT: LocalizedText = {
   en: 'Unsaved changes (memory content is saved independently; it is not rolled back with "Cancel profile editing")',
   'zh-CN': '有未保存的修改（记忆内容独立保存，不随「取消角色编辑」回滚）',
 }
+
+// ---------------------------------------------------------------------------
+// Dream (daily auto-consolidation) copy and formatters (pure module, Fast Refresh friendly)
+// ---------------------------------------------------------------------------
+
+/** Heading of the dream sub-block. */
+export const MEMORY_DREAM_TITLE: LocalizedText = {
+  en: 'Daily auto-organize (Dream)',
+  'zh-CN': '每日自动整理（Dream）',
+}
+
+/** Two-digit local hour label. */
+export function memoryDreamHour(hour: number, locale: HelmxLocale): string {
+  return resolveLocalizedText({ en: `daily ${String(hour).padStart(2, '0')}:00`, 'zh-CN': `每天 ${String(hour).padStart(2, '0')}:00` }, locale)
+}
+
+/** Schedule line: "<daily hh:00> · <timezone>" or the paused hint. */
+export function memoryDreamSchedule(
+  config: { enabled: boolean; hour: number; timezone: string },
+  locale: HelmxLocale,
+): string {
+  if (!config.enabled) return resolveLocalizedText({ en: 'paused', 'zh-CN': '已暂停' }, locale)
+  return `${memoryDreamHour(config.hour, locale)} · ${config.timezone}`
+}
+
+/** Candidate count pill. */
+export function memoryDreamCandidates(count: number, locale: HelmxLocale): string {
+  return resolveLocalizedText(
+    { en: `${count} pending candidate${count === 1 ? '' : 's'}`, 'zh-CN': `${count} 条待整理候选` },
+    locale,
+  )
+}
+
+/** Last-run summary line (absent when never ran). */
+export function memoryDreamLastRun(
+  record: { ran: boolean; applied?: boolean; conflict?: boolean; reason?: string; error?: string },
+  locale: HelmxLocale,
+): string {
+  const prefix = resolveLocalizedText({ en: 'last run', 'zh-CN': '上次整理' }, locale)
+  if (!record.ran) {
+    const reason =
+      record.reason === 'no_candidates'
+        ? undefined
+        : record.reason === 'no_conversation_for_model'
+          ? resolveLocalizedText({ en: 'no conversation to resolve the model', 'zh-CN': '无会话可解析模型' }, locale)
+          : record.reason === 'memory_missing'
+            ? resolveLocalizedText({ en: 'MEMORY.md missing', 'zh-CN': 'MEMORY.md 缺失' }, locale)
+            : record.reason
+    return reason === undefined ? `${prefix}: ${resolveLocalizedText({ en: 'skipped (no candidates)', 'zh-CN': '跳过（无候选）' }, locale)}`
+      : `${prefix}: ${resolveLocalizedText({ en: 'skipped', 'zh-CN': '跳过' }, locale)} (${reason})`
+  }
+  if (record.conflict) {
+    return `${prefix}: ${resolveLocalizedText({ en: 'abandoned (memory edited during the dream)', 'zh-CN': '放弃写回（整理期间记忆被修改）' }, locale)}`
+  }
+  if (record.applied) {
+    return `${prefix}: ${resolveLocalizedText({ en: 'applied', 'zh-CN': '已应用' }, locale)}`
+  }
+  return `${prefix}: ${resolveLocalizedText({ en: 'failed', 'zh-CN': '失败' }, locale)}`
+}
+
+/** Manual run result line. */
+export function memoryDreamRunResult(
+  result: { ran: boolean; applied?: boolean; conflict?: boolean; reason?: string; consumed?: number },
+  locale: HelmxLocale,
+): string {
+  if (!result.ran) {
+    if (result.reason === 'no_candidates') {
+      return resolveLocalizedText({ en: 'No candidates to organize yet.', 'zh-CN': '暂无可整理的候选。' }, locale)
+    }
+    if (result.reason === 'no_conversation_for_model') {
+      return resolveLocalizedText(
+        { en: 'No conversation of this profile exists to resolve the model; dream skipped.', 'zh-CN': '该角色暂无会话可解析生效模型，已跳过整理。' },
+        locale,
+      )
+    }
+    if (result.reason === 'memory_missing') {
+      return resolveLocalizedText({ en: 'MEMORY.md does not exist; dream skipped.', 'zh-CN': 'MEMORY.md 不存在，已跳过整理。' }, locale)
+    }
+    return resolveLocalizedText({ en: `Skipped (${result.reason ?? 'unknown'}).`, 'zh-CN': `已跳过（${result.reason ?? '未知'}）。` }, locale)
+  }
+  if (result.conflict) {
+    return resolveLocalizedText(
+      { en: 'Memory was edited while the dream ran; write-back abandoned, candidates kept.', 'zh-CN': '整理期间记忆被修改，已放弃写回，候选保留。' },
+      locale,
+    )
+  }
+  if (result.applied) {
+    const n = result.consumed ?? 0
+    return resolveLocalizedText(
+      { en: `Dream applied (${n} candidate${n === 1 ? '' : 's'} merged).`, 'zh-CN': `整理完成（合并 ${n} 条候选）。` },
+      locale,
+    )
+  }
+  return resolveLocalizedText({ en: 'Dream ran but nothing was applied.', 'zh-CN': '整理已运行但未应用改动。' }, locale)
+}
+
+export const MEMORY_DREAM_RUN: LocalizedText = { en: 'Organize now', 'zh-CN': '立即整理' }
+export const MEMORY_DREAM_RUNNING: LocalizedText = { en: 'Organizing…', 'zh-CN': '整理中…' }
+export const MEMORY_DREAM_PAUSE: LocalizedText = { en: 'Pause auto', 'zh-CN': '暂停自动' }
+export const MEMORY_DREAM_RESUME: LocalizedText = { en: 'Resume auto', 'zh-CN': '恢复自动' }
+export const MEMORY_DREAM_GLOBAL_HINT: LocalizedText = {
+  en: 'The schedule is global for all profiles; pausing stops the daily consolidation only (collection keeps running, manual "Organize now" still works).',
+  'zh-CN': '调度为全角色共用；暂停仅停止每日自动整理（候选照常收集，可随时手动「立即整理」）。',
+}
+export const MEMORY_DREAM_LOAD_FAILED: LocalizedText = {
+  en: 'Dream status unavailable; manual organizing still works.',
+  'zh-CN': '整理状态暂不可用；手动「立即整理」不受影响。',
+}

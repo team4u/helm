@@ -536,14 +536,14 @@ test('memory 单 Profile 开关跨重启持久（真实 createHelmx）', { timeo
 // 动作清单（自动映射 helmx memory get/set/configure 与 HTTP 端点）
 // ---------------------------------------------------------------------------
 
-test('memory 动作清单：get/set/configure 注册且默认 CLI 命令路径为 memory <action>', { timeout: 60_000 }, async () => {
+test('memory 动作清单：get/set/configure/dream/dream_status/dream_configure 注册且默认 CLI 命令路径为 memory <action>', { timeout: 60_000 }, async () => {
   const dir = mkdtempSync(join(tmpdir(), 'helmx-memory-manifest-'))
   try {
     const { host } = await setup(dir)
     const manifests = host.listActions().filter((a) => a.pluginId === 'builtin:memory')
     assert.deepEqual(
       manifests.map((a) => a.id).sort(),
-      ['configure', 'get', 'set'],
+      ['configure', 'dream', 'dream_configure', 'dream_status', 'get', 'set'],
     )
     // 缺省自动挂载：无 cli.command 覆写时按 [stripBuiltin(pluginId), actionId] = memory <action>
     for (const m of manifests) {
