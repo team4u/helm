@@ -161,6 +161,15 @@ export function SubagentLiveCard(props: {
 
   const childNodes = props.childNodes ?? []
   const descendants = useMemo(() => aggregateExecutionNodes(childNodes), [childNodes])
+  // 一级进度：直接子任务计数（各自的树级终态判定完成），不含孙子层——
+  // 嵌套层的进度归嵌套层自己的卡片/托盘管（descendants 仅承担状态/审批/计时态势）。
+  const directProgress =
+    childNodes.length > 0
+      ? {
+          done: childNodes.filter((c) => c.status === 'done' || c.status === 'error').length,
+          total: childNodes.length,
+        }
+      : undefined
   const frontline = useMemo(() => collectExecutionFrontline(childNodes, 2, locale), [childNodes, locale])
   const approvals = useMemo(() => collectExecutionApprovals(childNodes, 3, locale), [childNodes, locale])
   const effectiveStatus: ExecutionNodeStatus =
@@ -222,6 +231,7 @@ export function SubagentLiveCard(props: {
           selfBadge={selfBadge}
           abortedRun={backgroundRun?.status === 'aborted'}
           descendants={descendants}
+          directProgress={directProgress}
           approvals={approvals}
           statSegments={statSegments}
           elapsedText={elapsedText}

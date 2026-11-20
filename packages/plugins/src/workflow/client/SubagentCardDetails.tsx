@@ -63,7 +63,10 @@ export function SubagentCardHeading(props: {
   selfBadge: SubagentBadge
   /** The backing run was aborted: error verdicts keep the dedicated aborted light tone. */
   abortedRun: boolean | undefined
+  /** 子树聚合（状态/审批/计时态势，跨层如实）。 */
   descendants: ExecutionAggregate
+  /** 一级进度（直接子任务计数，不含孙子层；undefined = 无直接子任务）。 */
+  directProgress: { done: number; total: number } | undefined
   approvals: ExecutionApprovalItem[]
   statSegments: string[]
   elapsedText: string | undefined
@@ -103,12 +106,12 @@ export function SubagentCardHeading(props: {
       ) : (
         <StatusLight status={selfLightStatus} label={selfBadge.label} />
       )}
-      {descendants.total > 0 ? (
+      {props.directProgress !== undefined ? (
         <span
           className="badge badge-neutral tabular-nums"
-          title={subtreeProgressTitle(descendants.done, descendants.total, descendants.running, locale)}
+          title={subtreeProgressTitle(props.directProgress.done, props.directProgress.total, descendants.running, locale)}
         >
-          {subtreeBadge(descendants.done, descendants.total, locale)}
+          {subtreeBadge(props.directProgress.done, props.directProgress.total, locale)}
         </span>
       ) : null}
       {descendants.blocked > 0 ? (

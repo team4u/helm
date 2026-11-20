@@ -85,8 +85,14 @@ function nodeProgressOf(node: ExecutionNode): { done: number; total: number } | 
       }
     }
   }
-  if (node.aggregated.total > 1) {
-    return { done: node.aggregated.done, total: node.aggregated.total }
+  // 一级口径：进度分母只数直接子节点，不含节点自身与孙子层——每个会话
+  // 只对自己直接派生的任务计数，嵌套层的进度归嵌套层自己的托盘/卡片；
+  // 单个直接子任务不显示进度徽标（完成度对单项无意义）。
+  if (node.children.length > 1) {
+    return {
+      done: node.children.filter((c) => c.status === 'done' || c.status === 'error').length,
+      total: node.children.length,
+    }
   }
   return undefined
 }

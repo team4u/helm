@@ -11,7 +11,10 @@
  *   单会话分片按 MAX_PROJECTED_RUNS_PER_CONVERSATION（100）滑窗截断（始终
  *   保留全部 running，剩余槽位按 createdAt 倒序取最新终态），并剥离原始
  *   result 仅保留 hasResult + resultPreview（完整 result 经 inspect 按需读取）；
- * - 全局 `run-badges` 角标文档基于全量会话聚合计算准确 count/tone/footerText
+ * - 全局 `run-badges` 角标文档按**一级口径**统计：仅计入 `run.conversationId`
+ *   等于本会话（本会话直接发起）的 run，后代 run 归其各自发起会话计数（父
+ *   run 的存活期覆盖后代在途期——后代任务未结算时父 run 必然仍 running，
+ *   侧栏在途环不会误灭）；基于全量 runs 计算准确 count/tone/footerText
  *   （按 run.id 去重，不受 100 条分片滑窗截断影响）；
  * - 值缓存幂等写入（值相等跳过，不发多余 SSE 事件）；stopping 门拦截关停期残留回调。
  */
@@ -156,8 +159,17 @@ export function createRunsProjection(deps: {
       writtenRunsByConv.set(convId, key)
     }
 
+    // 角标一级口径：只统计本会话直接发起的 run（run.conversationId === 会话）。
+    // 后代 run 的计数归其发起会话自己的角标——每个会话只管一级下面的任务。
+    const directRunsByConversation = new Map<number, WorkflowRunSummary[]>()
+    for (const run of runs) {
+      if (!existing.has(run.conversationId)) continue
+      const list = directRunsByConversation.get(run.conversationId) ?? []
+      list.push(run)
+      directRunsByConversation.set(run.conversationId, list)
+    }
     const byConversation: WorkflowRunBadgesDocState['byConversation'] = {}
-    for (const [convId, convRuns] of runsByConversation) {
+    for (const [convId, convRuns] of directRunsByConversation) {
       if (convRuns.length === 0) continue
       const running = convRuns.filter((r) => r.status === 'running').length
       const failed = convRuns.filter((r) => r.status === 'failed').length

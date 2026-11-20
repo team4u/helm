@@ -325,14 +325,15 @@ test('多级后台：中段会话 abort 级联取消其子树 run，深层 runs/
       return childD2 !== undefined && (await listRuns(env)).some((r) => r.id === level2.run.id && r.status === 'running')
     }, '二级 run 与孙会话 D2 出现')
 
-    // 深层投影（取消前）：根分片聚合两级 run（原始归属保留），角标聚合。
+    // 深层投影（取消前）：根分片聚合两级 run（原始归属保留）；角标一级口径
+    //（根只计自己发起的一级 run，二级 run 归 D 的角标）。
     const shardRootBefore = readShard(env, ROOT)
     assert.equal(shardRootBefore.some((r) => r.id === level1Run!.id), true, '根分片含一级 run')
     const projectedL2 = shardRootBefore.find((r) => r.id === level2.run.id)
     assert.ok(projectedL2, '根分片聚合二级 run（深层投影）')
     assert.equal(projectedL2!.conversationId, childD!, '二级 run 保留原始归属（D，不改写为根）')
     const badgesBefore = readBadges(env)
-    assert.equal(badgesBefore[String(ROOT)]?.count, 2, '根角标聚合两级 run')
+    assert.equal(badgesBefore[String(ROOT)]?.count, 1, '根角标一级口径：只计自己直接发起的 run')
     assert.equal(badgesBefore[String(childD!)]?.count, 1, 'D 角标只计自己发起的 run')
 
     // 中止 D（其回合在途挂起）→ turn aborted → 级联取消 D 子树内的二级 run；
