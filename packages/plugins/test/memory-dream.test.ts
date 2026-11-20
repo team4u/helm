@@ -117,7 +117,7 @@ test('dream 纯函数：extractFinalAssistantText 只取最终 assistant 文本�
 // ---------------------------------------------------------------------------
 
 test('MemoryStore 梦境 CAS：成功、冲突、文件消失、64k 锁内拒绝', { timeout: 60_000 }, async (t) => {
-  const dir = useScratch(t, 'memory-cas')
+  const dir = scratchDir(t, 'memory-cas')
   const fileHost = createProfileFileHost(dir)
   const store = new MemoryStore(fileHost)
   await store.ensureMemory('assistant')
@@ -236,7 +236,7 @@ function makeDetailEntries(assistantText?: string): ConversationDetail['entries'
 }
 
 async function makeHarness(t: test.TestContext, options: { startMs?: number } = {}): Promise<DreamHarness> {
-  const dataDir = useScratch(t, 'memory-dream')
+  const dataDir = scratchDir(t, 'memory-dream')
   const docs = new MemoryDocStore()
   const clock = new FakeClock(options.startMs ?? Date.parse('2026-01-15T00:00:00Z'))
   const profiles = new ProfileService(dataDir)
@@ -293,7 +293,7 @@ async function makeHarness(t: test.TestContext, options: { startMs?: number } = 
   return h
 }
 
-function useScratch(t: test.TestContext, prefix: string): string {
+function scratchDir(t: test.TestContext, prefix: string): string {
   const dir = mkdtempSync(join(tmpdir(), `helmx-${prefix}-`))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   return dir
@@ -550,7 +550,7 @@ test('dream 调度：暂停后零调用；configure 校验', { timeout: 60_000 }
 
 test('dream 生命周期：在途 dream 经 liveTasks 拦截停用；stop abort 并等待收敛', { timeout: 60_000 }, async (t) => {
   // 引擎级（不经 PluginHost 的 disable 门）：stop 必须 abort 在途模型调用并等待
-  const dir = useScratch(t, 'memory-dream-stop')
+  const dir = scratchDir(t, 'memory-dream-stop')
   const docs = new MemoryDocStore()
   const profiles = new ProfileService(dir)
   await profiles.ensureDefault()
