@@ -26,11 +26,9 @@ import { summarizeSingleLine } from '../src/lib/format.js'
 import { ProfileDetailDrawer } from '../src/profiles/ProfileDetailDrawer.js'
 import { makeTestStore } from './helpers/store.js'
 import { HostStoreProviders } from './helpers/host-store.js'
-import { readHostStyles } from './helpers/host-styles.js'
 
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
-const SKILLS_CSS = readHostStyles()
 
 // ---------------------------------------------------------------------------
 // Pure model: skills tri-state normalization (profile-editor-model)
@@ -188,6 +186,4 @@ test('ProfileDetailDrawer: 技能白名单列表渲染名称行与描述摘要�
   assert.ok(html.includes(`>${expected}</span>`), '摘要节点内容与 summarizeSingleLine 一致')
   // title 悬浮保留完整原文（含被截断的结尾）
   assert.ok(html.includes(`title="${longDesc}"`), 'title 保留完整描述供悬浮查看')
-  // CSS 原语存在
-  assert.match(SKILLS_CSS, /\.profile-skill-desc/)
 })

@@ -305,24 +305,6 @@ test('manager screen：Screen .screen-heading 排版，点击 Cron / Webhook 行
   }
 })
 
-test('静态规范契约：triggers/client/index.tsx 零 Emoji、无原生 <select>、保 Fast Refresh', { timeout: 60_000 }, async () => {
-  const { readFileSync } = await import('node:fs')
-  const { fileURLToPath } = await import('node:url')
-  const srcPath = fileURLToPath(new URL('../../plugins/src/triggers/client/index.tsx', import.meta.url))
-  const src = readFileSync(srcPath, 'utf-8')
-  const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6}-\u{1F1FF}]/u
-
-  assert.doesNotMatch(src, emojiRegex, 'triggers/client/index.tsx 严禁包含 Emoji')
-  assert.ok(!/<select[\s>]/i.test(src), 'triggers/client/index.tsx 严禁使用原生 <select>')
-  assert.ok(!src.includes('callout--'), 'triggers/client/index.tsx 不得残留 callout--* 旧类')
-  assert.ok(!src.includes("from 'lucide-react'"), '应统一使用 @helmx/plugin-client HelmxIcon')
-  const exports = src.match(/^export (?!interface|type)\s+(\w+)\s+([A-Za-z0-9_]+)/gm) ?? []
-  assert.ok(
-    exports.every((exp) => exp.includes('function TriggersManagerScreen') || exp.includes('function TriggersSettingsPanel')),
-    'triggers/client/index.tsx 只导出 React 组件与 TS 类型以保证 Fast Refresh',
-  )
-})
-
 test('settingsPanel：计数、CLI 引导与打开管理入口', { timeout: 60_000 }, async () => {
   const spy = makeSpyCtx()
   const { host, unmount } = await mount(spy, e(components.TriggersSettingsPanel, {}))

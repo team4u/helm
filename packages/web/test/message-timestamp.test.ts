@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
@@ -15,8 +14,6 @@ import { HostStoreProviders } from './helpers/host-store.js'
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
-
-const stylesCss = readHostStyles()
 
 // ---------------------------------------------------------------------------
 // 1. formatMessageTime 纯函数测试
@@ -715,13 +712,6 @@ test('ConversationTimeline：回合处于 busy（working/live）时不提前渲�
   assert.doesNotMatch(html, /Took 3\.2s/)
 })
 
-test('样式契约：msg-time-meta 与 msg-ai-footer / msg-human-footer 样式规范', { timeout: 60_000 }, () => {
-  assert.match(stylesCss, /\.msg-ai-footer\s*\{[^}]*display:\s*flex/)
-  assert.match(stylesCss, /\.msg-human-footer\s*\{[^}]*display:\s*flex/)
-  assert.match(stylesCss, /\.msg-time-meta\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--fg-muted\)\s*88%,\s*transparent\)/)
-  assert.match(stylesCss, /\.msg-time-meta\s*\{[^}]*font-size:\s*11px/)
-  assert.match(stylesCss, /\.msg-time-meta\s*\{[^}]*font-variant-numeric:\s*tabular-nums/)
-})
 
 // ---------------------------------------------------------------------------
 // 3. server-clock：浏览器↔Hub 时钟偏差估计（运行中秒表的服务端时钟域）

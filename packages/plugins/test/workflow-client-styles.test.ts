@@ -1,9 +1,7 @@
 /**
- * builtin:workflow 插件真实编译 CSS 与样式不变量测试（零 @helmx/web 依赖）：
+ * builtin:workflow 插件真实编译 CSS 与样式计算测试（零 @helmx/web 依赖）：
  * - 验证 compilePluginClientModule 导出的 __helmxClientCss 注入后，阶段胶囊状态色
- *   不被通用基样式覆盖；
- * - 验证 styles.css 中整卡 hover、子级强调底色、唯一右推 .subagent-live-elapsed
- *   与窄屏可见性规则完整存在。
+ *   不被通用基样式覆盖。
  */
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'

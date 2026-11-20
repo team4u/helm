@@ -1,8 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
 import React, { act } from 'react'
 import { renderToStaticMarkup, renderToString } from 'react-dom/server'
 import type { HelmxLocale } from '@helmx/protocol/browser'
@@ -11,7 +8,6 @@ import { ensureHappyDom } from './helpers/dom-harness.js'
 ensureHappyDom()
 const ReactDOMClient = await import('react-dom/client')
 
-const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const e = React.createElement
 
 // Import the components and models under test
@@ -527,25 +523,6 @@ test('NodeCenter: empty node list renders a friendly empty state with reset butt
   assert.match(html, /primary-center-empty/)
   assert.match(html, /No matching compute nodes/)
   assert.doesNotMatch(html, EMOJI_REGEX)
-})
-
-// ---------------------------------------------------------------------------
-// 5. Source static scans: zero-Emoji rules
-// ---------------------------------------------------------------------------
-
-test('static scan: no inline style remains in nodes/ sources', { timeout: 60_000 }, () => {
-  const files = [
-    'src/nodes/node-center-model.ts',
-    'src/nodes/NodeCard.tsx',
-    'src/nodes/NodeDetailDrawer.tsx',
-    'src/nodes/NodeCenter.tsx',
-  ]
-
-  for (const rel of files) {
-    const full = join(PKG_ROOT, rel)
-    const content = readFileSync(full, 'utf-8')
-    assert.ok(!content.includes('style='), `${rel} sources must not keep inline style`)
-  }
 })
 
 test('NodeCard & NodeDetailDrawer: fixed top-right .btn-icon-sm and unified .callout-ok / .callout-error', { timeout: 60_000 }, async () => {

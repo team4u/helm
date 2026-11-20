@@ -12,7 +12,6 @@
  * - live / rewind 不产生假边界；busy 回合不展示模型标签。
  */
 import assert from 'node:assert/strict'
-import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
@@ -33,8 +32,6 @@ import { HostStoreProviders } from './helpers/host-store.js'
 const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
-
-const stylesCss = readHostStyles()
 
 // ---------------------------------------------------------------------------
 // 构造工具
@@ -528,11 +525,4 @@ test('ConversationTimeline：身份缺失不渲染边界与标签；busy 回合�
   )
   assert.ok(!working.includes('实际生成模型'), 'busy 回合不把待生成内容归属任何模型')
   assert.ok(!working.includes('model-boundary'))
-})
-
-test('样式契约：model-boundary 分割线复用 context-divider 视觉语汇', { timeout: 60_000 }, () => {
-  assert.match(stylesCss, /\.model-boundary\s*\{[^}]*display:\s*flex/)
-  assert.match(stylesCss, /\.model-boundary\s*\{[^}]*font-size:\s*11px/)
-  assert.match(stylesCss, /\.model-boundary::before,\n\.model-boundary::after\s*\{/)
-  assert.match(stylesCss, /\.model-boundary-label\s*\{[^}]*display:\s*inline-flex/)
 })

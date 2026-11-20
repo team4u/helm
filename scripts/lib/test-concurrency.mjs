@@ -1,6 +1,6 @@
 /** Shared test-runner concurrency policy. */
 
-export const DEFAULT_TEST_CONCURRENCY = 4;
+export const DEFAULT_TEST_CONCURRENCY = 16;
 
 /**
  * Resolve the default worker budget for one worktree.

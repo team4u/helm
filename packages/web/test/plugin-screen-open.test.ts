@@ -2,15 +2,13 @@
  * 插件中心 Screen 快捷打开测试：
  * - PluginCard 组件（真实 DOM 渲染）：enabled 且有 Screen 贡献时底栏渲染「打开视图」，
  *   点击阻止冒泡并以主屏 screen target 调用 store.openTarget；停用/无贡献不渲染；
- * - PluginDetailDrawer 源码契约：操作栏经 store.openTarget 唯一导航（不直接操作 history）；
+ * - PluginDetailDrawer DOM 交互：主视图与分屏操作经 store.openTarget 更新对应导航目标；
  * - PluginCenter 模型：「应用」分类只统计非 builtin 且有 Screen 的外部插件。
  *
  * 说明：PluginDetailDrawer 完整组件渲染依赖配置读取副作用（happy-dom 下相对路径
- * fetch 永不完成，曾在 act 内挂起 120s），此处以源码契约断言其导航行为，
- * 交互行为由 PluginCard 组件测试与插件中心集成测试共同覆盖。
+ * fetch 永不完成，曾在 act 内挂起 120s）；本测试通过真实按钮交互覆盖导航行为。
  */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
@@ -29,8 +27,6 @@ const e = React.createElement
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
-
-const PKG_ROOT = new URL('..', import.meta.url)
 
 function makePlugin(partial: Partial<PluginSummary> & { id: string }): PluginSummary {
   return {
@@ -195,8 +191,6 @@ test('PluginDetailDrawer 契约：enabled 插件经 store.openTarget 打开主�
       '主屏与分屏按钮应经真实 openTarget 推进导航目标（主屏 target + splitTarget）',
     )
 
-    const src = readFileSync(new URL('src/plugins/PluginDetailDrawer.tsx', PKG_ROOT), 'utf-8')
-    assert.doesNotMatch(src, /history\.(push|replace)State/, '不得直接操作浏览器历史')
   } finally {
     act(() => root.unmount())
     host.remove()

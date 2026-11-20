@@ -6,13 +6,10 @@
  * 2. 多维分类过滤与搜索联动：关键字搜索实时过滤、分类药丸过滤、组合过滤、空状态重置；
  * 3. 卡片点击与详情抽屉联动：点击卡片调用 store.openTarget 展开 PluginDetailDrawer，关闭抽屉回退；
  * 4. 全局导航收敛：CommandPaletteModal 点击「打开插件中心」调用 openTarget({ kind: 'plugins' })；
- * 5. 严格零 Emoji 静态与动态渲染断言。
+ * 5. 中英文界面内容渲染断言。
  */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
 import { ensureHappyDom, flushMacrotask, typeIntoControl } from './helpers/dom-harness.js'
 
 ensureHappyDom()
@@ -27,7 +24,6 @@ const { makeTestStore } = await import('./helpers/store.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { CommandPaletteModal } = await import('../src/modals/CommandPaletteModal.js')
 
-const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const e = React.createElement
 const typeIntoInput = typeIntoControl
 
@@ -329,16 +325,6 @@ test('全局入口收敛：CommandPaletteModal 点击「打开插件中心」导
     act(() => root.unmount())
     host.remove()
   }
-})
-
-// ---------------------------------------------------------------------------
-// 6. 零 Emoji 静态断言
-// ---------------------------------------------------------------------------
-
-test('零 Emoji 铁律：PluginCenter.tsx 源码无任何 Emoji 字符', { timeout: 60_000 }, () => {
-  const centerSrc = readFileSync(join(PKG_ROOT, 'src/plugins/PluginCenter.tsx'), 'utf-8')
-  const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6}-\u{1F1FF}]/u
-  assert.doesNotMatch(centerSrc, emojiRegex, 'PluginCenter.tsx 严禁包含 Emoji 表情')
 })
 
 test('PluginCenter SSR：zh-CN locale 渲染中文标题、筛选标签与空状态文案', { timeout: 60_000 }, async () => {

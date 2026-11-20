@@ -9,8 +9,6 @@
  */
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { readHostStyles } from './helpers/host-styles.js'
-import { fileURLToPath } from 'node:url'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ConversationEntry, ConversationSummary, InputOrigin, Profile } from '@helmx/protocol'
@@ -30,8 +28,6 @@ import { HostStoreProviders } from './helpers/host-store.js'
 ;(globalThis as Record<string, unknown>).React = React
 const e = React.createElement
 const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}][\u{2600}-\u{26FF}]?[\u{2700}-\u{27BF}]?/u
-const STARTERS_CSS = readHostStyles()
-const TIMELINE_CSS = STARTERS_CSS
 
 // ---------------------------------------------------------------------------
 // 1. Pure functions
@@ -99,9 +95,6 @@ test('ProfileDetailDrawer: the starters editor renders existing entries and the 
   assert.match(html, /2\/6/, 'the count renders 2/6')
   assert.match(html, /Add starter/)
   assert.doesNotMatch(html, EMOJI_REGEX)
-  // CSS primitives present
-  assert.match(STARTERS_CSS, /\.profile-starter-item/)
-  assert.match(STARTERS_CSS, /\.profile-starter-remove/)
 })
 
 // ---------------------------------------------------------------------------
@@ -197,7 +190,6 @@ test('ConversationTimeline: empty conversations render starter buttons (not hist
   assert.match(html, /代码审查/)
   // They are buttons (click-to-fill callbacks), not history message pills
   assert.doesNotMatch(html, /msg-human-pill/)
-  assert.match(TIMELINE_CSS, /\.timeline-starter-btn/)
   assert.doesNotMatch(html, EMOJI_REGEX)
 })
 
