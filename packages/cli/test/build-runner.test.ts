@@ -222,8 +222,8 @@ test('ok', { timeout: 60_000 }, () => {
   }
 })
 
-test('test concurrency: defaults to four workers, honors explicit overrides, and rejects invalid values', { timeout: 60_000 }, () => {
-  assert.equal(resolveTestConcurrency(undefined, 16), 4)
+test('test concurrency: defaults to sixteen workers, honors explicit overrides, and rejects invalid values', { timeout: 60_000 }, () => {
+  assert.equal(resolveTestConcurrency(undefined, 16), 16)
   assert.equal(resolveTestConcurrency(undefined, 2), 2)
   assert.equal(resolveTestConcurrency('7', 16), 7)
   assert.equal(explicitTestConcurrency([]), undefined)

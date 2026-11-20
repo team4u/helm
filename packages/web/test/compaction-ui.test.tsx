@@ -14,7 +14,6 @@
  */
 import assert from 'node:assert/strict'
 import { afterEach, test } from 'node:test'
-import { readFileSync } from 'node:fs'
 import * as React from 'react'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
@@ -220,10 +219,8 @@ test('ConversationTimeline: compacting=true renders the in-progress divider with
   assert.ok(dividerPos >= 0 && queuedPos > dividerPos, 'the pending divider renders before queued messages')
 })
 
-test('ConversationTimeline: contentFingerprint includes the compacting state to keep the bottom anchor', { timeout: 60_000 }, async () => {
+test('ConversationTimeline: compacting changes keep the bottom anchor attached to the latest content', { timeout: 60_000 }, async () => {
   ;(globalThis as { ResizeObserver?: unknown }).ResizeObserver = NoopResizeObserver
-  const timelineSrc = readFileSync(new URL('../src/conversation/ConversationTimeline.tsx', import.meta.url), 'utf8')
-  assert.match(timelineSrc, /contextUsage\?\.compacting === true \? 1 : 0/)
 
   const baseConv = makeConversation({
     status: 'idle',

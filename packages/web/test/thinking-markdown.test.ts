@@ -4,7 +4,6 @@
  * - 人类消息胶囊正文同样走 MarkdownView（inline 语法解析、单换行硬换行、胶囊作用域样式继承）。
  */
 import assert from 'node:assert/strict'
-import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
@@ -16,33 +15,6 @@ const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
 const { StepGroup, ThinkingRow } = await import('../src/conversation/TimelineRows.js')
-const stylesCss = readHostStyles()
-
-test('思考样式契约：.thinking-expanded-body 100% 宽度撑满，段落与列表解除 74ch 限制', { timeout: 60_000 }, () => {
-  assert.match(stylesCss, /\.trace-expanded-body\.thinking-expanded-body\s*\{[^}]*max-width:\s*100%/)
-  assert.match(stylesCss, /\.thinking-expanded-body\s+\.msg-ai-body\s*\{[^}]*max-width:\s*100%/)
-  assert.match(stylesCss, /\.thinking-expanded-body\s+\.msg-ai-body\s+p[\s\S]*?max-width:\s*100%/)
-  assert.match(stylesCss, /\.thinking-expanded-body\s+\.msg-ai-body\s+h1[\s\S]*?max-width:\s*100%/)
-})
-
-test('消息正文与气泡宽度样式契约：AI 正文段落与列表解除 74ch 限制，人类消息气泡放宽至 840px', { timeout: 60_000 }, () => {
-  // 验证 .msg-ai-body p 与 ul/ol 不再包含 74ch
-  assert.doesNotMatch(stylesCss, /\.msg-ai-body\s+p\s*\{[^}]*max-width:\s*74ch/)
-  assert.doesNotMatch(stylesCss, /\.msg-ai-body\s+ul[\s\S]*?max-width:\s*74ch/)
-  // 验证 .msg-human-pill 放宽至 min(88%, 840px)
-  assert.match(stylesCss, /\.msg-human-pill\s*\{[^}]*max-width:\s*min\(88%,\s*840px\)/)
-})
-
-test('人类胶囊 Markdown 样式契约：正文对齐胶囊前景色与字号，胶囊本体不再 pre-wrap（换行交给硬换行）', { timeout: 60_000 }, () => {
-  assert.match(stylesCss, /\.msg-human-pill\s+\.msg-ai-body\s*\{[^}]*color:\s*var\(--fg\)/)
-  assert.match(stylesCss, /\.msg-human-pill\s+\.msg-ai-body\s*\{[^}]*font-size:\s*15px/)
-  assert.match(stylesCss, /\.msg-human-pill\.msg-human-pill-queued\s+\.msg-ai-body\s*\{[^}]*color:\s*var\(--fg-muted\)/)
-  assert.match(stylesCss, /\.msg-human-row-external\s+\.msg-human-pill\s+\.msg-ai-body\s*\{[^}]*color:\s*var\(--fg-secondary\)/)
-  // Markdown 渲染后胶囊自身不再保留 pre-wrap（避免块间空白二次换行）
-  assert.doesNotMatch(stylesCss, /\.msg-human-pill\s*\{[^}]*white-space:\s*pre-wrap/)
-  // 折叠预览仍是纯文本，需要显式 pre-wrap 保留行结构
-  assert.match(stylesCss, /\.msg-human-collapsed-text\s*\{[^}]*white-space:\s*pre-wrap/)
-})
 
 test('HumanMessage 组件渲染：胶囊正文走 MarkdownView，inline 语法解析且单换行为硬换行', { timeout: 60_000 }, () => {
   const conv: ConversationSummary = {

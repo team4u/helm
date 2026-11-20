@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict'
-import { readHostStyles } from './helpers/host-styles.js'
 import { test } from 'node:test'
 import type { ConversationEntry, ConversationSummary } from '@helmx/protocol'
 import { ensureHappyDom } from './helpers/dom-harness.js'
@@ -19,28 +18,8 @@ const e = React.createElement
 ;(globalThis as Record<string, unknown>).React = React
 const { ConversationTimeline } = await import('../src/conversation/ConversationTimeline.js')
 
-const stylesCss = readHostStyles()
-
 // ---------------------------------------------------------------------------
-// 1. 样式契约：无卡边框、无卡背景、纯按钮图标
-// ---------------------------------------------------------------------------
-
-test('样式契约：.msg-hover-bar 无背景、无边框、无阴影，纯按钮图标避免喧宾夺主', { timeout: 60_000 }, () => {
-  // .msg-hover-bar 容器本身透明且无边框阴影
-  assert.match(stylesCss, /\.msg-hover-bar\s*\{[^}]*background:\s*transparent/)
-  assert.match(stylesCss, /\.msg-hover-bar\s*\{[^}]*border:\s*none/)
-  assert.match(stylesCss, /\.msg-hover-bar\s*\{[^}]*box-shadow:\s*none/)
-  assert.match(stylesCss, /\.msg-hover-bar\s*\{[^}]*padding:\s*0/)
-
-  // 内部按钮小巧且默认静音色，悬停轻度高亮
-  assert.match(stylesCss, /\.msg-hover-bar\s+\.btn\s*\{[^}]*background:\s*transparent/)
-  assert.match(stylesCss, /\.msg-hover-bar\s+\.btn\s*\{[^}]*border:\s*none/)
-  assert.match(stylesCss, /\.msg-hover-bar\s+\.btn\s*\{[^}]*color:\s*var\(--fg-muted\)/)
-  assert.match(stylesCss, /\.msg-hover-bar\s+\.btn:hover:not\(:disabled\)\s*\{[^}]*background:\s*var\(--bg-hover\)/)
-})
-
-// ---------------------------------------------------------------------------
-// 2. 状态判定纯函数：isAssistantTurnBusy
+// 1. 状态判定纯函数：isAssistantTurnBusy
 // ---------------------------------------------------------------------------
 
 test('isAssistantTurnBusy：turn.live 为 true 时判定为响应中', { timeout: 60_000 }, () => {

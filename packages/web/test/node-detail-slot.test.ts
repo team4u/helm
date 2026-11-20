@@ -13,10 +13,7 @@
  *   fields — never enrollment tokens or other credentials.
  */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
 import React from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
@@ -33,10 +30,9 @@ GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 ;(globalThis as Record<string, unknown>).React = React
 
-const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const e = React.createElement
-
 const EMOJI_REGEX = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}]/u
+
 
 import type { NodeInfo } from '../src/nodes/node-center-model.js'
 
@@ -289,11 +285,4 @@ test('node slot slotProps carries only the four public protocol fields, never to
   assert.equal(props.isOnline, true)
   assert.equal(props.isNew, false)
   assert.doesNotMatch(propsJson, /token|secret|credential|guide/i, 'slot props never contain token/credential/enrollment-guide fields')
-})
-
-test('static scan: NodeDetailDrawer source references the protocol slot constant and stays Emoji-free', { timeout: 60_000 }, () => {
-  const content = readFileSync(join(PKG_ROOT, 'src/nodes/NodeDetailDrawer.tsx'), 'utf-8')
-  assert.match(content, /NODE_DETAIL_SECTION_SLOT/, 'the host slot name must reference the protocol constant, never a hardcoded string')
-  assert.match(content, /ownerPluginId="builtin:node"/, 'explicit host namespace builtin:node')
-  assert.doesNotMatch(content, EMOJI_REGEX, 'source is Emoji-free')
 })

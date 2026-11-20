@@ -28,7 +28,7 @@
  * entry subdirectory itself), and the test-sharding.mjs static analysis splits strictly pure
  * in-memory tests into a bounded `--test-isolation=none` shard; the rest keep process
  * isolation and are handed to scripts/run-tests.mjs under a per-worktree worker budget
- * (default 4) in LPT order. Set TEST_CONCURRENCY to override that budget for a deliberate
+ * (default 16, capped by available CPUs) in LPT order. Set TEST_CONCURRENCY to override that budget for a deliberate
  * single-worktree run.
  *
  * Invariants (defensive assertions; any failure exits 2 rather than silently running the

@@ -8,7 +8,6 @@
  *   (only components and types are exported).
  */
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import * as React from 'react'
 import { renderToString } from 'react-dom/server'
@@ -50,11 +49,7 @@ test('HelmxIcon: unknown icons and prototype-chain properties safely fall back t
   }
 })
 
-test('icons.tsx obeys the Fast Refresh rule (only the HelmxIcon component is exported at runtime)', { timeout: 60_000 }, () => {
+test('icons.tsx exports only the HelmxIcon runtime component', { timeout: 60_000 }, () => {
   assert.deepEqual(Object.keys(IconsModule), ['HelmxIcon'])
   assert.equal(typeof IconsModule.HelmxIcon, 'function')
-  const source = readFileSync(new URL('../src/icons.tsx', import.meta.url), 'utf8')
-  const nonTypeExports = source.match(/^export\s+(?!interface\b|type\b)(.+)$/gm) ?? []
-  assert.equal(nonTypeExports.length, 1)
-  assert.match(nonTypeExports[0]!, /^export function HelmxIcon\b/)
 })

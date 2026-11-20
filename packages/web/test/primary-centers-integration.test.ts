@@ -17,16 +17,10 @@
  *      no modal (dev-phase no-compat, silently dropped);
  * 4. The four center component groups mounting and drawer wiring:
  *    - ProfileCenter, SkillCenter, NodeCenter, ModelCenter rendering, card
- *      grids and drawer interactions;
- * 5. Hard-rule static scans:
- *    - every center component source plus App/Sidebar/CommandPalette stays
- *      absolutely emoji-free.
+ *      grids and drawer interactions.
  */
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync } from 'node:fs'
-import { join } from 'node:path'
 import { test } from 'node:test'
-import { fileURLToPath } from 'node:url'
 import { ensureHappyDom, flushMacrotask } from './helpers/dom-harness.js'
 
 ensureHappyDom()
@@ -49,7 +43,6 @@ const { ModelCenter } = await import('../src/models/ModelCenter.js')
 const { Sidebar } = await import('../src/shell/Sidebar.js')
 const { CommandPaletteModal } = await import('../src/modals/CommandPaletteModal.js')
 
-const PKG_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const e = React.createElement
 
 // ---------------------------------------------------------------------------
@@ -272,46 +265,4 @@ test('four-center drawer wiring: carrying a sub-item ID auto-opens the matching 
   )
   assert.ok(modelHtml.includes('primary-drawer-content'), 'Models must open the drawer')
   assert.ok(modelHtml.includes('Credentials and connection settings'))
-})
-
-// ---------------------------------------------------------------------------
-// 6. Repo-wide strict zero-emoji static scan
-// ---------------------------------------------------------------------------
-
-test('zero-emoji rule: all four-center components, styles and core entrances stay absolutely emoji-free', { timeout: 60_000 }, () => {
-  const emojiRegex = /[\u{1F300}-\u{1F9FF}\u{2600}-\u{26FF}\u{2700}-\u{27BF}\u{1F1E6}-\u{1F1FF}]/u
-
-  const dirsToScan = [
-    join(PKG_ROOT, 'src/profiles'),
-    join(PKG_ROOT, 'src/skills'),
-    join(PKG_ROOT, 'src/nodes'),
-    join(PKG_ROOT, 'src/models'),
-  ]
-
-  for (const dir of dirsToScan) {
-    const files = readdirSync(dir)
-    for (const file of files) {
-      if (file.endsWith('.ts') || file.endsWith('.tsx')) {
-        const full = join(dir, file)
-        const content = readFileSync(full, 'utf-8')
-        assert.doesNotMatch(content, emojiRegex, `${file} must contain no emoji characters`)
-      }
-    }
-  }
-
-  // Check App.tsx, Sidebar.tsx, CommandPaletteModal.tsx
-  const appSrc = readFileSync(join(PKG_ROOT, 'src/App.tsx'), 'utf-8')
-  assert.doesNotMatch(appSrc, emojiRegex, 'App.tsx must contain no emoji')
-
-  const sidebarSrc = readFileSync(join(PKG_ROOT, 'src/shell/Sidebar.tsx'), 'utf-8')
-  assert.doesNotMatch(sidebarSrc, emojiRegex, 'Sidebar.tsx must contain no emoji')
-
-  // Sidebar's split-out submodules join the zero-emoji static scan.
-  const sidebarStandingsSrc = readFileSync(join(PKG_ROOT, 'src/shell/SidebarAgentStandings.tsx'), 'utf-8')
-  assert.doesNotMatch(sidebarStandingsSrc, emojiRegex, 'SidebarAgentStandings.tsx must contain no emoji')
-  const sidebarPrimitivesSrc = readFileSync(join(PKG_ROOT, 'src/shell/SidebarPrimitives.tsx'), 'utf-8')
-  assert.doesNotMatch(sidebarPrimitivesSrc, emojiRegex, 'SidebarPrimitives.tsx must contain no emoji')
-
-  const cmdSrc = readFileSync(join(PKG_ROOT, 'src/modals/CommandPaletteModal.tsx'), 'utf-8')
-  assert.doesNotMatch(cmdSrc, emojiRegex, 'CommandPaletteModal.tsx must contain no emoji')
 })

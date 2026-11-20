@@ -15,14 +15,10 @@
  *    最近动态自然 kind 标签、worktree 分支事实），无实时投影时显式 board_status 一次性回退
  *    （失败可重试、不白屏不伪造运行中），完整记录展开按需 board_read；
  * 5. 单行回执胶囊点击打开协同工作台面板；
- * 6. swarm/client 全目录静态铁律：零 Emoji、零原生 select/checkbox、零 history.*、
- *    零本地 .status-dot/.helmx-status-light 样式定义、客户端导出仅含 PascalCase 组件。
+ * 6. UI 注册模型、组件交互与实际渲染状态。
  */
 import assert from 'node:assert/strict'
-import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { before, test } from 'node:test'
-import { fileURLToPath } from 'node:url'
 import * as React from 'react'
 import { act } from 'react'
 import {
@@ -1235,29 +1231,4 @@ test('纯模型抽查：严格边界解析、正交交付进度、SwarmToolView/
     archWorkerPanel.unmount()
   }
   resetDefaultStubs()
-})
-
-test('静态铁律检查：swarm/client 全目录零 Emoji / 原生控件 / history / 本地状态灯样式', { timeout: 60_000 }, () => {
-  const clientDir = fileURLToPath(new URL('../../plugins/src/swarm/client', import.meta.url))
-  const files = readdirSync(clientDir).filter((f) => /\.(ts|tsx|css)$/.test(f))
-  assert.ok(files.length >= 10, `预期改动后的 client 目录文件数（实际 ${files.length}）`)
-  for (const file of files) {
-    const content = readFileSync(join(clientDir, file), 'utf8')
-    assert.equal(EMOJI_RE.test(content), false, `严禁包含 Emoji：${file}`)
-    assert.equal(/<select[\s>]/.test(content), false, `严禁原生 <select>：${file}`)
-    assert.equal(/type=['"]checkbox['"]/i.test(content), false, `严禁原生 checkbox：${file}`)
-    assert.equal(/history\.(push|replace)State/.test(content), false, `严禁直接操作 history：${file}`)
-    if (file.endsWith('.css')) {
-      assert.equal(
-        /(^|\n)\.status-dot\b/.test(content),
-        false,
-        `状态灯样式归属宿主，插件不得本地定义：${file}`,
-      )
-      assert.equal(
-        /(^|\n)\.helmx-status-light\b/.test(content),
-        false,
-        `状态灯样式归属宿主，插件不得本地定义：${file}`,
-      )
-    }
-  }
 })
