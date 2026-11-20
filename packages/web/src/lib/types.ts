@@ -58,7 +58,7 @@ export type ResolvedTarget =
   | { kind: 'conversation'; conversationId: number }
   | { kind: 'agent'; profileId: string; nodeId?: string; cwd?: string }
   | { kind: 'screen'; pluginId: string; screenId: string; params?: Record<string, string> }
-  | { kind: 'overview' }
+  | { kind: 'overview'; params?: Record<string, string> }
   | { kind: 'plugins'; pluginId?: string }
   | { kind: 'profiles'; profileId?: string }
   | { kind: 'skills'; skillId?: string }
@@ -361,6 +361,14 @@ export function isSameResolvedTarget(a: ResolvedTarget | null, b: ResolvedTarget
     if (apKeys.length !== bpKeys.length) return false
     return apKeys.every((key) => Object.hasOwn(bp, key) && bp[key] === ap[key])
   }
+  if (a.kind === 'overview' && b.kind === 'overview') {
+    const ap = a.params ?? {}
+    const bp = b.params ?? {}
+    const apKeys = Object.keys(ap)
+    const bpKeys = Object.keys(bp)
+    if (apKeys.length !== bpKeys.length) return false
+    return apKeys.every((key) => Object.hasOwn(bp, key) && bp[key] === ap[key])
+  }
   if (a.kind === 'plugins' && b.kind === 'plugins') {
     return a.pluginId === b.pluginId
   }
@@ -528,7 +536,7 @@ export interface HelmxStoreValue {
   setSidebarCollapsed(collapsed: boolean): void
   /** Toggles the desktop sidebar collapsed state and persists it. */
   toggleSidebarCollapsed(): void
-  /** Updates the current screen route params (undefined deletes the key); applies to the primary pane when split is omitted. */
+  /** Updates the current screen/overview route params (undefined deletes the key); applies to the primary pane when split is omitted. */
   setScreenParams(patch: Record<string, string | undefined>, options?: { split?: boolean; push?: boolean }): void
   setWorkbenchOpen(open: boolean): void
   setWorkbenchTab(tab: string): void

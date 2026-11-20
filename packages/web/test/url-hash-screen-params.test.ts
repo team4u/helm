@@ -6,7 +6,8 @@
  * - 浏览器前进/后退还原主/分屏 Screen 参数；
  * - 异步初始数据（SSE snapshot 延迟到达）不抹深链；
  * - 主屏与分屏同 screen 双开参数互不串扰；
- * - setParams 默认 replace、{ push: true } 显式入栈、openTarget 字符串直携参数。
+ * - setParams 默认 replace、{ push: true } 显式入栈、openTarget 字符串直携参数；
+ * - 总览（#/overview）筛选参数复用同一 sp.* 机制（replace 不入栈、后退还原）。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -351,6 +352,109 @@ test('openTarget 字符串直携参数入栈，后退还原会话位置；非法
     assert.deepEqual(app.primaryScreen()!.params, { ok_key: '1' }, '非法键被拒绝，合法键仍生效')
   } finally {
     app.unmount()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 总览（#/overview）筛选参数：复用 sp.* 目标参数机制（主屏唯一导航模型）
+// ---------------------------------------------------------------------------
+
+test('overview 筛选参数：sp.* 写入默认 replace 不入栈，跨坐标 push 后退还原筛选、前进恢复、切走即丢弃', { timeout: 60_000 }, async (t) => {
+  stubFetch()
+  t.after(() => (globalThis.fetch as unknown as { restore: () => void }).restore())
+  snapshotDelayMs = 0
+
+  let captured: ProbeSnapshot | undefined
+  let setParamsFn: ((patch: Record<string, string | undefined>, options?: { push?: boolean }) => void) | undefined
+  let openTargetFn: ((target: string, opts?: { split?: boolean }) => void) | undefined
+  let openTargetObjectFn: ((target: HelmxStoreValue['primaryTarget']) => void) | undefined
+  function OverviewProbe(): React.ReactNode {
+    const store = useHelmxStore()
+    captured = {
+      primaryTarget: store.primaryTarget,
+      splitTarget: store.splitTarget,
+      hash: '',
+      historyLength: window.history.length,
+    }
+    setParamsFn = (patch, options) => store.setScreenParams(patch, { push: options?.push })
+    openTargetFn = (target, opts) => store.openTarget(target, opts)
+    openTargetObjectFn = (target) => store.openTarget(target)
+    const params = store.primaryTarget.kind === 'overview' ? store.primaryTarget.params ?? {} : null
+    return e('div', { 'data-overview-probe': 'primary' }, JSON.stringify(params))
+  }
+
+  resetLocation('#/overview')
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  let root: Root | undefined
+  act(() => {
+    root = createRoot(host)
+    root.render(e(HelmxStoreProvider, null, e(OverviewProbe)))
+  })
+  const settle = async (): Promise<void> => {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    })
+  }
+  const probe = (): ProbeSnapshot => ({ ...captured!, hash: window.location.hash, historyLength: window.history.length })
+  try {
+    await settle()
+    assert.deepEqual(probe().primaryTarget, { kind: 'overview' }, '初始无参数：目标形状稳定')
+
+    // 筛选参数写入：默认 replace，不污染后退栈。
+    const before = probe()
+    await act(async () => {
+      setParamsFn!({ bucket: 'running', profile: 'coder' })
+    })
+    await settle()
+    let current = probe()
+    assert.equal(current.historyLength, before.historyLength, '仅筛选参数变化 replace，不新增历史记录')
+    assert.deepEqual(current.primaryTarget, { kind: 'overview', params: { bucket: 'running', profile: 'coder' } })
+    assert.equal(current.hash, '#/overview?sp.bucket=running&sp.profile=coder', '地址栏按字典序稳定编码 sp.*')
+    // 删除参数键：地址栏同步收敛回无参形态。
+    await act(async () => {
+      setParamsFn!({ profile: undefined })
+    })
+    await settle()
+    assert.equal(window.location.hash, '#/overview?sp.bucket=running', 'undefined 值删除键')
+
+    // 跨坐标导航 push；浏览器后退经真实 popstate 还原筛选参数。
+    await act(async () => {
+      openTargetFn!('conversation:1')
+    })
+    await settle()
+    current = probe()
+    assert.equal(current.historyLength, before.historyLength + 1, '离开总览进会话沿用 push 语义')
+    await act(async () => {
+      window.history.back()
+    })
+    await settle()
+    current = probe()
+    assert.deepEqual(
+      current.primaryTarget,
+      { kind: 'overview', params: { bucket: 'running' } },
+      '后退经地址栏唯一事实源还原总览筛选',
+    )
+    // 前进：回到会话主屏。
+    await act(async () => {
+      window.history.forward()
+    })
+    await settle()
+    current = probe()
+    assert.deepEqual(current.primaryTarget, { kind: 'conversation', conversationId: 1 })
+
+    // 重新进入总览（openTarget 裸目标对象，与 Sidebar/MobileQuickNav 同一入口）：
+    // 命名空间参数随之丢弃，回到未筛选态。
+    await act(async () => {
+      openTargetObjectFn!({ kind: 'overview' })
+    })
+    await settle()
+    current = probe()
+    assert.deepEqual(current.primaryTarget, { kind: 'overview' }, '重新进入总览不带旧筛选参数')
+    assert.equal(window.location.hash, '#/overview')
+  } finally {
+    act(() => root?.unmount())
+    host.remove()
   }
 })
 
