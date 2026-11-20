@@ -378,7 +378,9 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
             onLoadEarlierHistory={loadEarlierForOutline}
             onSelectTarget={jumpToOutlineTarget}
           />
-          {canCreateThread ? (
+          {/* 抽屉是叠加在主语境之上的检视面（任务会话 / 子代理轨迹 / 总览直达共用），
+              「新话题」属于主屏导航动作，在抽屉里只会把底下主屏带走——一律不渲染。 */}
+          {canCreateThread && !isDrawer ? (
             <button
               type="button"
               className="btn btn-sm"

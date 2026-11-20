@@ -315,8 +315,14 @@ export const TASK_DEPS_CANDIDATES_EMPTY: LocalizedText = L(
   '暂无可选的未完成任务——也可稍后通过编辑补充依赖',
 )
 
-/** Collapsible advanced options disclosure in the create dialog. */
+/** Collapsible advanced options disclosure in the create dialog and the detail-drawer edit form. */
 export const TASK_MORE_OPTIONS: LocalizedText = L('More options', '高级选项')
+
+/** Started-task lock hint on executor / node / cwd inputs in the edit form (backend 409 task_already_started). */
+export const TASK_EDIT_STARTED_LOCK_TITLE: LocalizedText = L(
+  'Locked after start: the execution conversation already exists, executor / node / working directory cannot change',
+  '已启动锁定：执行会话已创建，执行角色 / 节点 / 工作目录不可修改',
+)
 
 export const TASK_FIELD_AUTO_START: LocalizedText = L('Start immediately', '立即开工')
 export const TASK_FIELD_AUTO_START_DESC: LocalizedText = L('Create the execution conversation right away', '创建后立即启动执行会话')
@@ -359,6 +365,8 @@ export const TASK_KV_ASSIGNEE: LocalizedText = L('Assignee', '执行角色')
 export const TASK_KV_NODE: LocalizedText = L('Node', '节点')
 export const TASK_KV_CWD: LocalizedText = L('Working directory', '工作目录')
 export const TASK_KV_MODEL: LocalizedText = L('Model', '模型')
+export const TASK_KV_THINKING_LEVEL: LocalizedText = L('Thinking level', '思考档位')
+export const TASK_KV_PLAN_FIRST: LocalizedText = L('Plan first', '先出方案')
 export const TASK_KV_CREATED: LocalizedText = L('Created', '创建时间')
 export const TASK_KV_STARTED: LocalizedText = L('Started', '开工时间')
 export const TASK_KV_COMPLETED: LocalizedText = L('Completed', '完成时间')

@@ -80,6 +80,9 @@ function installFetch(fixture: FetchFixture = {}): void {
     if (url === '/api/auth/status') {
       return new Response(JSON.stringify({ configured: true, authenticated: true }), { status: 200 })
     }
+    if (url === '/api/profiles') {
+      return new Response(JSON.stringify([{ id: 'assistant', name: 'Assistant' }]), { status: 200 })
+    }
     if (url === '/api/events') {
       return new Response(hangingEventStream((send) => {
         send(new TextEncoder().encode(`event: snapshot\ndata: ${JSON.stringify({
@@ -417,4 +420,16 @@ test('深链组合态还原抽屉会话的抬升工作台（wb + modal=drawer）
     tabs.some((text) => text.includes('抽屉专属面板')),
     `深链工作台应绑定抽屉会话 #11，实际页签: ${JSON.stringify(tabs)}`,
   )
+})
+
+test('抽屉会话一律不渲染「新话题」按钮：主屏与分屏保留入口', { timeout: 60_000 }, async () => {
+  // 抽屉是叠加在主语境之上的检视面（任务会话 / 子代理轨迹 / 总览直达共用），
+  // 「新话题」会把底下主屏导航走——不管抽屉里是什么类型的会话都不该出现。
+  await mount('#/c/999?split=c/111&modal=drawer&id=111')
+  const newTopicButtons = (scope: string): HTMLButtonElement[] =>
+    [...document.querySelectorAll<HTMLButtonElement>(`${scope} button`)]
+      .filter((b) => b.getAttribute('aria-label') === 'New topic')
+  assert.equal(newTopicButtons('.conversation-drawer').length, 0, '抽屉内不得渲染新话题按钮')
+  assert.equal(newTopicButtons('.helmx-panes > .helmx-pane').length, 1, '主屏保留新话题入口')
+  assert.equal(newTopicButtons('.helmx-split-pane').length, 1, '分屏保留新话题入口')
 })
