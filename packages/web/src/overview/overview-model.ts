@@ -44,7 +44,9 @@ const CARD_BUCKET_ORDER: Record<OverviewCardBucket, number> = {
 export interface OverviewCard {
   root: ConversationSummary
   bucket: OverviewCardBucket
-  /** 树内最高优先级状态代表（灯位来源）。 */
+  hasWaiting: boolean
+  hasError: boolean
+  /** 树内最高优先级状态代表，用于摘要。 */
   representative: ConversationSummary
   backgroundActive: boolean
   backgroundSummary: string
@@ -116,6 +118,8 @@ export function buildOverviewCards(input: {
     cards.push({
       root: aggregate.root,
       bucket: aggregate.bucket ?? 'quiet',
+      hasWaiting: aggregate.hasWaiting,
+      hasError: aggregate.hasError,
       representative: aggregate.representative,
       backgroundActive: aggregate.backgroundActive,
       backgroundSummary: aggregate.backgroundSummary,
@@ -170,6 +174,7 @@ function overviewCardMatchesQuery(card: OverviewCard, query: string): boolean {
   if (needle === '') return true
   if (card.root.title.toLowerCase().includes(needle)) return true
   if (card.profileLabel.toLowerCase().includes(needle)) return true
+  if (overviewNodeKey(card.root).toLowerCase().includes(needle)) return true
   if (card.summaryText.toLowerCase().includes(needle)) return true
   const idNeedle = needle.startsWith('#') ? needle.slice(1) : needle
   if (/^\d+$/.test(idNeedle)) {

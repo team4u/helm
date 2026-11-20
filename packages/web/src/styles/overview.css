@@ -55,14 +55,24 @@
   background: var(--bg-hover);
 }
 
-/* 需处理桶强调：等待人类/异常的树以警示描边从普通卡中突出（事实仍是
- * 灯位与诚实摘要，不新增文案、不编造进度）。 */
+/* 保留通用灯位，需处理原因单独占一行，避免在窄卡上与角色和节点争宽度。 */
 .overview-card-needs_attention {
   border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
 }
 
 .overview-card-needs_attention:hover {
   border-color: color-mix(in srgb, var(--warn) 60%, var(--border-strong));
+}
+
+.overview-card-attention {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--fg-secondary);
+  font-size: 12px;
 }
 
 /* 语义主入口：标题簇真按钮（灯 + 标题 + #id），承载键盘/读屏语义；
@@ -119,7 +129,7 @@
 
   .overview-card:hover .overview-card-actions,
   .overview-card:focus-within .overview-card-actions,
-  .overview-card:has([aria-expanded='true']) .overview-card-actions {
+  .overview-card-actions:has([aria-expanded='true']) {
     opacity: 1;
     pointer-events: auto;
   }

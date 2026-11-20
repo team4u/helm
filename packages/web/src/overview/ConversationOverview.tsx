@@ -22,14 +22,14 @@
  *   实时会话变化后隐藏项立即出局，绝不悄悄操作不可见对象）；托管/bot 会话
  *   保护与部分失败通知与侧栏同语义；
  * - 卡片元信息区挂 OVERVIEW_CARD_META_SLOT 只读插槽（插件贡献跳转胶囊等，
- *   插槽内可点元素自带行为、不依赖冒泡拦截；无贡献零占位）；
+ *   插槽内可点元素自行拦截冒泡；无贡献零占位）；
  * - 审批仍走 AskDoc、后台通知仍走浏览器通知旧链路——本视图是态势的分发
  *   大堂，不是新的通知收件箱；
  * - 移动端主舞台自适应：筛选折行、卡片网格单列化（responsive 断点）。
  */
 import { HubUpdateCard } from './HubUpdateCard.js'
 import { HubUpgradedNotice } from './HubUpgradedNotice.js'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useId, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { HelmxIcon, Checkbox, PluginSlot, SegmentedControl, Select } from '@helmx/plugin-client'
@@ -115,6 +115,9 @@ function OverviewCardView({
   onToggleExpanded?: (rootConversationId: number) => void
 }): ReactNode {
   const { t } = useWebLocale()
+  const attentionId = useId()
+  const needsAttention = card.bucket === 'needs_attention'
+  const errorText = card.representative.status === 'error' ? card.representative.lastError?.trim() : undefined
   const remoteNodeId = card.root.nodeId !== undefined && card.root.nodeId !== 'local' ? card.root.nodeId : null
   // 紧凑元信息行：角色 · @节点 · 摘要 同一行（远端节点折叠进来，不再独占
   // 一行）；摘要尾随弹性截断，角色/节点固定不丢事实。
@@ -133,7 +136,7 @@ function OverviewCardView({
       </span>,
     )
   }
-  if (card.summaryText !== '') {
+  if (!needsAttention && card.summaryText !== '') {
     metaParts.push(
       <span key="summary" className="overview-card-sub-summary" title={card.summaryText}>
         {card.summaryText}
@@ -158,7 +161,7 @@ function OverviewCardView({
   const buttonLabel = batchMode ? `${cardTitleText} · ${t('shell.overview.batchToggleCard')}` : openLabel
   const shownDescendants = expanded ? card.descendants : card.descendants.slice(0, OVERVIEW_DESCENDANT_LIMIT)
   return (
-    <div
+    <article
       className={`overview-card overview-card-${card.bucket}${selected ? ' is-selected' : ''}`}
       onClick={activateCard}
     >
@@ -167,6 +170,7 @@ function OverviewCardView({
           <span className="overview-card-batch-check" onClick={(e) => e.stopPropagation()}>
             <Checkbox
               checked={selected}
+              aria-label={cardTitleText}
               disabled={!selectable}
               title={selectable ? undefined : t('shell.overview.batchProtected')}
               onChange={toggleCardSelect}
@@ -174,14 +178,15 @@ function OverviewCardView({
           </span>
         )}
         {/* 语义主入口：真按钮包住标题簇（灯 + 标题 + #id）。按钮内容即
-            可访问名称——状态灯自带可读 aria-label，异常/等待人类事实经
-            灯标签与诚实摘要原样进入读屏，不编造、不加进度。 */}
+            标题提供可访问名称，需处理原因通过 aria-describedby 关联。 */}
         <button
           type="button"
           className="overview-card-open"
           title={buttonLabel}
           aria-label={batchMode ? buttonLabel : undefined}
           aria-pressed={batchMode ? selected : undefined}
+          aria-describedby={needsAttention ? attentionId : undefined}
+          disabled={batchMode && !selectable}
           onClick={(e) => {
             e.stopPropagation()
             activateCard()
@@ -199,7 +204,7 @@ function OverviewCardView({
             />
           </span>
           <span className="overview-card-title">
-            {card.root.title || t('shell.conversationFallback', { id: card.root.id })}
+            {cardTitleText}
           </span>
           <span className="overview-card-id tabular-nums">#{card.root.id}</span>
         </button>
@@ -226,6 +231,14 @@ function OverviewCardView({
           </span>
         )}
       </div>
+      {needsAttention && (
+        <p id={attentionId} className="overview-card-attention" title={errorText}>
+          {card.hasWaiting && t('shell.overview.waitingForYou')}
+          {card.hasError && card.hasWaiting && ' · '}
+          {card.hasError && t('shell.overview.hasError')}
+          {errorText && ` · ${errorText}`}
+        </p>
+      )}
       {metaParts.length > 0 && (
         <div className="overview-card-sub">
           {metaParts.flatMap((part, index) =>
@@ -240,9 +253,7 @@ function OverviewCardView({
           )}
         </div>
       )}
-      {/* 卡片元信息只读插槽：位于语义主入口之外，插件可点元素自带行为、
-          不再依赖冒泡拦截（空白区域点击不导航，导航入口是标题簇按钮与
-          芯片）；无贡献时 PluginSlot 渲染 null 零占位。 */}
+      {/* 插槽位于标题按钮之外，插件可点元素沿用 stopPropagation 契约。 */}
       <PluginSlot
         ownerPluginId="builtin:overview"
         name={OVERVIEW_CARD_META_SLOT}
@@ -295,7 +306,7 @@ function OverviewCardView({
           )}
         </div>
       )}
-    </div>
+    </article>
   )
 }
 
@@ -321,7 +332,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   const [expandedCardIds, setExpandedCardIds] = useState<Set<number>>(new Set())
   const [archiving, setArchiving] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false)
+  const [batchDeleteIds, setBatchDeleteIds] = useState<ReadonlySet<number> | null>(null)
 
   // 筛选状态接入唯一 URL Hash 导航模型：总览目标在 sp. / ssp. 命名空间携带
   // bucket/profile/node/source/q 路由参数（主屏 sp.、分屏 ssp.），经
@@ -425,7 +436,13 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       return prev
     })
   }, [effectiveSelectedIds])
-  const isAllSelected = selectableCardIds.length > 0 && selectableCardIds.every((id) => effectiveSelectedIds.has(id))
+  const isAllSelected = selectableCardIds.length > 0 && selectableCardIds.length === effectiveSelectedIds.size
+  const batchDeleteConfirmOpen = batchDeleteIds !== null &&
+    batchDeleteIds.size === effectiveSelectedIds.size &&
+    [...batchDeleteIds].every((id) => effectiveSelectedIds.has(id))
+  useEffect(() => {
+    if (!batchDeleteConfirmOpen) setBatchDeleteIds(null)
+  }, [batchDeleteConfirmOpen])
 
   const toggleCardSelect = (conversationId: number): void => {
     setSelectedIds((prev) => {
@@ -476,11 +493,11 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
    * 不做任何导航——若被删会话正被打开，由 conversation.deleted SSE 兜底
    * 管道统一处理当前目标回退。 */
   const executeBatchDelete = async (): Promise<void> => {
-    if (effectiveSelectedIds.size === 0 || deleting) return
-    setBatchDeleteConfirmOpen(false)
+    if (!batchDeleteConfirmOpen || batchDeleteIds === null || archiving || deleting) return
+    const ids = Array.from(batchDeleteIds)
+    setBatchDeleteIds(null)
     setDeleting(true)
     try {
-      const ids = Array.from(effectiveSelectedIds)
       const results = await Promise.allSettled(ids.map((id) => conversationsApi.remove(id)))
       const fulfilled = results.filter((r) => r.status === 'fulfilled').length
       const rejected = results.filter((r) => r.status === 'rejected').length
@@ -786,7 +803,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
               type="button"
               className="btn btn-sm btn-danger-sm"
               disabled={effectiveSelectedIds.size === 0 || deleting || archiving}
-              onClick={() => setBatchDeleteConfirmOpen(true)}
+              onClick={() => setBatchDeleteIds(effectiveSelectedIds)}
             >
               {deleting ? t('shell.batch.deleting') : t('shell.batch.deleteCount', { count: effectiveSelectedIds.size })}
             </button>
@@ -839,7 +856,9 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
 
       <ConfirmDialog
         open={batchDeleteConfirmOpen}
-        onOpenChange={setBatchDeleteConfirmOpen}
+        onOpenChange={(open) => {
+          if (!open) setBatchDeleteIds(null)
+        }}
         title={t('shell.batch.deleteConfirmTitle', { count: effectiveSelectedIds.size })}
         description={t('shell.batch.deleteConfirmDesc')}
         confirmText={t('shell.batch.deleteConfirmButton')}
@@ -847,7 +866,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
         onConfirm={() => {
           void executeBatchDelete()
         }}
-        onCancel={() => setBatchDeleteConfirmOpen(false)}
+        onCancel={() => setBatchDeleteIds(null)}
       />
     </div>
   )
