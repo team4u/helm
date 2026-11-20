@@ -103,14 +103,12 @@ function SwarmTrayRow(props: {
         aria-label={`@${item.name} — ${trayRowOpenLabel(item.name, locale)}`}
         onClick={() => ctx.openConversationDrawer(item.conversationId)}
       >
-        <span className="sw-tray-row-head">
-          <StatusLight
-            status={item.isBlocked ? 'blocked' : 'running'}
-            label={memberLiveStateLabel(item.isBlocked ? 'blocked' : 'working', locale)}
-          />
-          <span className="sw-tray-row-title">@{item.name}</span>
-          <span className="sw-tray-row-id tabular-nums">{`#${item.conversationId}`}</span>
-        </span>
+        <StatusLight
+          status={item.isBlocked ? 'blocked' : 'running'}
+          label={memberLiveStateLabel(item.isBlocked ? 'blocked' : 'working', locale)}
+        />
+        <span className="sw-tray-row-title">@{item.name}</span>
+        <span className="sw-tray-row-id tabular-nums">{`#${item.conversationId}`}</span>
         <SwarmTrayLiveLine
           conversationId={item.conversationId}
           isBlocked={item.isBlocked}

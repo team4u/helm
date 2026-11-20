@@ -1115,11 +1115,9 @@ test('WorkflowActiveTray 展开行两层布局：标题/编号主行、实际执
     const main = row.querySelector('button.workflow-active-tray-row-main') as HTMLButtonElement | null
     assert.ok(main !== null, '行主体是真实 button')
     assert.equal(main.querySelectorAll('button').length, 0, '行主体按钮内无嵌套交互')
-    // 两层 DOM：主行承载标题/#id，实际执行内容独立第二行。
-    const head = main.querySelector('.workflow-active-tray-row-head') as HTMLElement | null
-    assert.ok(head !== null, '主行独立渲染')
-    assert.equal(head.querySelector('.workflow-active-tray-row-title')?.textContent, '重构活动托盘')
-    assert.equal(head.querySelector('.workflow-active-tray-row-id')?.textContent, '#11')
+    // 单行 DOM（与折叠横栏同构）：标题/#id/实况同行，实况为行内尾随单行省略。
+    assert.equal(main.querySelector('.workflow-active-tray-row-title')?.textContent, '重构活动托盘')
+    assert.equal(main.querySelector('.workflow-active-tray-row-id')?.textContent, '#11')
     const liveOf = (): HTMLElement | null => row.querySelector('.workflow-active-tray-row-live') as HTMLElement | null
 
     // live 运行中 bash 工具 → 语义命令进第二行，不再把任务名/编号拼进活动文案。
