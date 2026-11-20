@@ -63,14 +63,17 @@ function StatusLightDot({
   lastError,
   backgroundActive,
   backgroundSummary,
+  showDone = true,
 }: {
   status: ConversationSummary['status']
   doing?: string
   lastError?: string
   backgroundActive: boolean
   backgroundSummary?: string
+  showDone?: boolean
 }) {
   const { t } = useWebLocale()
+  if (status === 'done' && !showDone && !backgroundActive) return null
   const light = resolveStatusLight(status, backgroundActive)
   if (light.dotClass === null) return null
   const tooltip = backgroundAwareStatusTooltip({
@@ -92,9 +95,11 @@ function StatusLightDot({
 export function ConversationStatusDot({
   conv,
   background,
+  showDone = true,
 }: {
   conv: ConversationSummary
   background?: ConversationBackgroundActivity
+  showDone?: boolean
 }) {
   return (
     <StatusLightDot
@@ -103,6 +108,7 @@ export function ConversationStatusDot({
       lastError={conv.lastError}
       backgroundActive={background?.active === true}
       backgroundSummary={background?.summary}
+      showDone={showDone}
     />
   )
 }

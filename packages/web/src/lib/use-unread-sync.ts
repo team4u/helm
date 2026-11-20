@@ -8,7 +8,7 @@ import { conversationsApi } from './api.js'
 import { isPageActive } from './browser-notification.js'
 import { errorText } from './error-text.js'
 import type { LiveState } from './live-state.js'
-import type { ResolvedTarget, ToastNotice } from './types.js'
+import type { ActiveModal, ResolvedTarget, ToastNotice } from './types.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
 
 export interface ArtifactsSyncWatermark {
@@ -44,8 +44,11 @@ export interface UseUnreadSyncOptions {
   authenticatedRef: MutableRefObject<boolean>
   primaryTarget: ResolvedTarget
   splitTarget: ResolvedTarget | null
+  activeModal: ActiveModal
   targets: MutableRefObject<{ primaryTarget: ResolvedTarget; splitTarget: ResolvedTarget | null }>
+  activeModalRef: MutableRefObject<ActiveModal>
   liveRef: MutableRefObject<LiveState>
+  updateLive: (update: (state: LiveState) => LiveState) => void
   conversationArtifactsRef?: MutableRefObject<Record<number, ArtifactMetadata[]>>
   artifactsWatermarksRef?: MutableRefObject<Map<number, ArtifactsSyncWatermark>>
   session: MutableRefObject<number>
@@ -77,8 +80,11 @@ export function useUnreadSync({
   authenticatedRef,
   primaryTarget,
   splitTarget,
+  activeModal,
+  activeModalRef,
   targets,
   liveRef,
+  updateLive,
   conversationArtifactsRef,
   artifactsWatermarksRef,
   session,
@@ -96,8 +102,12 @@ export function useUnreadSync({
     for (const target of [targets.current.primaryTarget, targets.current.splitTarget]) {
       if (target?.kind === 'conversation') ids.add(target.conversationId)
     }
+    const modal = activeModalRef.current
+    if (modal?.kind === 'conversation-drawer' || modal?.kind === 'artifact-preview' || modal?.kind === 'workspace-file') {
+      if (modal.conversationId !== undefined) ids.add(modal.conversationId)
+    }
     return [...ids]
-  }, [targets])
+  }, [activeModalRef, targets])
 
   const resetUnreadSync = useCallback(() => {
     unreadClearInFlight.current.clear()
@@ -122,7 +132,8 @@ export function useUnreadSync({
       const summary = candidate ?? liveRef.current.conversations.find((conv) => conv.id === id)
       if (summary === undefined) return
       if (!summary.unread) {
-        unreadClearedSeq.current.delete(id)
+        const clearedSeq = unreadClearedSeq.current.get(id)
+        if (clearedSeq !== undefined && summary.stateChangeSeq > clearedSeq) unreadClearedSeq.current.delete(id)
         return
       }
       if (!authenticatedRef.current || !isPageActive()) return
@@ -137,16 +148,27 @@ export function useUnreadSync({
         .then((updated) => {
           if (epoch !== session.current) return
           unreadClearInFlight.current.delete(id)
-          const latest = liveRef.current.conversations.find((conv) => conv.id === id)
-          if (latest !== undefined && !latest.unread) {
-            unreadClearedSeq.current.delete(id)
-            return
-          }
           const updatedSeq =
             typeof updated?.stateChangeSeq === 'number' && updated.unread === false
               ? updated.stateChangeSeq
               : requestedSeq
           const ackSeq = Math.max(requestedSeq, updatedSeq)
+          unreadClearedSeq.current.set(id, ackSeq)
+          if (updated?.unread === false) {
+            updateLive((state) => {
+              const current = state.conversations.find((conv) => conv.id === id)
+              if (current === undefined) return state
+              if (typeof updated.stateChangeSeq === 'number' && current.stateChangeSeq > updated.stateChangeSeq) return state
+              return {
+                ...state,
+                conversations: state.conversations.map((conv) =>
+                  conv.id === id ? { ...conv, ...updated } : conv,
+                ),
+              }
+            })
+          }
+          const latest = liveRef.current.conversations.find((conv) => conv.id === id)
+          if (latest !== undefined && !latest.unread) return
           if (
             latest !== undefined &&
             latest.unread &&
@@ -158,7 +180,6 @@ export function useUnreadSync({
             return
           }
           if (latest === undefined) return
-          unreadClearedSeq.current.set(id, ackSeq)
         })
         .catch((error: unknown) => {
           if (epoch === session.current) {
@@ -172,7 +193,7 @@ export function useUnreadSync({
           }
         })
     },
-    [authenticatedRef, liveRef, pushNotice, session, tt, visibleConversationIds],
+    [authenticatedRef, liveRef, pushNotice, session, tt, updateLive, visibleConversationIds],
   )
 
   useEffect(() => {
@@ -192,6 +213,7 @@ export function useUnreadSync({
     authenticated,
     primaryTarget,
     splitTarget,
+    activeModal,
     liveRef,
     conversationArtifactsRef,
     artifactsWatermarksRef,

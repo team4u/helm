@@ -9,6 +9,7 @@
  */
 import { useEffect, useMemo } from 'react'
 import {
+  useActiveModal,
   useAuthConnection,
   useConversations,
   useGroupedUi,
@@ -32,6 +33,8 @@ import {
 } from './attention-model.js'
 
 export interface GlobalAttentionValue extends AttentionModelResult {
+  /** 当前可见的主屏/分屏/会话弹窗目标，用于即时隐藏已查看的未读完成提示。 */
+  viewedConversationIds: ReadonlySet<number>
   /** 后台在途索引（与会话行单灯位、插件 SDK 快照共享同一事实源）。 */
   background: ConversationBackgroundIndex
 }
@@ -39,6 +42,7 @@ export interface GlobalAttentionValue extends AttentionModelResult {
 export function useGlobalAttention(): GlobalAttentionValue {
   const { authenticated } = useAuthConnection()
   const { primaryTarget, splitTarget } = useLocationTargets()
+  const activeModal = useActiveModal()
   const groupedUi = useGroupedUi()
   const conversations = useConversations()
   const pluginDocs = usePluginDocsState()
@@ -67,12 +71,12 @@ export function useGlobalAttention(): GlobalAttentionValue {
   }, [badgeDocs, authenticated, ensurePluginDoc])
 
   const viewedConversationIds = useMemo(
-    () => collectViewedConversationIds({ primaryTarget, splitTarget }),
-    [primaryTarget, splitTarget],
+    () => collectViewedConversationIds({ primaryTarget, splitTarget, activeModal }),
+    [primaryTarget, splitTarget, activeModal],
   )
   const model = useMemo(
     () => buildAttentionModel({ conversations, background, profiles, plugins, viewedConversationIds, t }),
     [conversations, background, profiles, plugins, viewedConversationIds, t],
   )
-  return { ...model, background }
+  return { ...model, background, viewedConversationIds }
 }
