@@ -6,6 +6,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
   type ComponentType,
   type ExoticComponent,
@@ -48,6 +49,7 @@ import { useVersionWatcher } from './shell/use-version-watcher.js'
 import { versionDeferHint } from './shell/version-watch-model.js'
 import { useGlobalAttention } from './shell/use-attention-indicator.js'
 import { extractRailQuickEntries } from './shell/sidebar-model.js'
+import { useSidebarBadges } from './shell/use-sidebar-badges.js'
 import { MobileQuickNav } from './shell/MobileQuickNav.js'
 
 /** SSE 断线横幅展示防抖：短于 1500ms 的瞬断或页面初始握手不闪现重连提示。 */
@@ -215,8 +217,15 @@ function HelmxShellInner() {
   const conversations = useConversations()
   // 首个插件全局快捷入口（sidebar.item quickEntry，仅认当前启用插件真实存在
   // 的 screen）：移动端免开汉堡一键直达（如任务看板）。
-  const firstQuickEntry =
-    extractRailQuickEntries(groupedUi.sidebarItems, groupedUi.screens, conversations, locale)[0] ?? null
+  const firstQuickEntry = useMemo(
+    () => extractRailQuickEntries(groupedUi.sidebarItems, groupedUi.screens, conversations, locale)[0] ?? null,
+    [groupedUi.sidebarItems, groupedUi.screens, conversations, locale],
+  )
+  // 快捷入口的 sidebar.item badge 解析（doc 按需发现加载内聚在 Hook）：
+  // 无信号为 null，移动端快捷簇零渲染残留；插件停用后贡献与 doc 消失即归零。
+  const quickBadgeItems = useMemo(() => (firstQuickEntry !== null ? [firstQuickEntry] : []), [firstQuickEntry])
+  const quickEntryBadges = useSidebarBadges(quickBadgeItems)
+  const quickEntryBadge = firstQuickEntry !== null ? (quickEntryBadges.get(firstQuickEntry.key) ?? null) : null
   const closeModal = useCallback(() => setActiveModal(null), [setActiveModal])
   const focusPrimary = useCallback(() => setFocusedPanel?.('primary'), [setFocusedPanel])
   const focusSplit = useCallback(() => setFocusedPanel?.('split'), [setFocusedPanel])
@@ -311,7 +320,7 @@ function HelmxShellInner() {
         </button>
         {/* 移动端免开汉堡的一键直达：首个 quickEntry 插件视图 + 会话总览
             （态势微标独立可按）；桌面由折叠 Rail 承担同源入口，此处渲染 null。 */}
-        <MobileQuickNav indicator={attention.indicator} quickEntry={firstQuickEntry} />
+        <MobileQuickNav indicator={attention.indicator} quickEntry={firstQuickEntry} quickEntryBadge={quickEntryBadge} />
         {sidebarOpen && (
           <button
             type="button"

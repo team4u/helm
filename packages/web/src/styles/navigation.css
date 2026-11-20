@@ -267,6 +267,29 @@
   flex-shrink: 0;
 }
 
+/* 左栏「视图」行徽标（sidebar.item badge 声明）：计数用宿主 badge 语义类
+ * （badge-err/warn/accent/ok/neutral，行内紧凑高度），静默灯点用独立小圆点；
+ * 悬停动作浮现时不淡出——注意力事实常驻可见。 */
+.sidebar-view-badge {
+  height: 16px;
+  padding: 0 5px;
+  font-size: 10px;
+}
+
+.sidebar-view-badge-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.sidebar-view-badge-dot[data-tone='error'] { background: var(--err); }
+.sidebar-view-badge-dot[data-tone='warn'] { background: var(--warn); }
+.sidebar-view-badge-dot[data-tone='accent'] { background: var(--accent); }
+.sidebar-view-badge-dot[data-tone='ok'] { background: var(--ok); }
+.sidebar-view-badge-dot[data-tone='neutral'] { background: var(--fg-muted); }
+
 /* 智能体站位：一级 Agent 行 + 轻缩进二级历史会话子列表（去树线，给标题留足宽度） */
 .agent-standing {
   display: flex;
@@ -413,11 +436,11 @@
     display: none;
   }
 
-  .nav-item:is(:has(.nav-item-row-actions:not(:empty)), :has(.sidebar-split-action)) .nav-item-meta > :not(.nav-item-row-actions):not(.sidebar-split-action) {
+  .nav-item:is(:has(.nav-item-row-actions:not(:empty)), :has(.sidebar-split-action)) .nav-item-meta > :not(.nav-item-row-actions):not(.sidebar-split-action):not(.sidebar-view-badge):not(.sidebar-view-badge-dot) {
     transition: opacity 100ms ease;
   }
 
-  .nav-item:is(:has(.nav-item-row-actions:not(:empty)), :has(.sidebar-split-action)):is(:hover, :has(:focus-visible), :has([aria-expanded="true"])) .nav-item-meta > :not(.nav-item-row-actions):not(.sidebar-split-action) {
+  .nav-item:is(:has(.nav-item-row-actions:not(:empty)), :has(.sidebar-split-action)):is(:hover, :has(:focus-visible), :has([aria-expanded="true"])) .nav-item-meta > :not(.nav-item-row-actions):not(.sidebar-split-action):not(.sidebar-view-badge):not(.sidebar-view-badge-dot) {
     opacity: 0;
   }
 

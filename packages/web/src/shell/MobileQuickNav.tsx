@@ -15,16 +15,18 @@ import { useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useIsMobileViewport } from '../lib/use-media-query.js'
 import { composeAttentionSummary, type GlobalAttentionIndicator } from './attention-model.js'
-import type { SidebarViewItem } from './sidebar-model.js'
+import { sidebarBadgeCountLabel, type ResolvedSidebarBadge, type SidebarViewItem } from './sidebar-model.js'
 
 export interface MobileQuickNavProps {
   /** 全局态势微标（同源 indicator）。 */
   indicator: GlobalAttentionIndicator
   /** 首个已声明 quickEntry 的插件视图（无则为 null，仅渲染总览按钮）。 */
   quickEntry: SidebarViewItem | null
+  /** quickEntry 视图的 sidebar.item badge 解析结果（无信号为 null，零渲染残留）。 */
+  quickEntryBadge?: ResolvedSidebarBadge | null
 }
 
-export function MobileQuickNav({ indicator, quickEntry }: MobileQuickNavProps): ReactNode {
+export function MobileQuickNav({ indicator, quickEntry, quickEntryBadge = null }: MobileQuickNavProps): ReactNode {
   const { t } = useWebLocale()
   const { openTarget } = useStoreActions()
   const isMobileViewport = useIsMobileViewport()
@@ -32,17 +34,29 @@ export function MobileQuickNav({ indicator, quickEntry }: MobileQuickNavProps): 
   const attentionSummary = composeAttentionSummary(indicator, t)
   const overviewLabel =
     attentionSummary !== '' ? `${t('shell.overview.railTooltip')} · ${attentionSummary}` : t('shell.overview.railTooltip')
+  const quickLabel =
+    quickEntry !== null && quickEntryBadge !== null && quickEntryBadge.summary !== ''
+      ? `${quickEntry.label} · ${quickEntryBadge.summary}`
+      : quickEntry?.label ?? ''
   return (
     <div className="mobile-quick-nav" role="group" aria-label={t('shell.overview.quickNavGroup')}>
       {quickEntry !== null && (
         <button
           type="button"
           className="mobile-quick-btn"
-          title={quickEntry.label}
-          aria-label={quickEntry.label}
+          title={quickLabel}
+          aria-label={quickLabel}
           onClick={() => openTarget(quickEntry.target)}
         >
           <HelmxIcon name={quickEntry.icon} size={15} />
+          {quickEntryBadge !== null && !quickEntryBadge.dot && quickEntryBadge.count > 0 && (
+            <span className="mobile-quick-badge" data-tone={quickEntryBadge.tone}>
+              {sidebarBadgeCountLabel(quickEntryBadge.count)}
+            </span>
+          )}
+          {quickEntryBadge !== null && quickEntryBadge.dot && (
+            <span className="mobile-quick-dot" data-tone={quickEntryBadge.tone} />
+          )}
         </button>
       )}
       <button

@@ -609,6 +609,76 @@ function validateWorkbenchPanelSpec(spec: Record<string, unknown>, id: string, c
   });
 }
 
+/** sidebar.item badge field names validated as safe top-level doc keys (rejects __proto__/constructor/prototype). */
+const SIDEBAR_BADGE_FIELDS = ['doc', 'countField', 'toneField', 'dotField', 'summaryField'] as const;
+
+const SIDEBAR_ITEM_CHECKER = Compile(
+  Type.Object({
+    badge: Type.Optional(
+      Type.Object(
+        {
+          doc: NonEmptyString,
+          countField: NonEmptyString,
+          toneField: Type.Optional(NonEmptyString),
+          dotField: Type.Optional(NonEmptyString),
+          summaryField: Type.Optional(NonEmptyString),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  }),
+);
+
+function validateSidebarItemSpec(spec: Record<string, unknown>, id: string, ctx: UiSpecContext): void {
+  const { pluginId } = ctx;
+  if (spec['badge'] !== undefined && !isPlainObject(spec['badge'])) {
+    throw new HelmxError(
+      'invalid_ui_spec',
+      `plugin ${pluginId} ui.sidebarItem  badge must be a plain object { doc, countField, toneField?, dotField?, summaryField? }`,
+      400,
+      { pluginId, id },
+    );
+  }
+  runCompiledUiSchema(SIDEBAR_ITEM_CHECKER, spec, id, ctx, (errors) => {
+    const err = findErrorByPathPrefix(errors, [
+      '/badge/doc',
+      '/badge/countField',
+      '/badge/toneField',
+      '/badge/dotField',
+      '/badge/summaryField',
+      '/badge',
+    ]);
+    const p = err?.instancePath ?? '';
+    for (const field of SIDEBAR_BADGE_FIELDS) {
+      if (p === `/badge/${field}`) {
+        return {
+          message: `plugin ${pluginId} ui.sidebarItem  badge.${field} must be non-empty string field name`,
+          details: { pluginId, id, field },
+        };
+      }
+    }
+    return {
+      message: `plugin ${pluginId} ui.sidebarItem  badge only allows { doc, countField, toneField?, dotField?, summaryField? }`,
+      details: { pluginId, id },
+    };
+  });
+  // Field names become doc-key reads on the host; unsafe prototype keys must never pass.
+  const badge = spec['badge'] as Record<string, unknown> | undefined;
+  if (badge !== undefined) {
+    for (const field of SIDEBAR_BADGE_FIELDS) {
+      const value = badge[field];
+      if (typeof value === 'string' && UNSAFE_TOP_LEVEL_KEYS.has(value)) {
+        throw new HelmxError(
+          'invalid_ui_spec',
+          `plugin ${pluginId} ui.sidebarItem  badge.${field} must be security top-level doc key (refuse __proto__/constructor/prototype)`,
+          400,
+          { pluginId, id, field, value },
+        );
+      }
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Two-phase dispatch tables
 // ---------------------------------------------------------------------------
@@ -623,6 +693,7 @@ const EARLY_VALIDATORS: Readonly<Record<string, UiSpecValidator>> = {
 };
 
 const LATE_VALIDATORS: Readonly<Record<string, UiSpecValidator>> = {
+  'sidebar.item': validateSidebarItemSpec,
   'timeline.renderer': validateTimelineRendererSpec,
   'markdown.codeBlock': validateMarkdownCodeBlockSpec,
   'tool.view': validateToolViewSpec,

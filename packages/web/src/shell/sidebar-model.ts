@@ -11,11 +11,13 @@ import type {
   LocalizedText,
   Profile,
   ScreenSpec,
+  SidebarBadgeTone,
+  SidebarItemBadgeSpec,
   SidebarItemSpec,
   SidebarSectionSpec,
   SkillSummary,
 } from '@helmx/protocol/browser'
-import { resolveLocalizedText } from '@helmx/protocol/browser'
+import { parseLocalizedText, resolveLocalizedText } from '@helmx/protocol/browser'
 import type { HelmxStoreValue, QualifiedUiSpec, ResolvedTarget } from '../lib/types.js'
 import { resolveTargetString } from '../lib/types.js'
 import { ARCHIVED_TAG, isConversationArchived } from '../conversation/archive-model.js'
@@ -156,6 +158,8 @@ export interface SidebarViewItem {
   icon: string
   order: number
   target: ResolvedTarget
+  /** 声明型注意力徽标（sidebar.item badge）：宿主按其 doc 声明订阅并渲染通用计数徽标/静默灯点。 */
+  badge?: SidebarItemBadgeSpec
 }
 
 export interface AgentStandingsInput {
@@ -327,6 +331,7 @@ export function extractRailQuickEntries(
       icon: item.spec.icon ?? 'panel-right',
       order: item.spec.order ?? 100,
       target: resolved,
+      badge: item.spec.badge,
     })
   }
   return entries.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key))
@@ -355,9 +360,104 @@ export function extractSidebarViews(
       icon: item.spec.icon ?? 'panel-right',
       order: item.spec.order ?? 100,
       target: resolved,
+      badge: item.spec.badge,
     })
   }
   return views.sort((a, b) => a.order - b.order || a.key.localeCompare(b.key))
+}
+
+// ---------------------------------------------------------------------------
+// 侧栏视图徽标（sidebar.item badge 声明）：纯解析函数，零 React 依赖
+// ---------------------------------------------------------------------------
+
+/** 徽标解析结果：count > 0 为计数徽标；dot 为静默灯点（无计数）；两者皆无即 null（零视觉噪音）。 */
+export interface ResolvedSidebarBadge {
+  count: number
+  tone: SidebarBadgeTone
+  dot: boolean
+  summary: string
+}
+
+/** 徽标订阅的插件 doc 引用（去重后由宿主 Hook 经 ensurePluginDoc 按需加载）。 */
+export interface SidebarBadgeDocRef {
+  pluginId: string
+  doc: string
+}
+
+const SIDEBAR_BADGE_TONES: ReadonlySet<string> = new Set(['error', 'warn', 'accent', 'ok', 'neutral'])
+
+/** 安全读取 doc 顶层字段（非普通对象一律视为缺省，绝不解析数组/标量）。 */
+function readBadgeDocField(docValue: unknown, field: string): unknown {
+  if (docValue === null || typeof docValue !== 'object' || Array.isArray(docValue)) return undefined
+  return (docValue as Record<string, unknown>)[field]
+}
+
+/**
+ * 解析单个 sidebar.item 徽标（声明 + 该插件 doc 当前值 -> 渲染事实）：
+ * - count > 0：`{ count, tone: 有效 tone ?? 'warn', dot: false, summary }`；
+ * - count 为 0/缺省且 dotField 声明且 doc[dotField] === true：静默灯点
+ *   `{ count: 0, tone: 有效 tone ?? 'accent', dot: true, summary }`；
+ * - 其余一律 null——无信号即无视觉残留（含 doc 未加载/插件停用后贡献消失）。
+ * - summary：doc[summaryField] 为 LocalizedText 或非空字符串时按 locale 解析。
+ */
+export function resolveSidebarItemBadge(
+  badge: SidebarItemBadgeSpec,
+  docValue: unknown,
+  locale: HelmxLocale,
+): ResolvedSidebarBadge | null {
+  const rawCount = readBadgeDocField(docValue, badge.countField)
+  const count = typeof rawCount === 'number' && Number.isFinite(rawCount) && rawCount > 0 ? Math.floor(rawCount) : 0
+  const rawTone = badge.toneField !== undefined ? readBadgeDocField(docValue, badge.toneField) : undefined
+  const tone = typeof rawTone === 'string' && SIDEBAR_BADGE_TONES.has(rawTone) ? (rawTone as SidebarBadgeTone) : undefined
+  let summary = ''
+  if (badge.summaryField !== undefined) {
+    const rawSummary = readBadgeDocField(docValue, badge.summaryField)
+    if (typeof rawSummary === 'string' && rawSummary.trim() !== '') {
+      summary = rawSummary.trim()
+    } else if (parseLocalizedText(rawSummary) !== undefined) {
+      summary = resolveLocalizedText(rawSummary as LocalizedText, locale).trim()
+    }
+  }
+  if (count > 0) {
+    return { count, tone: tone ?? 'warn', dot: false, summary }
+  }
+  if (badge.dotField !== undefined && readBadgeDocField(docValue, badge.dotField) === true) {
+    return { count: 0, tone: tone ?? 'accent', dot: true, summary }
+  }
+  return null
+}
+
+/**
+ * 收集视图项徽标需要订阅的插件 doc 引用（按 `${pluginId}/${doc}` 去重）。
+ * 插件停用后其 UI 贡献与 doc 都从 store 消失，徽标随引用自然归零。
+ */
+export function collectSidebarBadgeDocs(items: ReadonlyArray<SidebarViewItem>): SidebarBadgeDocRef[] {
+  const seen = new Set<string>()
+  const refs: SidebarBadgeDocRef[] = []
+  for (const item of items) {
+    const badge = item.badge
+    if (badge === undefined) continue
+    const key = `${item.pluginId}/${badge.doc}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    refs.push({ pluginId: item.pluginId, doc: badge.doc })
+  }
+  return refs
+}
+
+/** 徽标计数上限展示（99+）：超限计数折叠为 99+，事实计数不造假。 */
+export function sidebarBadgeCountLabel(count: number): string {
+  return count > 99 ? '99+' : String(count)
+}
+
+/** 徽标 tone -> 宿主 badge 语义类（badge-err / badge-warn / badge-accent / badge-ok / badge-neutral）。 */
+export function sidebarBadgeToneClass(tone: SidebarBadgeTone): string {
+  return tone === 'error' ? 'badge-err' : `badge-${tone}`
+}
+
+/** 视图项 label 与徽标 summary 的合成 tooltip/aria 文案（summary 为空时原样返回 label）。 */
+export function composeSidebarBadgeLabel(label: string, badge: ResolvedSidebarBadge | null | undefined): string {
+  return badge !== null && badge !== undefined && badge.summary !== '' ? `${label} · ${badge.summary}` : label
 }
 
 // ---------------------------------------------------------------------------

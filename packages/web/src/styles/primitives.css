@@ -669,6 +669,13 @@
   margin-left: auto;
 }
 
+/* 全屏视图舞台宽度：覆盖 .timeline-inner 的会话列宽（--conversation-max-width），
+   宽屏（如 4 列看板）获得舒展的全出血空间；窄屏 / 分屏由 width:100% +
+   max-width 自然收敛，零横向溢出。原内联 maxWidth:1100 已移入本规则统一管理。 */
+.screen-host-stage {
+  max-width: 1480px;
+}
+
 .screen-title {
   display: flex;
   align-items: center;
