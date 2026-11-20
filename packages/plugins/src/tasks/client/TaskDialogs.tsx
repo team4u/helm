@@ -15,8 +15,11 @@
  *   MarkdownView brief / submission summary / verification / rework feedback,
  *   dependency chain, submission facts with clickable
  *   artifact chips (ctx.openArtifact) and an expandable changed-file list,
- *   inline edit (title / brief / project), start / approve / rework / archive /
- *   delete with a two-step delete confirm.
+ *   inline edit (title / brief / project + the same "More options" set as the
+ *   create dialog: assignee / node / cwd / dependsOn MultiSelect / plan first /
+ *   auto merge; once started the executor / node / cwd inputs lock disabled
+ *   with the backend 409 reason while staying visible), start / approve /
+ *   rework / archive / delete with a two-step delete confirm.
  *
  * Data flows through the @helmx/plugin-client shared hooks and the plugin
  * context; display copy resolves from copy.ts against the host locale.
@@ -119,10 +122,13 @@ import {
   TASK_KV_ID,
   TASK_KV_MODEL,
   TASK_KV_NODE,
+  TASK_KV_THINKING_LEVEL,
+  TASK_KV_PLAN_FIRST,
   TASK_KV_ORIGIN,
   TASK_KV_STARTED,
   TASK_KV_SUBMITTED_AT,
   TASK_MORE_OPTIONS,
+  TASK_EDIT_STARTED_LOCK_TITLE,
   TASK_REWORK_FEEDBACK_LABEL,
   TASK_REWORK_FEEDBACK_PLACEHOLDER,
   TASK_REWORK_SENDING,
@@ -739,6 +745,13 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
   const [editTitle, setEditTitle] = useState(task.title)
   const [editBrief, setEditBrief] = useState(task.brief)
   const [editProject, setEditProject] = useState(task.project ?? '')
+  const [editAdvancedOpen, setEditAdvancedOpen] = useState(false)
+  const [editAssignee, setEditAssignee] = useState(task.assigneeProfileId)
+  const [editNodeId, setEditNodeId] = useState(task.nodeId ?? '')
+  const [editCwd, setEditCwd] = useState(task.cwd ?? '')
+  const [editDependsOn, setEditDependsOn] = useState<string[]>(task.dependsOn)
+  const [editPlanFirst, setEditPlanFirst] = useState(task.planFirst === true)
+  const [editAutoMerge, setEditAutoMerge] = useState(task.autoMerge === true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -748,6 +761,13 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
     setEditTitle(task.title)
     setEditBrief(task.brief)
     setEditProject(task.project ?? '')
+    setEditAdvancedOpen(false)
+    setEditAssignee(task.assigneeProfileId)
+    setEditNodeId(task.nodeId ?? '')
+    setEditCwd(task.cwd ?? '')
+    setEditDependsOn(task.dependsOn)
+    setEditPlanFirst(task.planFirst === true)
+    setEditAutoMerge(task.autoMerge === true)
     setBusy(false)
     setError(null)
     setConfirmDelete(false)
@@ -776,21 +796,72 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
     })
   }, [task.dependsOn, task.blockedBy, props.tasksById])
 
+  // 启动判定与后端 update 锁同源：已启动（非 backlog 或已绑定会话）时执行角色 / 节点 /
+  // 工作目录三字段锁定（409 task_already_started），编辑表单以禁用态如实呈现。
+  const started = task.column !== 'backlog' || task.conversationId !== undefined
+
+  // 依赖候选：板上其余任务（含已完成——既有依赖可能指向它们，缺项会让 MultiSelect
+  // 静默丢值）；自身永远排除。
+  const dependencyOptions = useMemo(() => {
+    const ids = new Set<string>([task.id])
+    for (const depId of editDependsOn) ids.add(depId)
+    const options: Array<{ value: string; label: string }> = []
+    for (const depId of ids) {
+      if (depId === task.id) continue
+      const record = props.tasksById.get(depId)
+      options.push({ value: depId, label: record !== undefined ? `${depId} · ${record.title}` : depId })
+    }
+    for (const other of props.tasksById.values()) {
+      if (other.id === task.id || ids.has(other.id)) continue
+      options.push({ value: other.id, label: `${other.id} · ${other.title}` })
+    }
+    return options
+  }, [props.tasksById, task.id, editDependsOn])
+
   const saveEdit = (): void => {
     if (busy) return
     if (editTitle.trim() === '') {
       setError(`${t(TASK_ACTION_FAILED)}: ${t(TASK_SUBMIT_REQUIRED)}`)
       return
     }
+    if (!started && editAssignee.trim() === '') {
+      setError(`${t(TASK_ACTION_FAILED)}: ${t(TASK_FIELD_ASSIGNEE)} ${t(TASK_SUBMIT_REQUIRED)}`)
+      return
+    }
+    const nextProject = editProject.trim()
+    const nextNodeId = editNodeId.trim()
+    const nextCwd = editCwd.trim()
+    const nextAssignee = editAssignee.trim()
     runAction(() =>
       ctx.callAction('update', {
         taskId: task.id,
         title: editTitle.trim(),
         brief: editBrief,
-        ...(editProject.trim() !== '' ? { project: editProject.trim() } : {}),
+        // 清空即显式置 null（后端删除回默认链）；未变化的字段不发送。
+        ...(nextProject !== (task.project ?? '') ? { project: nextProject === '' ? null : nextProject } : {}),
+        ...(!started && nextAssignee !== task.assigneeProfileId ? { assigneeProfileId: nextAssignee } : {}),
+        ...(nextNodeId !== (task.nodeId ?? '') ? { nodeId: nextNodeId === '' ? null : nextNodeId } : {}),
+        ...(nextCwd !== (task.cwd ?? '') ? { cwd: nextCwd === '' ? null : nextCwd } : {}),
+        dependsOn: editDependsOn,
+        planFirst: editPlanFirst,
+        autoMerge: editAutoMerge,
       }).then(() => setEditing(false)),
     )
   }
+
+  // 折叠态摘要 chips（与新建对话框同词汇）：只显示非默认值，已启动任务的锁定
+  // 字段当前值也在此可见（只读事实不因锁定而隐藏）。
+  const editAdvancedChips: ReactNode[] = []
+  if (editAssignee.trim() !== '') editAdvancedChips.push(<span key="assignee" className="badge badge-neutral mono">{editAssignee.trim()}</span>)
+  if (editNodeId.trim() !== '') editAdvancedChips.push(<span key="node" className="badge badge-neutral mono">@{editNodeId.trim()}</span>)
+  if (editCwd.trim() !== '') editAdvancedChips.push(<span key="cwd" className="badge badge-neutral mono" title={editCwd.trim()}>{editCwd.trim()}</span>)
+  if (editDependsOn.length > 0) {
+    editAdvancedChips.push(
+      <span key="deps" className="badge badge-neutral mono">{editDependsOn.join(', ')}</span>,
+    )
+  }
+  if (editPlanFirst) editAdvancedChips.push(<span key="plan" className="badge badge-neutral">{t(TASK_FLAG_PLAN_FIRST)}</span>)
+  if (editAutoMerge) editAdvancedChips.push(<span key="merge" className="badge badge-neutral">{t(TASK_FLAG_AUTO_MERGE_SHORT)}</span>)
 
   const hasMergeMaterial = submission?.branch !== undefined || submission?.worktreePath !== undefined
 
@@ -843,6 +914,8 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
               {task.nodeId !== undefined ? kvRow(t(TASK_KV_NODE), <span className="mono">{task.nodeId}</span>) : null}
               {task.cwd !== undefined ? kvRow(t(TASK_KV_CWD), <span className="mono" title={task.cwd}>{task.cwd}</span>) : null}
               {task.model !== undefined ? kvRow(t(TASK_KV_MODEL), <span className="mono">{task.model}</span>) : null}
+              {task.thinkingLevel !== undefined && task.thinkingLevel !== '' ? kvRow(t(TASK_KV_THINKING_LEVEL), <span className="mono">{task.thinkingLevel}</span>) : null}
+              {task.planFirst === true ? kvRow(t(TASK_KV_PLAN_FIRST), <span className="badge badge-neutral">{t(TASK_FLAG_PLAN_FIRST)}</span>) : null}
               {kvRow(
                 t(TASK_KV_MERGE_MODE),
                 task.autoMerge === true ? (
@@ -922,6 +995,88 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                   {modalFormField(t(TASK_FIELD_PROJECT), (
                     <input type="text" value={editProject} aria-label={t(TASK_FIELD_PROJECT)} onChange={(e) => setEditProject(e.target.value)} />
                   ))}
+                  <button
+                    type="button"
+                    className="task-form-disclosure"
+                    aria-expanded={editAdvancedOpen}
+                    onClick={() => setEditAdvancedOpen((open) => !open)}
+                  >
+                    <HelmxIcon name="chevron-down" size={12} className={`task-form-disclosure-chevron${editAdvancedOpen ? ' is-open' : ''}`} />
+                    <span className="task-form-disclosure-label">{t(TASK_MORE_OPTIONS)}</span>
+                    {!editAdvancedOpen && editAdvancedChips.length > 0 ? (
+                      <span className="task-form-disclosure-chips">{editAdvancedChips}</span>
+                    ) : null}
+                  </button>
+                  {editAdvancedOpen ? (
+                    <div className="task-form-advanced">
+                      <div className="task-form-grid-2">
+                        {modalFormField(t(TASK_FIELD_ASSIGNEE), (
+                          <input
+                            type="text"
+                            value={editAssignee}
+                            placeholder={t(TASK_FIELD_ASSIGNEE_PLACEHOLDER)}
+                            aria-label={t(TASK_FIELD_ASSIGNEE)}
+                            disabled={started}
+                            title={started ? t(TASK_EDIT_STARTED_LOCK_TITLE) : undefined}
+                            onChange={(e) => setEditAssignee(e.target.value)}
+                          />
+                        ))}
+                        {modalFormField(t(TASK_FIELD_NODE), (
+                          <input
+                            type="text"
+                            value={editNodeId}
+                            placeholder={t(TASK_FIELD_NODE_PLACEHOLDER)}
+                            aria-label={t(TASK_FIELD_NODE)}
+                            disabled={started}
+                            title={started ? t(TASK_EDIT_STARTED_LOCK_TITLE) : undefined}
+                            onChange={(e) => setEditNodeId(e.target.value)}
+                          />
+                        ))}
+                      </div>
+                      {modalFormField(t(TASK_FIELD_CWD), (
+                        <input
+                          type="text"
+                          value={editCwd}
+                          placeholder={t(TASK_FIELD_CWD_PLACEHOLDER)}
+                          aria-label={t(TASK_FIELD_CWD)}
+                          disabled={started}
+                          title={started ? t(TASK_EDIT_STARTED_LOCK_TITLE) : undefined}
+                          onChange={(e) => setEditCwd(e.target.value)}
+                        />
+                      ))}
+                      <div className="task-form-field">
+                        <span className="task-form-label">{t(TASK_FIELD_DEPENDS_ON)}</span>
+                        {dependencyOptions.length > 0 ? (
+                          <MultiSelect
+                            value={editDependsOn}
+                            options={dependencyOptions}
+                            onValuesChange={(values) => setEditDependsOn(values)}
+                            aria-label={t(TASK_FIELD_DEPENDS_ON)}
+                            size="sm"
+                            searchable
+                          />
+                        ) : (
+                          <div className="task-form-hint">{t(TASK_DEPS_CANDIDATES_EMPTY)}</div>
+                        )}
+                      </div>
+                      <div className="task-form-switches">
+                        <div className="task-form-switch-row">
+                          <Switch checked={editPlanFirst} onChange={setEditPlanFirst} aria-label={t(TASK_FIELD_PLAN_FIRST)} />
+                          <span className="task-form-switch-text">
+                            <span className="task-form-switch-label">{t(TASK_FIELD_PLAN_FIRST)}</span>
+                            <span className="task-form-switch-desc">{t(TASK_FIELD_PLAN_FIRST_DESC)}</span>
+                          </span>
+                        </div>
+                        <div className="task-form-switch-row">
+                          <Switch checked={editAutoMerge} onChange={setEditAutoMerge} aria-label={t(TASK_FIELD_AUTO_MERGE)} />
+                          <span className="task-form-switch-text">
+                            <span className="task-form-switch-label">{t(TASK_FIELD_AUTO_MERGE)}</span>
+                            <span className="task-form-switch-desc">{t(TASK_FIELD_AUTO_MERGE_DESC)}</span>
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <div className="task-detail-brief">

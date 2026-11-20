@@ -961,6 +961,161 @@ test('新建待办：核心字段直出、高级选项折叠、MultiSelect 依�
   second.unmount()
 })
 
+test('编辑待办：高级选项与新建同构、未启动可改（清空置 null）、已启动锁定只读、只读 KV 补齐', { timeout: 60_000 }, async (t) => {
+  // ---- Part A：backlog 任务全高级字段可编辑 ----
+  setStubState({
+    conversations: [conv(10, 'T-1 exec')],
+    board: {
+      tasks: [
+        task('T-1', { column: 'in_progress', conversationId: 10, createdAt: 100 }),
+        task('T-5', {
+          assigneeProfileId: 'worker1',
+          nodeId: 'lx',
+          cwd: '/c/work',
+          dependsOn: ['T-1'],
+          project: 'demo',
+          planFirst: true,
+          autoMerge: false,
+          createdAt: 500,
+        }),
+      ],
+      updatedAt: 1,
+    },
+  })
+  const ctx = makeSpyCtx()
+  const { props } = mutableScreenProps({}, { inlineDrawer: true })
+  const { host, unmount, reRender } = await mountBoard(ctx, props)
+  t.after(unmount)
+
+  const card = (id: string): Element | undefined =>
+    [...host.querySelectorAll('.task-card')].find((c) => c.getAttribute('data-task-id') === id)
+  const detailBtn = [...(card('T-5')?.querySelectorAll('button') ?? [])].find((b) => b.getAttribute('aria-label') === 'View task details')
+  await click(detailBtn ?? null)
+  await reRender()
+  const drawer = host.querySelector('.primary-drawer-content')
+  assert.ok(drawer, '任务详情抽屉应渲染')
+
+  // 只读事实区：执行角色 / 节点 / 目录 / 先出方案 / 依赖全部可见
+  assert.match(drawer.textContent ?? '', /worker1/)
+  assert.match(drawer.textContent ?? '', /\/c\/work/)
+  assert.match(drawer.textContent ?? '', /Plan first/)
+  assert.match(drawer.textContent ?? '', /T-1/)
+
+  const editBtn = [...drawer.querySelectorAll('button')].find((b) => b.textContent?.includes('Edit'))
+  await click(editBtn ?? null)
+
+  // 高级选项默认折叠；折叠态芯片回显当前值（锁定前也可见）
+  assert.ok(drawer.querySelector('input[aria-label="Assignee profile"]') === null, '编辑高级字段默认折叠')
+  const disclosure = [...drawer.querySelectorAll('button')].find((b) => b.textContent?.includes('More options'))
+  assert.ok(disclosure)
+  assert.match(disclosure.textContent ?? '', /worker1/)
+  assert.match(disclosure.textContent ?? '', /T-1/)
+  await click(disclosure ?? null)
+
+  const assigneeInput = drawer.querySelector<HTMLInputElement>('input[aria-label="Assignee profile"]')
+  const nodeInput = drawer.querySelector<HTMLInputElement>('input[aria-label="Node"]')
+  const cwdInput = drawer.querySelector<HTMLInputElement>('input[aria-label="Working directory"]')
+  assert.ok(assigneeInput && nodeInput && cwdInput, '高级字段展开后可见')
+  assert.equal(assigneeInput.value, 'worker1')
+  assert.equal(nodeInput.value, 'lx')
+  assert.equal(cwdInput.value, '/c/work')
+  assert.equal(assigneeInput.disabled && nodeInput.disabled && cwdInput.disabled, false, '未启动任务三坐标可编辑')
+  const depsTrigger = drawer.querySelector<HTMLButtonElement>('.helmx-select-multi .helmx-select-trigger')
+  assert.ok(depsTrigger, '依赖 MultiSelect 应渲染（存在候选）')
+  assert.match(depsTrigger.textContent ?? '', /T-1/)
+  const planSwitch = [...drawer.querySelectorAll('[role="switch"]')].find((b) => b.getAttribute('aria-label') === 'Plan first')
+  const mergeSwitch = [...drawer.querySelectorAll('[role="switch"]')].find((b) => b.getAttribute('aria-label') === 'Auto merge')
+  assert.ok(planSwitch && mergeSwitch)
+  assert.equal(planSwitch.getAttribute('aria-checked'), 'true')
+
+  // 执行角色清空：前端显式校验拦截，不发请求
+  setInputValue(assigneeInput, '')
+  const save = [...drawer.querySelectorAll('button')].find((b) => b.textContent?.includes('Save'))
+  await click(save ?? null)
+  assert.equal(ctx.actionCalls.length, 0, '空执行角色应被拦截')
+  assert.match(drawer.textContent ?? '', /This field is required/)
+  setInputValue(assigneeInput, 'worker1')
+
+  // 改节点、清空目录（显式 null 回默认链）、开自动合并；未变字段不发送
+  setInputValue(nodeInput, 'code2')
+  setInputValue(cwdInput, '')
+  await click(mergeSwitch ?? null)
+  await click(save ?? null)
+  assert.equal(ctx.actionCalls.length, 1)
+  assert.equal(ctx.actionCalls[0]?.actionId, 'update')
+  assert.deepEqual(ctx.actionCalls[0]?.input, {
+    taskId: 'T-5',
+    title: 'Task T-5',
+    brief: 'Brief for T-5',
+    nodeId: 'code2',
+    cwd: null,
+    dependsOn: ['T-1'],
+    planFirst: true,
+    autoMerge: true,
+  })
+  unmount()
+
+  // ---- Part B：已启动（in_review）三坐标锁定禁用、锁定原因可见；保存不携带锁定字段 ----
+  setStubState({
+    conversations: [conv(30, 'T-3 exec')],
+    board: {
+      tasks: [
+        task('T-3', {
+          column: 'in_review',
+          conversationId: 30,
+          assigneeProfileId: 'worker1',
+          nodeId: 'lx',
+          cwd: '/c/work',
+          thinkingLevel: 'high',
+          planFirst: true,
+          createdAt: 300,
+        }),
+      ],
+      updatedAt: 1,
+    },
+  })
+  const ctx2 = makeSpyCtx()
+  const secondProps = mutableScreenProps({}, { inlineDrawer: true })
+  const second = await mountBoard(ctx2, secondProps.props)
+  t.after(() => second.unmount())
+  const cardB = [...second.host.querySelectorAll('.task-card')].find((c) => c.getAttribute('data-task-id') === 'T-3')
+  const detailB = [...(cardB?.querySelectorAll('button') ?? [])].find((b) => b.getAttribute('aria-label') === 'View task details')
+  await click(detailB ?? null)
+  await second.reRender()
+  const drawerB = second.host.querySelector('.primary-drawer-content')
+  assert.ok(drawerB)
+
+  // 只读 KV 补齐：思考档位与先出方案（不进编辑也能看到）
+  assert.match(drawerB.textContent ?? '', /Thinking level/)
+  assert.match(drawerB.textContent ?? '', /high/)
+  assert.match(drawerB.textContent ?? '', /Plan first/)
+
+  const editB = [...drawerB.querySelectorAll('button')].find((b) => b.textContent?.includes('Edit'))
+  await click(editB ?? null)
+  const disclosureB = [...drawerB.querySelectorAll('button')].find((b) => b.textContent?.includes('More options'))
+  assert.ok(disclosureB)
+  await click(disclosureB ?? null)
+  const lockedAssignee = drawerB.querySelector<HTMLInputElement>('input[aria-label="Assignee profile"]')
+  const lockedNode = drawerB.querySelector<HTMLInputElement>('input[aria-label="Node"]')
+  const lockedCwd = drawerB.querySelector<HTMLInputElement>('input[aria-label="Working directory"]')
+  assert.ok(lockedAssignee && lockedNode && lockedCwd)
+  assert.equal(lockedAssignee.disabled, true, '已启动执行角色锁定')
+  assert.equal(lockedNode.disabled, true, '已启动节点锁定')
+  assert.equal(lockedCwd.disabled, true, '已启动工作目录锁定')
+  assert.match(lockedNode.title, /Locked after start/, '锁定原因可见')
+
+  const saveB = [...drawerB.querySelectorAll('button')].find((b) => b.textContent?.includes('Save'))
+  await click(saveB ?? null)
+  assert.equal(ctx2.actionCalls.length, 1)
+  const payloadB = ctx2.actionCalls[0]?.input as Record<string, unknown>
+  assert.equal(payloadB['assigneeProfileId'], undefined, '已启动不得发送执行角色')
+  assert.equal(payloadB['nodeId'], undefined, '已启动不得发送节点')
+  assert.equal(payloadB['cwd'], undefined, '已启动不得发送工作目录')
+  assert.deepEqual(payloadB['dependsOn'], [])
+  assert.equal(payloadB['planFirst'], true)
+  second.unmount()
+})
+
 test('聊一个新任务：按配置的规划角色 openScreen agent 深链', { timeout: 60_000 }, async (t) => {
   setStubState({ conversations: [], board: { tasks: [], updatedAt: 1 } })
   const ctx = makeSpyCtx()
