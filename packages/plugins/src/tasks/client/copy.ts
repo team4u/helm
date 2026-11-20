@@ -8,7 +8,7 @@
  * titles / briefs / backend error messages pass through unchanged.
  */
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText, type HelmxLocale, type LocalizedText } from '@helmx/plugin-client'
-import type { TaskColumn, TaskLightStatus, TaskMobileTab } from './models.ts'
+import type { TaskColumn, TaskLightStatus, TaskRecord, TaskMobileTab } from './models.ts'
 
 const L = (en: string, zh: string): LocalizedText => ({ en, 'zh-CN': zh })
 
@@ -554,4 +554,22 @@ export function taskToolAutoStarted(count: number, locale: HelmxLocale = DEFAULT
     { en: `${count} auto-started`, 'zh-CN': `${count} 个自动开工` },
     locale,
   )
+}
+
+// ---------------------------------------------------------------------------
+// Conversation header task badge (conversation:header action contribution)
+// ---------------------------------------------------------------------------
+
+/** Badge status word: kickoff-undelivered overrides the column label (honest recovery state first). */
+export function taskHeaderBadgeStatus(task: TaskRecord, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  if (task.kickoffUndelivered === true) return taskKickoffUndelivered(locale)
+  return taskColumnLabel(task.column, locale)
+}
+
+/** Badge tooltip: full task line + the deep-link destination. */
+export function taskHeaderBadgeTitle(task: TaskRecord, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
+  if (task.kickoffUndelivered === true) {
+    return resolveLocalizedText(TASK_KICKOFF_UNDELIVERED_TITLE, locale)
+  }
+  return taskToolOpenBoardLabel(task.id, locale)
 }

@@ -1203,3 +1203,84 @@
   border-left: 1px solid var(--border);
   padding-left: 5px;
 }
+
+/* kickoff 未送达（重启恢复）：胶囊整体切 warn 态，等人在看板显式重投。 */
+.task-overview-pill[data-kickoff-undelivered='true'] {
+  border-color: var(--warn);
+  color: var(--fg);
+}
+
+.task-overview-pill[data-kickoff-undelivered='true'] .task-overview-pill-column {
+  color: var(--warn);
+  font-weight: 500;
+}
+
+/* ---- Conversation header task badge (conversation:header action contribution) ---- */
+
+.task-header-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 18px;
+  cursor: pointer;
+  flex-shrink: 0;
+  max-width: 200px;
+}
+
+.task-header-badge:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+.task-header-badge-id {
+  font-family: var(--font-mono, monospace);
+  flex-shrink: 0;
+}
+
+/* Status word keeps the board's semantic tone vocabulary (warn = awaiting
+   review / kickoff undelivered, accent = running, ok = done; backlog neutral). */
+.task-header-badge-column {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-header-badge[data-column='in_review'] .task-header-badge-column {
+  color: var(--warn);
+  font-weight: 500;
+}
+
+.task-header-badge[data-column='in_progress'] .task-header-badge-column {
+  color: var(--accent);
+}
+
+.task-header-badge[data-column='done'] .task-header-badge-column {
+  color: var(--ok);
+}
+
+.task-header-badge[data-kickoff-undelivered='true'] {
+  border-color: var(--warn);
+}
+
+.task-header-badge[data-kickoff-undelivered='true'] .task-header-badge-column {
+  color: var(--warn);
+  font-weight: 500;
+}
+
+/* 窄屏（移动端 / 会话抽屉）顶栏空间紧张：收敛为 icon + 任务号，状态词进 title。 */
+@media (max-width: 680px) {
+  .task-header-badge {
+    max-width: 120px;
+  }
+
+  .task-header-badge-column {
+    display: none;
+  }
+}

@@ -6,7 +6,9 @@
  *   侧栏不另设第二归档抽屉）；
  * - toolView 接管 5 个 task_* 工具的时间线回执卡（Slice 3 实现 TaskToolView）；
  * - slot 向宿主会话总览卡片元数据区（OVERVIEW_CARD_META_SLOT）贡献只读跳转胶囊
- *   （scope 限定任务执行会话：tags 字段内 OR 匹配，普通对话不挂载零开销）。
+ *   （scope 限定任务执行会话：tags 字段内 OR 匹配，普通对话不挂载零开销）；
+ * - action 向会话头部（conversation:header toolbar）贡献任务锚点徽标 TaskHeaderBadge
+ *   （scope 同上；点击深链看板任务详情，规划者动作仍归看板抽屉）。
  */
 import { OVERVIEW_CARD_META_SLOT, type HelmxPluginContext } from '@helmx/protocol'
 import { TASK_ACTIVE_TAG, TASK_ARCHIVED_TAG, TASK_BOARD_SIDEBAR_BADGE } from './contracts.js'
@@ -66,5 +68,19 @@ export function registerTasksUi(ctx: HelmxPluginContext): void {
     target: OVERVIEW_CARD_META_SLOT,
     scope: { tags: [TASK_ACTIVE_TAG, TASK_ARCHIVED_TAG] },
     client: { module: 'index.tsx', export: 'TaskOverviewCardMeta' },
+  })
+
+  // 会话头部任务锚点徽标（conversation:header 唯一的任务回链）：scope 同样
+  // OR 匹配 task / task-archived 标签——结单换标签后徽标仍在（淡化）。点击深链
+  // 看板任务详情抽屉；验收/返工等规划者动作留在看板（防自审自批不变量），
+  // 徽标本身是只读导航锚，零动作权限面。
+  ctx.ui.action({
+    id: 'task-anchor',
+    target: 'conversation:header',
+    placement: 'toolbar',
+    label: { en: 'Task', 'zh-CN': '任务' },
+    icon: 'check-square',
+    scope: { tags: [TASK_ACTIVE_TAG, TASK_ARCHIVED_TAG] },
+    client: { module: 'index.tsx', export: 'TaskHeaderBadge' },
   })
 }

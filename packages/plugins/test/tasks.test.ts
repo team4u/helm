@@ -1015,3 +1015,255 @@ test('tasks-unit12: 详情抽屉交付信息与返工意见走宿主 Markdown �
   assert.ok(container.querySelector('.task-detail-submission .task-card-submission-summary') === null, '抽屉交付区不得复用卡片 line-clamp 摘要类')
   assert.ok((container.querySelector('.task-detail-submission .mono')?.textContent ?? '') === 'helmx/spawn-demo', '分支事实行保留')
 })
+
+test('tasks-unit13: 会话头部任务徽标与总览胶囊开工未送达警示态', { timeout: 60_000 }, async (t) => {
+  // 会话→任务回链（conversation:header 徽标）：findTaskForConversation 纯函数优先序
+  // + 编译产物 TaskHeaderBadge 命中渲染/点击深链/无命中零残留；
+  // 总览胶囊 kickoffUndelivered 同枚胶囊切 warn 态（不增第二枚按钮）。
+  if (typeof globalThis.document === 'undefined') GlobalRegistrator.register()
+  const { findTaskForConversation, findTaskForOverviewCard } = await import('../src/tasks/client/models.ts')
+  type ClientTaskRecord = import('../src/tasks/client/models.ts').TaskRecord
+  const ct = (over: Partial<ClientTaskRecord> = {}): ClientTaskRecord => ({
+    id: 'T-0',
+    title: 'Demo',
+    brief: '',
+    column: 'backlog',
+    assigneeProfileId: 'assistant',
+    dependsOn: [],
+    reworkCount: 0,
+    createdAt: 1,
+    updatedAt: 1,
+    ...over,
+  })
+
+  // ---- findTaskForConversation 纯函数：精确会话命中 + 同一会话内排序优先序 ----
+  assert.equal(findTaskForConversation([ct({ id: 'T-1', conversationId: 7 }), ct({ id: 'T-2', conversationId: 8 })], 7)?.id, 'T-1', '精确会话命中')
+  assert.equal(
+    findTaskForConversation([ct({ id: 'T-3', conversationId: 7, archived: true, updatedAt: 900 }), ct({ id: 'T-4', conversationId: 7, updatedAt: 100 })], 7)?.id,
+    'T-4',
+    '未归档优先于已归档（即便归档者 updatedAt 更新）',
+  )
+  assert.equal(
+    findTaskForConversation([ct({ id: 'T-5', conversationId: 7, updatedAt: 10 }), ct({ id: 'T-6', conversationId: 7, updatedAt: 20 })], 7)?.id,
+    'T-6',
+    'updatedAt 决胜',
+  )
+  assert.equal(findTaskForConversation([ct({ id: 'T-7', conversationId: 9 })], 7), undefined, '无匹配零残留')
+  assert.equal(findTaskForConversation([], 7), undefined, '空表零残留')
+  // findTaskForOverviewCard 根桶口径与 findTaskForConversation 同源（同排序不分叉）
+  const boardTasks = [ct({ id: 'T-8', conversationId: 7, archived: true, updatedAt: 900 }), ct({ id: 'T-9', conversationId: 7, updatedAt: 100 })]
+  assert.equal(findTaskForOverviewCard(boardTasks, 7, [7])?.id, findTaskForConversation(boardTasks, 7)?.id, '根桶与徽标查找同口径')
+
+  // ---- 编译产物组件交互（真实 bundle + 共享宿主 SDK + DOM 事件） ----
+  const req = createRequire(new URL('../../plugin-client/package.json', import.meta.url))
+  const React = req('react') as typeof import('react')
+  const ReactDOM = req('react-dom') as unknown
+  const ReactDOMClient = req('react-dom/client') as {
+    createRoot: (container: Element) => { render(node: React.ReactNode): void; unmount(): void }
+  }
+  const ReactJsxRuntime = req('react/jsx-runtime') as Record<string, unknown>
+  const LucideReact = req('lucide-react') as Record<string, unknown>
+  const SDK = await import('../../plugin-client/src/index.js')
+
+  const g = globalThis as Record<string, unknown>
+  const sharedKeys = [
+    'React',
+    'IS_REACT_ACT_ENVIRONMENT',
+    CLIENT_SHARED_GLOBALS['react']!,
+    CLIENT_SHARED_GLOBALS['react-dom']!,
+    CLIENT_SHARED_GLOBALS['react-dom/client']!,
+    CLIENT_SHARED_GLOBALS['react/jsx-runtime']!,
+    CLIENT_SHARED_GLOBALS['lucide-react']!,
+    CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!,
+  ]
+  const prevGlobals = new Map(sharedKeys.map((k) => [k, g[k]]))
+  const buildDir = mkdtempSync(join(tmpdir(), 'helmx-tasks-header-badge-'))
+  t.after(() => {
+    for (const key of sharedKeys) {
+      const prev = prevGlobals.get(key)
+      if (prev === undefined) delete g[key]
+      else g[key] = prev
+    }
+    rmSync(buildDir, { recursive: true, force: true })
+  })
+
+  g.React = React
+  g.IS_REACT_ACT_ENVIRONMENT = true
+  g[CLIENT_SHARED_GLOBALS['react']!] = React
+  g[CLIENT_SHARED_GLOBALS['react-dom']!] = ReactDOM
+  g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
+  g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
+  g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
+  g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = SDK
+
+  const clientDir = resolve(dirname(fileURLToPath(import.meta.url)), '../src/tasks/client')
+  const bundle = await compilePluginClientModule(TASKS_PLUGIN_ID, clientDir, 'index.tsx', buildDir)
+  const rawModule = (await import(`data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}`)) as Record<
+    string,
+    unknown
+  >
+  const TaskHeaderBadge = rawModule['TaskHeaderBadge'] as React.ComponentType<Record<string, unknown>>
+  const TaskOverviewCardMeta = rawModule['TaskOverviewCardMeta'] as React.ComponentType<Record<string, unknown>>
+  assert.ok(TaskHeaderBadge !== undefined, '客户端应导出 TaskHeaderBadge')
+
+  const rootConversation: ConversationSummary = {
+    id: 42,
+    title: 'Fix login redirect',
+    profileId: 'assistant',
+    tags: ['task'],
+    cwd: '/workspace/demo',
+    model: 'faux/echo',
+    thinkingLevel: '',
+    status: 'idle',
+    stateChangeSeq: 1,
+    completionSeq: 0,
+    unread: false,
+    pinned: false,
+    pendingAskCount: 0,
+    createdAt: 1_700_000_000_000,
+    updatedAt: 1_700_000_010_000,
+  }
+
+  const mountWith = (element: React.ReactElement, board: unknown) => {
+    const screens: string[] = []
+    const port: import('../../plugin-client/src/index.js').PluginClientHostPort = {
+      authenticated: true,
+      theme: 'light',
+      locale: 'zh-CN',
+      conversations: [],
+      conversationDetails: {},
+      conversationLives: {},
+      pendingAsks: [],
+      loadErrors: {},
+      plugins: [],
+      screens: [],
+      pluginDocs: board === undefined ? {} : { 'builtin:tasks/board': board },
+      ensurePluginDoc: async () => undefined,
+      getPluginSessionDoc: async () => undefined,
+      subscribeSessionDoc: () => () => {},
+      getSessionDocState: () => ({ hasValue: false, deleted: false, connected: false }),
+      invokePluginAction: async () => ({}),
+      submitConversationInput: async () => undefined,
+      openTarget: (target) => {
+        screens.push(target)
+      },
+      openConversationDrawer: () => undefined,
+      openArtifactPreview: () => undefined,
+      setWorkbenchOpen: () => undefined,
+      setWorkbenchTab: () => undefined,
+      notify: () => undefined,
+      loadConversationDetail: () => undefined,
+      slots: { collectItems: () => [], renderItem: () => null },
+      markdown: { view: () => null, codeBlock: () => null },
+    }
+    const ctx = SDK.createPluginClientContext(port, TASKS_PLUGIN_ID, 42)
+    let outerClicks = 0
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const root = ReactDOMClient.createRoot(container)
+    React.act(() => {
+      root.render(
+        React.createElement(
+          SDK.PluginClientHostContext.Provider,
+          { value: port },
+          React.createElement(
+            SDK.PluginClientContext.Provider,
+            { value: ctx },
+            React.createElement(
+              'div',
+              {
+                onClick: () => {
+                  outerClicks += 1
+                },
+              },
+              element,
+            ),
+          ),
+        ),
+      )
+    })
+    return {
+      container,
+      screens,
+      outerClicks: () => outerClicks,
+      unmount: () => {
+        React.act(() => {
+          root.unmount()
+        })
+        container.remove()
+      },
+    }
+  }
+
+  const badgeElement = React.createElement(TaskHeaderBadge, { conversation: rootConversation })
+  const pillElement = React.createElement(TaskOverviewCardMeta, { rootConversation, memberIds: [42, 43] })
+
+  // ---- 徽标命中：任务号 + 列位文案 + data-column 事实；点击深链且不冒泡 ----
+  const inReviewBoard = {
+    tasks: [
+      { id: 'T-12', title: 'Ship', column: 'in_review', conversationId: 42, updatedAt: 9 },
+      { id: 'T-13', title: 'Other', column: 'backlog', conversationId: 999, updatedAt: 99 },
+    ],
+    updatedAt: 9,
+  }
+  const hit = mountWith(badgeElement, inReviewBoard)
+  try {
+    const badge = hit.container.querySelector('button.task-header-badge')
+    assert.ok(badge !== null, '命中应渲染徽标按钮')
+    assert.ok(badge.getAttribute('data-column') === 'in_review', 'data-column 应携带真实列位')
+    assert.ok(badge.getAttribute('data-kickoff-undelivered') === null, '正常态不带警示标记')
+    const text = badge.textContent ?? ''
+    assert.ok(text.includes('T-12'), `徽标应含任务号，实际：${text}`)
+    assert.ok(text.includes('待验收'), `zh-CN 列位文案应渲染，实际：${text}`)
+    assert.ok(!EMOJI_RE.test(text), '渲染文本不得含 Emoji')
+    React.act(() => {
+      badge.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+    })
+    assert.deepEqual(hit.screens, ['screen:builtin:tasks/board?task=T-12'], '点击应深链看板任务抽屉')
+    assert.ok(hit.outerClicks() === 0, '点击徽标不得冒泡')
+  } finally {
+    hit.unmount()
+  }
+
+  // ---- 徽标开工未送达：状态词切换警示文案 + data 标记 + title 恢复指引 ----
+  const undeliveredBoard = {
+    tasks: [{ id: 'T-14', title: 'Recover', column: 'in_progress', conversationId: 42, kickoffUndelivered: true, updatedAt: 5 }],
+    updatedAt: 5,
+  }
+  const warn = mountWith(badgeElement, undeliveredBoard)
+  try {
+    const badge = warn.container.querySelector('button.task-header-badge')
+    assert.ok(badge !== null, '未送达任务应渲染徽标')
+    assert.ok(badge.getAttribute('data-kickoff-undelivered') === 'true', '警示标记应携带')
+    const text = badge.textContent ?? ''
+    assert.ok(text.includes('开工未送达'), `状态词应切为恢复警示，实际：${text}`)
+    const title = badge.getAttribute('title') ?? ''
+    assert.ok(title.includes('点「继续」'), `title 应为恢复指引，实际：${title}`)
+  } finally {
+    warn.unmount()
+  }
+
+  // ---- 总览胶囊同枚切 warn 态：不增第二枚按钮 ----
+  const pillWarn = mountWith(pillElement, undeliveredBoard)
+  try {
+    const pills = pillWarn.container.querySelectorAll('button.task-overview-pill')
+    assert.ok(pills.length === 1, '警示态仍是同一枚胶囊，不新增按钮')
+    const pill = pills[0]!
+    assert.ok(pill.getAttribute('data-kickoff-undelivered') === 'true', '胶囊应携带警示标记')
+    assert.ok((pill.textContent ?? '').includes('开工未送达'), '胶囊状态词应切为恢复警示')
+    assert.ok((pill.getAttribute('title') ?? '').includes('点「继续」'), '胶囊 title 应为恢复指引')
+  } finally {
+    pillWarn.unmount()
+  }
+
+  // ---- 无命中（doc 未加载 / >50 归档截断出投影 / 无匹配）零残留 ----
+  for (const board of [undefined, { tasks: [{ id: 'T-13', title: 'Other', column: 'backlog', conversationId: 999 }], updatedAt: 1 }]) {
+    const miss = mountWith(badgeElement, board)
+    try {
+      assert.ok(miss.container.querySelector('button') === null, '无命中不应渲染任何按钮')
+      assert.ok((miss.container.textContent ?? '') === '', '无命中零文本残留')
+    } finally {
+      miss.unmount()
+    }
+  }
+})

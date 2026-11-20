@@ -1670,6 +1670,10 @@ export class HelmxExternalStore {
         this.spaceMemory[spaceForTarget(resolved)] = resolved
       }
       patch.primaryTarget = resolved
+      // 主屏导航离开当前视图时收起覆盖型会话抽屉：抽屉内徽标/通知等触发的
+      // openTarget 若不收抽屉，新目标被全高抽屉遮挡，表现为「点击无反应」。
+      // 深链恢复（applyExternalLocation）不走此路径，wb+modal=drawer 组合仍可精确还原。
+      if (this.navState.activeModal?.kind === 'conversation-drawer') patch.activeModal = null
     }
     if (resolved.kind === 'conversation' && opts?.highlightEntryId) {
       patch.highlightedEntry = { conversationId: resolved.conversationId, entryId: opts.highlightEntryId }

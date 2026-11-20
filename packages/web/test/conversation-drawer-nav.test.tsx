@@ -61,6 +61,9 @@ function summary(id: number, parentConversationId?: number, title = `会话 ${id
 // 祖谱：1 ← 11 ← 111（两层派生）；999 为无关根会话。
 const conversations = [summary(1), summary(11, 1), summary(111, 11), summary(999)]
 
+/** 挂载后的真实 store 引用（openTarget/setActiveModal 直调，测 P0 收抽屉语义）。 */
+let storeHandle: ReturnType<typeof useHelmxStore> | undefined
+
 interface FetchFixture {
   list?: ConversationSummary[]
   detailMap?: Record<number, ConversationSummary>
@@ -111,6 +114,7 @@ function App(): React.ReactNode {
     workbenchTab: store.workbenchTab,
     modal: store.activeModal,
   }
+  storeHandle = store
   const primary = store.primaryTarget.kind === 'conversation' ? store.primaryTarget : null
   const split = store.splitTarget?.kind === 'conversation' ? store.splitTarget : null
   return e(React.Fragment, null,
@@ -178,6 +182,7 @@ function reset(): void {
   document.body.innerHTML = ''
   globalThis.fetch = originalFetch
   observed = undefined
+  storeHandle = undefined
 }
 
 afterEach(reset)
@@ -281,6 +286,37 @@ test('抽屉标题与 aria-label 展示有意义的会话标题，占位标题�
     'Child conversation #20 · 详情兜底标题 drawer',
     '摘要缺失时应使用 detail 标题',
   )
+})
+
+test('openTarget 主屏导航自动收起会话抽屉，分屏导航不收（修复抽屉内深链被自身遮挡）', { timeout: 60_000 }, async () => {
+  // 抽屉内徽标/通知等经 openTarget 跳主屏目标：若不收抽屉，全高抽屉挡住新
+  // 目标表现为「点击无反应」。分屏导航本就不遮挡，不应误收。
+  // （取值走函数防 assert.equal(x, null) 的 asserts 窄化污染后续同路径读取。）
+  const modalOf = (): ActiveModal | null => (observed ?? undefined)?.modal ?? null
+  await mount('#/c/1?modal=drawer&id=11')
+  const before = modalOf()
+  assert.ok(before !== null && before.kind === 'conversation-drawer', '前置：抽屉应打开')
+  await act(async () => {
+    storeHandle!.openTarget({ kind: 'conversation', conversationId: 999 })
+  })
+  await settle()
+  const afterPrimary = observed?.primary
+  assert.ok(afterPrimary !== undefined && afterPrimary.kind === 'conversation', '主屏应切到目标会话')
+  assert.ok(modalOf() === null, '主屏导航应自动收起会话抽屉')
+
+  // 重开抽屉后走分屏：抽屉保留（分屏与抽屉可叠放，互不遮挡）
+  await act(async () => {
+    storeHandle!.setActiveModal({ kind: 'conversation-drawer', conversationId: 11 })
+  })
+  await settle()
+  assert.ok(modalOf()?.kind === 'conversation-drawer', '重开抽屉前置成立')
+  await act(async () => {
+    storeHandle!.openTarget({ kind: 'conversation', conversationId: 1 }, { split: true })
+  })
+  await settle()
+  assert.ok(modalOf()?.kind === 'conversation-drawer', '分屏导航不应收起会话抽屉')
+  const afterSplit = observed?.split
+  assert.ok(afterSplit !== null && afterSplit?.kind === 'conversation', '分屏应切到目标会话')
 })
 
 // ---------------------------------------------------------------------------
