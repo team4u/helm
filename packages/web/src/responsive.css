@@ -210,6 +210,27 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .mobile-quick-badge[data-tone='blocked'] { background: var(--warn); }
   .mobile-quick-badge[data-tone='running'] { background: var(--accent); }
   .mobile-quick-badge[data-tone='done'] { background: var(--ok); }
+  /* sidebar.item badge 声明 tone 词汇（error/warn/accent/ok/neutral）。 */
+  .mobile-quick-badge[data-tone='warn'] { background: var(--warn); }
+  .mobile-quick-badge[data-tone='accent'] { background: var(--accent); }
+  .mobile-quick-badge[data-tone='ok'] { background: var(--ok); }
+  .mobile-quick-badge[data-tone='neutral'] { background: var(--fg-muted); }
+  /* 移动端快捷入口静默灯点（sidebar.item badge dotField：计数为 0 时的安静
+     后台活动提示，无数字不抢焦点；tone 词汇同 .mobile-quick-badge）。 */
+  .mobile-quick-dot {
+    position: absolute;
+    top: 1px;
+    right: 1px;
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    pointer-events: none;
+  }
+  .mobile-quick-dot[data-tone='error'] { background: var(--err); }
+  .mobile-quick-dot[data-tone='warn'] { background: var(--warn); }
+  .mobile-quick-dot[data-tone='accent'] { background: var(--accent); }
+  .mobile-quick-dot[data-tone='ok'] { background: var(--ok); }
+  .mobile-quick-dot[data-tone='neutral'] { background: var(--fg-muted); }
   .sidebar-open .mobile-nav-toggle,
   .sidebar-open .mobile-quick-nav { display: none; }
   .mobile-sidebar-close {

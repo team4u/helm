@@ -228,6 +228,76 @@ test('profile.runtime: kind/label/agentSuggestions validation and intra-plugin d
   );
 });
 
+test('sidebar.item badge: plain-object shape, unknown keys, unsafe doc-key fields', { timeout: 60_000 }, () => {
+  const ui = new UiRegistry(createPluginBuildProvider());
+  const validBadge = {
+    doc: 'task-board',
+    countField: 'attentionCount',
+    toneField: 'badgeTone',
+    dotField: 'hasRunning',
+    summaryField: 'badgeSummary',
+  };
+
+  // Valid: full declaration and minimal { doc, countField } both pass; other spec fields untouched.
+  ui.registerUi('p1', 'sidebar.item', { id: 'ok-full', label: 'A', badge: validBadge }, 'sidebarItem');
+  ui.registerUi('p1', 'sidebar.item', { id: 'ok-min', label: 'B', badge: { doc: 'd', countField: 'c' } }, 'sidebarItem');
+  ui.registerUi('p1', 'sidebar.item', { id: 'ok-none', label: 'C', docs: ['d1'] }, 'sidebarItem');
+
+  // Non-plain-object badge rejects
+  for (const bad of [null, 'x', 5, [], () => {}]) {
+    assert.throws(
+      () => ui.registerUi('p1', 'sidebar.item', { id: 'bad-not-obj', label: 'B', badge: bad }, 'sidebarItem'),
+      isHelmxError('invalid_ui_spec'),
+      `badge=${JSON.stringify(bad) ?? String(bad)}`,
+    );
+  }
+  // Unknown keys inside badge reject (additionalProperties: false)
+  assert.throws(
+    () =>
+      ui.registerUi('p1', 'sidebar.item', { id: 'bad-extra', label: 'B', badge: { doc: 'd', countField: 'c', extra: 1 } }, 'sidebarItem'),
+    isHelmxError('invalid_ui_spec'),
+  );
+  // Required fields missing / empty / non-string reject
+  for (const bad of [{ countField: 'c' }, { doc: 'd' }, { doc: '', countField: 'c' }, { doc: 'd', countField: '' }, { doc: 'd', countField: 5 }]) {
+    assert.throws(
+      () => ui.registerUi('p1', 'sidebar.item', { id: 'bad-fields', label: 'B', badge: bad }, 'sidebarItem'),
+      isHelmxError('invalid_ui_spec'),
+      `badge=${JSON.stringify(bad)}`,
+    );
+  }
+  // Optional fields with empty / non-string values reject
+  for (const field of ['toneField', 'dotField', 'summaryField']) {
+    for (const bad of ['', null, 7]) {
+      assert.throws(
+        () => ui.registerUi('p1', 'sidebar.item', { id: 'bad-opt', label: 'B', badge: { doc: 'd', countField: 'c', [field]: bad } }, 'sidebarItem'),
+        isHelmxError('invalid_ui_spec'),
+        `field=${field} value=${String(bad)}`,
+      );
+    }
+  }
+  // Unsafe prototype keys as field values reject (they become doc-key reads on the host)
+  for (const field of ['doc', 'countField', 'toneField', 'dotField', 'summaryField']) {
+    for (const unsafe of ['__proto__', 'constructor', 'prototype']) {
+      assert.throws(
+        () => ui.registerUi('p1', 'sidebar.item', { id: 'bad-unsafe', label: 'B', badge: { doc: 'd', countField: 'c', [field]: unsafe } }, 'sidebarItem'),
+        isHelmxError('invalid_ui_spec'),
+        `field=${field} value=${unsafe}`,
+      );
+    }
+  }
+  // Own unsafe keys on the badge object itself reject via additionalProperties
+  assert.throws(
+    () =>
+      ui.registerUi(
+        'p1',
+        'sidebar.item',
+        { id: 'bad-own-key', label: 'B', badge: JSON.parse('{"doc":"d","countField":"c","__proto__":"x"}') },
+        'sidebarItem',
+      ),
+    isHelmxError('invalid_ui_spec'),
+  );
+});
+
 test('assertCrossPluginUnique: checks across active+pending while excluding self', { timeout: 60_000 }, () => {
   const ui = new UiRegistry(createPluginBuildProvider());
   registerCommand(ui, 'a', 'cmd', 'wf');

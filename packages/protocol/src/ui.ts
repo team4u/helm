@@ -41,12 +41,48 @@ export interface UiSpecBase {
 }
 
 // 1. sidebar.item & sidebar.section
+
+/**
+ * Host-resolved sidebar badge tone vocabulary (drives badge coloring on the
+ * activity rail, mobile quick nav and sidebar view rows). Plugins put one of
+ * these strings into the doc field referenced by `SidebarItemBadgeSpec.toneField`.
+ */
+export type SidebarBadgeTone = 'error' | 'warn' | 'accent' | 'ok' | 'neutral'
+
+/**
+ * Sidebar item attention badge: a generic doc-driven declaration (zero plugin-id
+ * knowledge on the host). The host subscribes to the contributing plugin's
+ * public doc and derives a count badge / quiet activity dot from plain fields.
+ */
+export interface SidebarItemBadgeSpec {
+  /** Public doc name of this plugin to subscribe to. */
+  doc: string
+  /** Numeric counter field on the doc (top-level key, e.g. 'attentionCount'). Values > 0 show a count badge. */
+  countField: string
+  /** Optional tone field on the doc (values: SidebarBadgeTone 'error' | 'warn' | 'accent' | 'ok' | 'neutral'). */
+  toneField?: string
+  /**
+   * Optional boolean field: when count === 0 and doc[dotField] === true, render
+   * a subtle tone indicator dot (no number) for quiet background activity.
+   */
+  dotField?: string
+  /** Optional LocalizedText or plain string summary field on the doc appended to the button tooltip / aria-label. */
+  summaryField?: string
+}
+
 export interface SidebarItemSpec extends UiSpecBase {
   label: LocalizedText
   icon?: string
   /** Click target, e.g. 'conversation:1', 'conversation:profile:superagent', 'screen:builtin:superagent/recall-graph'. */
   target?: string
   order?: number
+  /**
+   * Doc-driven attention badge declaration: the host subscribes to this
+   * plugin's public doc and renders a generic count badge (or quiet activity
+   * dot) on the sidebar view row, activity-rail quick entry and mobile quick
+   * nav — no plugin-id special casing anywhere.
+   */
+  badge?: SidebarItemBadgeSpec
   /**
    * Global quick entry: the host surfaces this item (screen targets) as a
    * one-tap entry in the collapsed activity rail / mobile drawer regardless of
