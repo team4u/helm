@@ -437,7 +437,12 @@ async function runNativeReattachTurn(
     nodeId: existing.nodeId ?? 'local',
     childCwd: existing.cwd !== '' ? existing.cwd : (request.reattach?.effectiveCwd ?? deps.defaultCwd),
   }
-  deps.assertNodeAvailable?.(target.nodeId)
+  // No offline-node preflight here (unlike creation/resume in `resolveSpawnTargetForRequest`):
+  // reattach only re-binds listeners and the durable SubmissionHandle onto an existing child
+  // conversation — it executes no remote RPC up front. Hard-failing on `isOnline` at restart
+  // reattach time would kill in-place recovery whenever a registered node has not reconnected
+  // yet (the exact race the startup node-join grace closes); tool execution resolves the real
+  // online state per call and fails explicitly there when the node is genuinely gone.
   const structured = prepareStructuredSession(request)
   if (structured !== undefined && deps.structuredOutputSessions === undefined) {
     throw new HelmxError(

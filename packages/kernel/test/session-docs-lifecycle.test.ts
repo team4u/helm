@@ -43,6 +43,9 @@ async function openApp(): Promise<App> {
       metrics = ctx.sessionDoc('metrics', { n: 0 }, { public: true })
     },
   })
+  // (Kernel started before startHub: the listen-before-start HTTP layer gates non-probe API routes
+  // with `503 hub_starting` while `kernel.started === false`.)
+  await kernel.start()
   const hub = await startHub({ kernel: kernel as never, port: 0 })
   const setup = await fetch(`${hub.url}/api/auth/setup`, {
     method: 'POST',

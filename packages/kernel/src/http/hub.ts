@@ -95,6 +95,29 @@ export function createHubHandler(
       }
       const url = new URL(request.url)
 
+      // Listen-before-start gate: while the kernel has not finished `start()` (plugin services +
+      // scheduler resume still converging), every API route except the readiness probe answers
+      // `503 hub_starting` — honestly refusing half-initialized handling instead of letting requests
+      // race recovery (two-phase boot opens `/ws/node` first so remote nodes reconnect early).
+      if (
+        kernel.started === false &&
+        url.pathname.startsWith('/api/') &&
+        url.pathname !== '/api/auth/status'
+      ) {
+        return gzipJsonResponse(
+          request,
+          withCors(
+            errorResponse(
+              redactor,
+              503,
+              'hub_starting',
+              'Hub is still starting (recovery in progress); retry shortly',
+            ),
+            origin,
+          ),
+        )
+      }
+
       if (!url.pathname.startsWith('/api/') && url.pathname !== '/api') {
         // Production static hosting: non-`/api` GET/HEAD served via `webDistDir` (returns JSON 404 when disabled)
         if (request.method === 'GET' || request.method === 'HEAD') {

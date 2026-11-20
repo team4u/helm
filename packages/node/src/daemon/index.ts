@@ -9,7 +9,7 @@
  *   generations never mutate newer state.
  * - Heartbeat: budget = `clamp(interval * 3 / 4, 1s, 30s)`, non-overlapping; 2 consecutive timeouts
  *   or an explicit `false` reply retire the generation and trigger reconnect.
- * - Reconnect: exponential backoff (default 500ms..30s), unbounded retries, cancelled cleanly on
+ * - Reconnect: exponential backoff (default 500ms..5s), unbounded retries, cancelled cleanly on
  *   `close()` which waits for all retiring generations to finish disposing.
  */
 
@@ -76,7 +76,12 @@ export interface NodeDaemonOptions {
   envServer?: Omit<NodeEnvRpcServerOptions, 'defaultCwd' | 'onExecOutput' | 'onIpcEvent' | 'onIpcClosed'>;
   /** Base reconnect delay in ms (defaults to 500). */
   reconnectBaseDelayMs?: number;
-  /** Maximum reconnect delay in ms (defaults to 30_000). */
+  /**
+   * Maximum reconnect delay in ms (defaults to 5_000). Kept low on purpose: a Hub rebuild/restart
+   * typically takes tens of seconds, and with a high cap the daemon could sleep deep in a 30s
+   * backoff slot exactly when the Hub comes back — delaying reconnection past the Hub's startup
+   * node-join grace window and failing restart recovery. 500ms probes every <=5s are cheap.
+   */
   reconnectMaxDelayMs?: number;
   /** Log sink (defaults to `console.error`). Never logs secret tokens. */
   log?: (message: string) => void;
@@ -367,7 +372,7 @@ export async function createNodeDaemon(options: NodeDaemonOptions): Promise<Node
     dataDir,
     envServer = {},
     reconnectBaseDelayMs = 500,
-    reconnectMaxDelayMs = 30_000,
+    reconnectMaxDelayMs = 5_000,
     log: writeLog = (message) => console.error(`[helmx-node] ${message}`),
   } = options;
 

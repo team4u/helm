@@ -87,9 +87,11 @@ import {
   bootstrapKernelRuntime,
   ensureInitialConversation,
   recoverExistingConversations,
+  resolveNodeJoinGraceMs,
   teardownKernelRuntime,
   type KernelBootOptions,
 } from './runtime-bootstrap.js'
+import { waitForNodesOnline } from './node-join-grace.js'
 import {
   assembleRuntimeServices,
   type AssembledRuntimeServices,
@@ -161,6 +163,7 @@ export class KernelRuntime {
       hubUrl: options.hubUrl,
       seedKeyCache: boot.apiKeyCache,
       autoResume: options.autoResume !== false,
+      nodeJoinGraceMs: options.nodeJoinGraceMs ?? resolveNodeJoinGraceMs(),
       externalModels: options.models,
       providers: options.providers,
       externalSkillRoots: options.externalSkillRoots,
@@ -475,6 +478,30 @@ export class KernelRuntime {
     if (this.#started) return
     if (this.startPromise) return this.startPromise
     const attempt = (async () => {
+      // Startup node-join grace (bounded, skip-if-empty): when recovery depends on registered remote
+      // nodes that are currently offline, wait for their reconnection before driving plugin recovery
+      // and the scheduler — remote-bound turns/workflows then see online nodes (platform facts, AGENTS.md
+      // reads, RPC reattach all converge) instead of failing fast on a race the Hub itself created by
+      // listening only after recovery. Only meaningful when the composition root already opened the
+      // /ws/node gateway (listen-before-start); waiting without a listener is a no-op bounded sleep,
+      // so `autoResume` startup (kernel opened and started before any server) skips it entirely.
+      const graceMs = this.init.nodeJoinGraceMs ?? 0
+      if (graceMs > 0 && !this.init.autoResume) {
+        const needed = new Set<string>()
+        for (const meta of this.store.listConvs()) {
+          if (meta.nodeId === 'local' || meta.nodeId === '') continue
+          if (!this.svc.tracker.hasRunnableWork(meta.id)) continue
+          if (!this.nodes.hasNode(meta.nodeId)) continue
+          if (this.envFabric.isOnline(meta.nodeId)) continue
+          needed.add(meta.nodeId)
+        }
+        await waitForNodesOnline({
+          nodeIds: needed,
+          timeoutMs: graceMs,
+          isOnline: (nodeId) => this.envFabric.isOnline(nodeId),
+          onNodeChanged: (listener) => this.envFabric.registry.onNodeChanged(listener),
+        })
+      }
       if (this.pluginHost) await this.pluginHost.start()
       this.harness.resume()
       // Flipped synchronously right after resume (zero awaits in between): whenever `isStarted()` is true,
