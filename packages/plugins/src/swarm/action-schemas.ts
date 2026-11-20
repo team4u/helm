@@ -196,6 +196,11 @@ export const closeGroupInputSchema: Record<string, unknown> = {
       description: 'Release holds and archive members while preserving modified worktree branches in retainedWorktrees for merging',
     },
     abortRunning: { type: 'boolean', description: 'Abort any running group members before closing' },
+    force: {
+      type: 'boolean',
+      description:
+        'Force member worktree cleanup past the uncommitted/unmerged guard (occupancy by holds/running conversations/process scans, ownership and locked checks still refuse; never bypasses swarm_worker_busy)',
+    },
     summary: { type: 'string', maxLength: 2000 },
   },
   additionalProperties: false,

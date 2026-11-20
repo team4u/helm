@@ -280,9 +280,22 @@ export async function resolveRepoAuthority(
   return { mainPath: main.path, commonDir, canonicalCommonDir: await canonicalPathOnNode(ports, nodeId, commonDir), entries }
 }
 
-/** 删除受管分支（幂等：分支已不存在视为已删除；失败返回真实输出供重试诊断）。 */
-export async function deleteManagedBranch(
+/**
+ * 在主工作树执行 `git worktree prune`（收敛目录已被外部删除的 git 侧残留登记）。
+ * 只清理 git 自身判定 prunable 的登记；失败返回真实输出供如实上报（不静默吞掉）。
+ */
+export async function pruneWorktreeRegistrations(
   ports: WorktreeNodePorts,
+  nodeId: string,
+  repoRoot: string,
+  signal?: AbortSignal,
+): Promise<{ ok: boolean; output: string }> {
+  const res = await gitExec(ports, nodeId, repoRoot, ['worktree', 'prune'], signal)
+  return { ok: res.ok, output: res.output.trim() }
+}
+
+/** 删除受管分支（幂等：分支已不存在视为已删除；失败返回真实输出供重试诊断）。 */
+export async function deleteManagedBranch(  ports: WorktreeNodePorts,
   nodeId: string,
   repoRoot: string,
   branch: string,

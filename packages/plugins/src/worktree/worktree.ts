@@ -102,6 +102,10 @@ export interface CleanupResult {
   branch: string
   nodeId: string
   branchDeleted: boolean
+  /** 登记清除原因（仅目录缺失下 force 恢复路径设置）。 */
+  removedReason?: 'directory_missing_forced'
+  /** `git worktree prune` 执行结果（仅目录缺失 force 恢复路径；ran=false 表示记录无 repoRoot 锚点未执行）。 */
+  prune?: { ran: boolean; ok: boolean; output?: string }
 }
 
 export class WorktreeAllocator {

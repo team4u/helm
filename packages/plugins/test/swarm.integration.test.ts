@@ -6,6 +6,8 @@
  *    两态 close_group(409 swarm_worktree_unmerged vs keepWorktree: true 保留分支合入、
  *    主控 tag 原地替换为 swarm-coordinator-archived 历史 tag：工作台面板可达、建组解锁、协同工具不复活、重建组摘除历史 tag)、
  *    closed 与 coordinatorDetached 历史组 board_status / board_read 正常读取；
+ *    close_group force 出口：ignored 构建产物成员默认即可收尾（cleanup 脏检查口径对齐 git worktree remove）、
+ *    真实脏成员默认拒绝且 hold 保持、force: true 只放开脏/未合入守卫直接收尾；
  * 3) forkFrom 干净锚点热分叉、manage_channel + #channel 寻址、被动留言(wake: false)与合并唤醒、
  *    abort_worker 原地刹车、switch_worker_model 原地切模，以及 @/# 幂等补全动作；
  * 4) 回合 failed 自动上板 [blocker]、防哑巴退场单次续催 -> 二次命中代发 [blocker]、
@@ -13,8 +15,8 @@
  */
 import { test, type TestContext } from 'node:test'
 import assert from 'node:assert/strict'
-import { spawn, type ChildProcess } from 'node:child_process'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { spawn, execFileSync, type ChildProcess } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -2566,5 +2568,126 @@ test('swarm-int10: runtime.started reconciliation wakes uncommitted inflightWake
     assert.match(coordReportText, /@workerC/)
   } finally {
     await app2.close()
+  }
+})
+
+test('swarm-int14: close_group force 出口 —— ignored 产物成员默认即可收尾；真实脏成员默认拒绝、force: true 放弃内容直接收尾', { timeout: 60_000 }, async (t) => {
+  const env = await openSwarmEnv(useTempDir(t, 'helmx-swarm-int-'))
+  try {
+    const { kernel } = env.app
+    const repoDir = env.repoDir
+    // 基线先含 .gitignore（忽略 dist/），worktree 派生自该基线。
+    writeFileSync(join(repoDir, '.gitignore'), 'dist/\n')
+    execFileSync('git', ['add', '.gitignore'], { cwd: repoDir })
+    execFileSync('git', ['commit', '-qm', 'chore: ignore dist'], { cwd: repoDir })
+
+    const coord = await kernel.createConversation({ title: 'Close Force Coordinator', profileId: 'assistant', cwd: repoDir })
+
+    // ---- 动作/工具 schema 面：close_group 输入必须暴露 force（五端 CLI 映射随 manifest 派生） ----
+    const closeManifest = kernel.plugins
+      .listActions()
+      .find((a) => a.pluginId === SWARM_PLUGIN_ID && a.id === 'close_group')
+    assert.ok(closeManifest, 'close_group action manifest must exist')
+    assert.ok(
+      (closeManifest.inputSchema.properties as Record<string, unknown>)['force'] !== undefined,
+      'close_group inputSchema 必须声明 force',
+    )
+
+    const listWorktrees = () =>
+      kernel.plugins.invokeAction(WORKTREE_ID, 'list_worktrees', {}) as Promise<{
+        worktrees: Array<{ id: string; path: string; status: string; hold?: unknown }>
+      }>
+
+    // ---- 场景 1：成员 worktree 只有 ignored 构建产物（模拟 pnpm build 的 dist/）----
+    const groupA = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'create_group',
+      { title: 'Ignored Artifacts', objective: 'Build-only artifacts', conversationId: coord.id },
+    )) as { groupId: string }
+    setSwarmRoleResponses(env.faux, {
+      builder: [fauxAssistantMessage('Built artifacts and finished.')],
+      coordinator: [fauxAssistantMessage('Noted.')],
+    })
+    const builder = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'dispatch_worker',
+      { prompt: 'Run build then finish.', name: 'builder', access: 'readwrite', isolation: 'worktree' },
+      { conversationId: coord.id },
+    )) as { workerConversationId: number; worktreeId: string }
+    await kernel.waitForIdle(builder.workerConversationId)
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await kernel.waitForIdle(coord.id)
+
+    const builderRecord = (await listWorktrees()).worktrees.find((w) => w.id === builder.worktreeId)
+    assert.ok(builderRecord, 'builder worktree record must exist')
+    mkdirSync(join(builderRecord.path, 'dist'), { recursive: true })
+    writeFileSync(join(builderRecord.path, 'dist', 'bundle.js'), 'console.log(1)\n')
+
+    // 修复后口径：ignored 产物不再阻断——close_group 默认（无 force）即可收尾。
+    const closedA = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'close_group',
+      { groupId: groupA.groupId },
+      { conversationId: coord.id },
+    )) as { closed: boolean; retainedWorktrees: unknown[] }
+    assert.equal(closedA.closed, true)
+    assert.equal(closedA.retainedWorktrees.length, 0)
+    assert.equal(existsSync(builderRecord.path), false, 'ignored-only worktree 应随默认结单被清理')
+    assert.equal(
+      (await listWorktrees()).worktrees.find((w) => w.id === builder.worktreeId)?.status,
+      'removed',
+    )
+
+    // ---- 场景 2：成员 worktree 含未跟踪非 ignored 文件（真实脏）----
+    const groupB = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'create_group',
+      { title: 'Dirty Draft', objective: 'Uncommitted draft', conversationId: coord.id },
+    )) as { groupId: string }
+    setSwarmRoleResponses(env.faux, {
+      author: [fauxAssistantMessage('Draft ready.')],
+      coordinator: [fauxAssistantMessage('Noted again.')],
+    })
+    const author = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'dispatch_worker',
+      { prompt: 'Draft then finish.', name: 'author', access: 'readwrite', isolation: 'worktree' },
+      { conversationId: coord.id },
+    )) as { workerConversationId: number; worktreeId: string }
+    await kernel.waitForIdle(author.workerConversationId)
+    await waitFor(() => kernel.plugins.activeTaskCount(SWARM_PLUGIN_ID) === 0)
+    await kernel.waitForIdle(coord.id)
+
+    const authorRecord = (await listWorktrees()).worktrees.find((w) => w.id === author.worktreeId)
+    assert.ok(authorRecord, 'author worktree record must exist')
+    writeFileSync(join(authorRecord.path, 'draft.txt'), 'uncommitted draft\n')
+
+    // 默认（force 缺省 false）：真实脏内容仍拒绝（swarm_worktree_unmerged，hold 保持）。
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(SWARM_PLUGIN_ID, 'close_group', { groupId: groupB.groupId }, { conversationId: coord.id }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'swarm_worktree_unmerged' && err.status === 409,
+    )
+    await assert.rejects(
+      () => kernel.plugins.invokeAction(WORKTREE_ID, 'cleanup_worktree', { worktreeId: author.worktreeId, force: true }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'worktree_in_use',
+      '默认拒绝后 hold 必须保持（force 不可绕过占用）',
+    )
+
+    // force: true：只放开脏/未合入守卫，直接收尾并清理成员 worktree。
+    const closedB = (await kernel.plugins.invokeAction(
+      SWARM_PLUGIN_ID,
+      'close_group',
+      { groupId: groupB.groupId, force: true },
+      { conversationId: coord.id },
+    )) as { closed: boolean; retainedWorktrees: unknown[] }
+    assert.equal(closedB.closed, true)
+    assert.equal(closedB.retainedWorktrees.length, 0)
+    assert.equal(existsSync(authorRecord.path), false, 'force 结单应清理脏 worktree（git worktree remove --force）')
+    assert.equal(
+      (await listWorktrees()).worktrees.find((w) => w.id === author.worktreeId)?.status,
+      'removed',
+    )
+  } finally {
+    await env.close()
   }
 })

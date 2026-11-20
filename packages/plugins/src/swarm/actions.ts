@@ -316,7 +316,7 @@ export function registerSwarmActions(
   ctx.tool({
     name: 'swarm_close_group',
     description:
-      'Close the swarm collaboration group in full-cleanup mode or retain-branches mode (keepWorktree: true releases holds and preserves modified branches in retainedWorktrees).',
+      'Close the swarm collaboration group in full-cleanup mode or retain-branches mode (keepWorktree: true releases holds and preserves modified branches in retainedWorktrees; force: true closes past the uncommitted/unmerged guard, discarding unmerged member worktree content).',
     inputSchema: closeGroupInputSchema,
     structuredOutputSchema: closeGroupOutputSchema,
     scope: COORDINATOR_SCOPE,
@@ -462,7 +462,8 @@ export function registerSwarmActions(
 
   ctx.action({
     id: 'close_group',
-    description: 'Close a swarm collaboration group in full-cleanup mode or retain-branches mode (keepWorktree: true).',
+    description:
+      'Close a swarm collaboration group in full-cleanup mode, retain-branches mode (keepWorktree: true), or force mode (force: true bypasses only the uncommitted/unmerged worktree guard).',
     exposeAsTool: false,
     scope: COORDINATOR_SCOPE,
     cli: { command: ['swarm', 'close-group'], description: 'Close a swarm collaboration group' },

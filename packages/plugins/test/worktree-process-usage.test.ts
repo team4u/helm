@@ -6,7 +6,7 @@
  *   （details 含 nodeId/path/PIDs/进程名/引用路径；不记录 cmdline/environ）；
  * - force: true 不可绕过进程占用检查（force 只授权丢弃文件）；
  * - 进程退出后 → cleanup 正常移除（保护不永久阻塞）；
- * - ignored 文件保护保持：.env 使非 force 清理仍 worktree_dirty（原有行为）；
+ * - 脏保护先于进程检查：未跟踪文件使非 force 清理仍 worktree_dirty；
  * - 探测失败（节点离线）→ worktree_process_check_failed（fail-closed，绝不
  *   假称 0 占用）；
  * - 快照不完整（complete=false）→ worktree_process_check_failed；
@@ -223,7 +223,7 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     await expectCleanupOkOrFailClosed(() => allocator.cleanup({ worktreeId: record.id, force: true }))
   })
 
-  it('ignored 文件保护保持：.env 使非 force 清理仍 worktree_dirty（进程检查不削弱脏保护）', { timeout: 60_000 }, async () => {
+  it('脏保护先于进程检查：未跟踪文件使非 force 清理仍 worktree_dirty（进程检查不削弱脏保护）', { timeout: 60_000 }, async () => {
     const repo = makeGitRepo(join(rootDir, 't3', 'repo'))
     writeFileSync(join(repo, '.gitignore'), '.env\n')
     execFileSync('git', ['add', '.gitignore'], { cwd: repo })
@@ -232,15 +232,16 @@ describe('worktree 清理进程占用保护（真实进程 + 真实 git）', { t
     const docs = new Map<string, unknown>()
     const allocator = makeAllocator(fabric, docs)
     const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
-    writeFileSync(join(record.path, '.env'), 'SECRET=1\n')
+    writeFileSync(join(record.path, 'draft.txt'), 'uncommitted draft\n')
     await assert.rejects(
       () => allocator.cleanup({ worktreeId: record.id }),
       (err: unknown) => {
         assert.ok(err instanceof HelmxError)
-        assert.equal(err.code, 'worktree_dirty', 'ignored 文件保护必须保持（先于进程检查的脏保护不被削弱）')
+        assert.equal(err.code, 'worktree_dirty', '未跟踪文件的脏保护必须先于进程检查（不被进程检查削弱）')
         return true
       },
     )
+    assert.ok(existsSync(join(record.path, 'draft.txt')), '拒绝时未跟踪文件不得被删')
     // 无进程占用时 force 越过脏保护、通过进程检查 → 全可见环境正常移除；
     // 可见性不完整环境 fail-closed（expectCleanupOkOrFailClosed）。
     await expectCleanupOkOrFailClosed(() => allocator.cleanup({ worktreeId: record.id, force: true }))

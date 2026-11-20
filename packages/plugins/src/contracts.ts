@@ -658,6 +658,8 @@ export interface ManagedWorktreeRecord {
   status: 'active' | 'removed'
   createdAt: number
   removedAt?: number
+  /** 登记清除原因（目录缺失下 force 恢复路径：复核确证缺失后清除登记，git 侧经 prune 收敛）。 */
+  removedReason?: 'directory_missing_forced'
   /** 分支是否已删除（worktree 已移除但分支删除部分失败时为 false，可重试 cleanup deleteBranch）。 */
   branchDeleted?: boolean
   /** 分支删除失败的最后诊断（已脱敏；重试成功后清除）。 */
