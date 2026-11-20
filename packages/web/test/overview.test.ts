@@ -1,12 +1,13 @@
 /**
- * 会话总览（#/overview 只读宿主视图）测试：
+ * 会话总览（#/overview 并发主入口）测试：
  * - 纯函数契约：buildOverviewCards（含安静树、桶序 + createdAt 倒序、后代
  *   芯片信号优先与截断计数、暴露边界继承态势口径、诚实摘要复用）、
  *   filterOverviewCards（桶/角色/节点 AND 组合、quiet 仅在 all、本机节点归一）、
  *   overviewProfileOptions / overviewNodeOptions 去重；
  * - URL：#/overview 解析/序列化往返、hashHasPrimaryTarget、对话空间归属；
- * - 交互：卡片网格渲染与筛选切换、卡面点击复用既有会话抽屉（conversation-drawer
- *   模态进 store 导航态）、后代芯片直达、Rail 总览按钮一键直达与 tone 灯点。
+ * - 交互：卡片网格渲染与筛选切换、卡面/后代芯片直进主屏会话（与会话列表
+ *   点击一致）、抽屉速览与右分屏收进卡片 `...` 菜单（托管卡也保留）、顶栏
+ *   新话题（单候选直进 / 多候选下拉选角）、Rail 总览按钮一键直达与 tone 灯点。
  */
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
@@ -327,7 +328,7 @@ test('ConversationOverview card light matches the sidebar row verdict: idle root
   }
 })
 
-test('ConversationOverview renders the card grid with honest facts and reuses the conversation drawer on click', { timeout: 60_000 }, async () => {
+test('ConversationOverview renders the card grid with honest facts and directly opens conversations in the main view', { timeout: 60_000 }, async () => {
   const store = overviewScenarioStore()
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -349,25 +350,73 @@ test('ConversationOverview renders the card grid with honest facts and reuses th
     assert.ok(cards[1]!.textContent?.includes('正在检索文档'), 'the running card states the real doing text')
     assert.ok(container.textContent?.includes('3 trees'), 'the stats line counts visible cards')
 
+    // 直进语义：点卡片直达 targetConversationId（树内有等待人类的后代时直达
+    // 审批现场 #11），不弹抽屉、与会话列表点击完全一致。
     await act(async () => {
       ;(cards[0] as HTMLElement).click()
     })
-    const modal = store.getNavSlice().activeModal
     assert.deepEqual(
-      modal,
-      { kind: 'conversation-drawer', conversationId: 11 },
-      'clicking the card opens the existing conversation drawer straight at the waiting descendant',
+      store.getNavSlice().primaryTarget,
+      { kind: 'conversation', conversationId: 11 },
+      'clicking the card navigates the main view straight to the waiting descendant',
     )
+    assert.ok(store.getNavSlice().activeModal === null, 'card clicks never open the conversation drawer')
 
+    // 后代芯片直达该成员会话（同样直进主屏，不弹抽屉）。
     const chip = container.querySelector<HTMLButtonElement>('.overview-chip')
     assert.ok(chip !== null)
     await act(async () => {
       chip.click()
     })
     assert.deepEqual(
+      store.getNavSlice().primaryTarget,
+      { kind: 'conversation', conversationId: 11 },
+      'the descendant chip navigates straight to the member conversation',
+    )
+    assert.ok(store.getNavSlice().activeModal === null, 'chip clicks never open the conversation drawer')
+
+    // 卡片 `...` 菜单收进速览/分屏：抽屉速览打开 conversation-drawer 模态。
+    const menuTrigger = cards[0]!.querySelector<HTMLButtonElement>('.overview-card-actions button')
+    assert.ok(menuTrigger !== null, 'the card actions menu renders')
+    await act(async () => {
+      menuTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
+    const peekItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((el) =>
+      el.textContent?.includes('Peek in drawer'),
+    )
+    assert.ok(peekItem !== undefined, 'the menu offers the drawer peek action')
+    const splitItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((el) =>
+      el.textContent?.includes('Open in right split'),
+    )
+    assert.ok(splitItem !== undefined, 'the menu offers the right-split action')
+    assert.ok(
+      [...document.querySelectorAll('[role="separator"]')].length > 0,
+      'the prepend view actions are separated from the host archive action',
+    )
+    await act(async () => {
+      peekItem.click()
+    })
+    assert.deepEqual(
       store.getNavSlice().activeModal,
       { kind: 'conversation-drawer', conversationId: 11 },
-      'the descendant chip opens the same real-conversation drawer',
+      'drawer peek opens the existing conversation drawer at the card target',
+    )
+
+    // 右分屏打开：splitTarget 直达卡片目标，主屏不动。
+    await act(async () => {
+      menuTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
+    const splitItemAgain = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((el) =>
+      el.textContent?.includes('Open in right split'),
+    )
+    assert.ok(splitItemAgain !== undefined)
+    await act(async () => {
+      splitItemAgain.click()
+    })
+    assert.deepEqual(
+      store.getNavSlice().splitTarget,
+      { kind: 'conversation', conversationId: 11 },
+      'the right-split action opens the card target in the split pane',
     )
   } finally {
     await act(async () => {
@@ -1168,10 +1217,11 @@ test('ConversationOverview batch mode: card click toggles selection, managed/bot
       cardById(mount.container, 1)?.click()
     })
     assert.deepEqual(
-      store.getNavSlice().activeModal,
-      { kind: 'conversation-drawer', conversationId: 1 },
-      'normal mode restores the drawer navigation',
+      store.getNavSlice().primaryTarget,
+      { kind: 'conversation', conversationId: 1 },
+      'normal mode restores the direct main-view navigation',
     )
+    assert.ok(store.getNavSlice().activeModal === null, 'normal mode never opens the drawer')
   } finally {
     await mount.unmount()
   }
@@ -1276,7 +1326,8 @@ test('ConversationOverview card actions menu: archive and delete for human roots
     const botCard = cardById(mount.container, 4)
     const managedCard = cardById(mount.container, 3)
     assert.ok(humanCard?.querySelector('.overview-card-actions button') !== null, 'the human root card renders the "..." menu trigger')
-    assert.ok(botCard?.querySelector('.overview-card-actions button') === null, 'the bot root card renders no menu (no eligible actions)')
+    // bot 根：宿主归档/删除不参与，但只读视图动作（抽屉速览/右分屏）照常提供。
+    assert.ok(botCard?.querySelector('.overview-card-actions button') !== null, 'the bot root card still renders the "..." menu (view-only actions)')
 
     // 菜单打开（Radix 挂 body）：归档 + 删除两项都在；托管根只有删除（面板同语义）。
     const trigger = humanCard?.querySelector<HTMLButtonElement>('.overview-card-actions button')
@@ -1349,5 +1400,181 @@ test('ConversationOverview compact meta line: profile, remote node and summary s
     assert.equal(sub.querySelectorAll('.overview-card-sub > *').length, 5, 'profile + sep + node + sep + summary = five inline parts')
   } finally {
     await mount.unmount()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 并发主入口：顶栏新话题（单候选直进 / 多候选下拉选角 / 无候选不渲染）
+// ---------------------------------------------------------------------------
+
+test('ConversationOverview new topic: the only creatable agent gets a direct standby button', { timeout: 60_000 }, async () => {
+  const store = overviewStore({
+    profiles: [{ id: 'coder', name: '编码专员' }],
+    conversations: [conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 })],
+    primaryTarget: { kind: 'overview' },
+  })
+  const mount = await mountOverview(store)
+  try {
+    const btn = mount.container.querySelector<HTMLButtonElement>('.overview-newtopic-btn')
+    assert.ok(btn !== null, 'a single creatable agent renders the direct new-topic button')
+    assert.ok(btn.getAttribute('aria-haspopup') === null, 'a single candidate never opens a dropdown')
+    assert.ok(mount.container.textContent?.includes('New topic'), 'the button reuses the shared new-topic copy')
+    await act(async () => {
+      btn.click()
+    })
+    assert.deepEqual(
+      store.getNavSlice().primaryTarget,
+      { kind: 'agent', profileId: 'coder' },
+      'clicking the button opens the agent standby (first send persists the conversation)',
+    )
+  } finally {
+    await mount.unmount()
+  }
+})
+
+test('ConversationOverview new topic: multiple agents open a dropdown with the latest-active agent first and @node suffixes', { timeout: 60_000 }, async () => {
+  const store = overviewStore({
+    conversations: [
+      conv({ id: 1, title: '最近的助手会话', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 2, title: '远端编码会话', profileId: 'coder', nodeId: 'lx', createdAt: 8000, updatedAt: 8000 }),
+    ],
+    primaryTarget: { kind: 'overview' },
+  })
+  const mount = await mountOverview(store)
+  try {
+    const trigger = mount.container.querySelector<HTMLButtonElement>('.overview-newtopic-btn')
+    assert.ok(trigger !== null, 'multiple creatable agents render the new-topic dropdown trigger')
+    assert.ok(trigger.getAttribute('aria-haspopup') === 'menu', 'the trigger announces its menu')
+    await act(async () => {
+      trigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
+    const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].filter((el) =>
+      el.closest('.helmx-dropdown-content') !== null,
+    )
+    assert.ok(items.length === 2, 'the dropdown lists every creatable agent')
+    assert.ok(items[0]!.textContent?.includes('个人助理'), 'the latest-active root conversation owner leads the list')
+    assert.ok(items[1]!.textContent?.includes('编码专员') && items[1]!.textContent?.includes('@lx'), 'the remote agent carries its @node suffix')
+    await act(async () => {
+      items[1]!.click()
+    })
+    assert.deepEqual(
+      store.getNavSlice().primaryTarget,
+      { kind: 'agent', profileId: 'coder' },
+      'picking an agent opens its standby page',
+    )
+  } finally {
+    await mount.unmount()
+  }
+})
+
+test('ConversationOverview new topic: no creatable agent renders no button', { timeout: 60_000 }, async () => {
+  const store = overviewStore({
+    profiles: [{ id: 'bot1', name: '机器人', humanSelectable: false }],
+    conversations: [conv({ id: 4, title: 'bot 会话根', ownedBy: 'bot', createdAt: 6000, updatedAt: 6000 })],
+    primaryTarget: { kind: 'overview' },
+  })
+  const mount = await mountOverview(store)
+  try {
+    assert.ok(mount.container.querySelector('.overview-newtopic-btn') === null, 'no creatable agent: zero new-topic residue')
+  } finally {
+    await mount.unmount()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 并发主入口：托管/受保护卡的 `...` 菜单仍提供只读视图动作；分屏实例直进同侧
+// ---------------------------------------------------------------------------
+
+test('ConversationOverview managed card keeps the view-only menu actions (peek + right split)', { timeout: 60_000 }, async () => {
+  const taskSection = {
+    pluginId: 'builtin:tasks',
+    surface: 'sidebar.section' as const,
+    spec: { id: 'task-runs', label: { en: 'Task runs' }, icon: 'check-square', filterTag: 'task' },
+  }
+  // bot 归属的托管根：宿主归档/删除均不参与——菜单只剩两个只读视图动作
+  // （prepend-only 分支：无分隔线、无后续宿主动作）。
+  const store = overviewStore({
+    conversations: [
+      conv({ id: 7, title: '任务执行', profileId: 'assistant', ownedBy: 'bot', tags: ['task'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
+    ],
+    primaryTarget: { kind: 'overview' },
+    uiContributions: [taskSection],
+  })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(HostStoreProviders, { value: store }, e(ConversationOverview)))
+    })
+    const menuTrigger = container.querySelector<HTMLButtonElement>('.overview-card-actions button')
+    assert.ok(menuTrigger !== null, 'the managed card still renders its actions menu (prepend view actions)')
+    await act(async () => {
+      menuTrigger.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
+    const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].filter((el) =>
+      el.closest('.helmx-dropdown-content') !== null,
+    )
+    assert.ok(items.length === 2, 'the managed card menu carries exactly the two read-only view actions')
+    assert.ok(items[0]!.textContent?.includes('Peek in drawer'), 'drawer peek survives on managed cards')
+    assert.ok(items[1]!.textContent?.includes('Open in right split'), 'right split survives on managed cards')
+    assert.ok(document.querySelectorAll('[role="separator"]').length === 0, 'nothing follows the prepend actions: no separator, no host archive')
+    await act(async () => {
+      items[0]!.click()
+    })
+    assert.deepEqual(
+      store.getNavSlice().activeModal,
+      { kind: 'conversation-drawer', conversationId: 7 },
+      'drawer peek works on managed cards',
+    )
+  } finally {
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
+  }
+})
+
+test('ConversationOverview split instance navigates conversations into the same split pane', { timeout: 60_000 }, async () => {
+  const store = overviewStore({
+    profiles: [{ id: 'assistant', name: '个人助理' }],
+    conversations: [conv({ id: 1, title: '出错的重构', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 })],
+    primaryTarget: { kind: 'agent', profileId: 'assistant' },
+    splitTarget: { kind: 'overview' },
+  })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(HostStoreProviders, { value: store }, e(ConversationOverview, { isSplit: true })))
+    })
+    const card = container.querySelector<HTMLElement>('.overview-card')
+    assert.ok(card !== null, 'the split overview renders its card grid')
+    const newTopicBtn = container.querySelector<HTMLButtonElement>('.overview-newtopic-btn')
+    await act(async () => {
+      card.click()
+    })
+    assert.deepEqual(
+      store.getNavSlice().splitTarget,
+      { kind: 'conversation', conversationId: 1 },
+      'clicking a card inside the split overview navigates the same split pane',
+    )
+    assert.ok(store.getNavSlice().primaryTarget.kind === 'agent', 'the main pane stays untouched')
+    await act(async () => {
+      newTopicBtn?.click()
+    })
+    assert.deepEqual(
+      store.getNavSlice().splitTarget,
+      { kind: 'agent', profileId: 'assistant' },
+      'the new-topic button also opens standby inside the same split pane',
+    )
+  } finally {
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
   }
 })

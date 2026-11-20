@@ -251,6 +251,7 @@ export const shellMessages = {
   'shell.overview.quickNavGroup': { en: 'Quick navigation', 'zh-CN': '快捷导航' },
   'shell.overview.moreDescendants': { en: '+{count} more', 'zh-CN': '还有 {count} 个' },
   'shell.overview.railTooltip': { en: 'Conversation overview', 'zh-CN': '会话总览' },
+  'shell.overview.drawerPeek': { en: 'Peek in drawer', 'zh-CN': '抽屉速览' },
   'shell.overview.batchProtected': {
     en: 'Managed or protected conversations are excluded from bulk management',
     'zh-CN': '托管或受保护会话不参与批量管理',

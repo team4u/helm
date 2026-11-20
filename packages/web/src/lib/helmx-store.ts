@@ -53,6 +53,7 @@ import {
 import {
   applyScreenParamsPatch,
   defaultSpaceTarget,
+  hasVisibleConversationRoots,
   partitionScreenParamsPatch,
   resolveSpaceSwitch,
   type SpaceTargetInput,
@@ -503,9 +504,8 @@ export class HelmxExternalStore {
       workbenchTab: this.navState.workbenchTab,
       activeModal: this.navState.activeModal,
     }
-    this.spaceMemory = {
-      [spaceForTarget(bootLocation.primaryTarget)]: bootLocation.primaryTarget,
-    }
+    this.spaceMemory = {}
+    this.rememberSpaceTarget(bootLocation.primaryTarget)
     this.lastSyncedLocation = { current: bootLocation }
     this.liveRef = { current: this.liveState }
     this.targets = {
@@ -1594,8 +1594,18 @@ export class HelmxExternalStore {
 
   // ---- Navigation, Shortcuts & Esc-Abort ------------------------------------
 
-  applyPrimaryTarget = (target: ResolvedTarget): void => {
+  /** 空间记忆写入的唯一入口：总览是有专属入口的顶层目的地，不占对话空间
+   *  的记忆位——boot 初始化、程序导航（applyPrimaryTarget/openTarget）与
+   *  hashchange 同步（applyExternalLocation）全部经此收敛，「对话」空间按钮
+   *  永远跳回最近的真实会话/待命目标，绝不被总览劫持（含 #/overview 直达
+   *  后的刷新场景）。 */
+  private rememberSpaceTarget(target: ResolvedTarget): void {
+    if (target.kind === 'overview') return
     this.spaceMemory[spaceForTarget(target)] = target
+  }
+
+  applyPrimaryTarget = (target: ResolvedTarget): void => {
+    this.rememberSpaceTarget(target)
     this.patchNav({ primaryTarget: target })
   }
 
@@ -1664,11 +1674,8 @@ export class HelmxExternalStore {
     if (opts?.split) {
       patch.splitTarget = resolved
     } else {
-      // 总览是有专属入口的顶层目的地，不占对话空间的记忆位——
-      // 「对话」空间按钮永远跳回最近的真实会话/待命目标，绝不被总览劫持。
-      if (resolved.kind !== 'overview') {
-        this.spaceMemory[spaceForTarget(resolved)] = resolved
-      }
+      // 总览不占对话空间记忆位（rememberSpaceTarget 内置守卫，见其注释）。
+      this.rememberSpaceTarget(resolved)
       patch.primaryTarget = resolved
       // 主屏导航离开当前视图时收起覆盖型会话抽屉：抽屉内徽标/通知等触发的
       // openTarget 若不收抽屉，新目标被全高抽屉遮挡，表现为「点击无反应」。
@@ -1733,7 +1740,7 @@ export class HelmxExternalStore {
   applyExternalLocation = (parsed: WorkspaceLocationState): void => {
     this.pendingHistoryMode.current = null
     this.lastSyncedLocation.current = parsed
-    this.spaceMemory[spaceForTarget(parsed.primaryTarget)] = parsed.primaryTarget
+    this.rememberSpaceTarget(parsed.primaryTarget)
     this.patchNav({
       primaryTarget: parsed.primaryTarget,
       splitTarget: parsed.splitTarget,
@@ -1745,13 +1752,22 @@ export class HelmxExternalStore {
 
   performHomeLanding(initialLocation: WorkspaceLocationState): void {
     if (!isSameLocationState(this.locationStateCache, initialLocation)) return
-    const home = defaultSpaceTarget('conversations', {
+    const input: SpaceTargetInput = {
       conversations: this.liveState.conversations,
       profiles: this.catalogState.profiles,
       plugins: this.liveState.plugins,
       assetsLoaded: this.catalogState.profilesLoaded || this.catalogState.assetsLoaded,
       grouped: this.groupedUi,
-    })
+    }
+    // 并发主入口：非全新系统（存在可见根会话树，与总览暴露边界同口径）冷
+    // 启动以 replace 落到会话总览；全新/清空系统回退对话空间缺省目标
+    // （最新根会话所属角色的待命页，无会话时首个可用角色），保住首次
+    // 部署打开即能打字的体验。
+    if (hasVisibleConversationRoots(input)) {
+      this.openTarget({ kind: 'overview' }, { history: 'replace' })
+      return
+    }
+    const home = defaultSpaceTarget('conversations', input)
     if (home === null) return
     this.openTarget(home, { history: 'replace' })
   }

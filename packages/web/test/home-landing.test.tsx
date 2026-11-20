@@ -1,10 +1,12 @@
 /**
- * 空 Hash 首页落地（对话空间缺省目标）——真实 HelmxStoreProvider + happy-dom + 真实 history。
+ * 空 Hash 首页落地（并发主入口优先）——真实 HelmxStoreProvider + happy-dom + 真实 history。
  *
  * 契约（docs/conventions/web-navigation.md §2.0 首页落地）：
  * - 空 Hash（无显式主屏目标且无弹窗）进入不是导航意图：认证、会话快照与静态资产
- *   全部就绪后，主屏以 replace 落到对话空间缺省目标——最新根会话所属角色的待命页，
- *   无会话时首个可用角色——replace 不产生历史项，后退不回到角色中心；
+ *   全部就绪后，主屏以 replace 落到会话总览 `#/overview`（并发主入口：存在
+ *   可见根会话树 = 非全新系统）；全新系统（无可见根树）回退对话空间缺省目标
+ *   ——最新根会话所属角色的待命页，无会话时首个可用角色——replace 不产生
+ *   历史项，后退不回到角色中心；
  * - 数据就绪前位置被移动（用户点击 / 外部前进后退 / 程序导航）：既有意图优先，取消落地；
  * - 显式主屏目标或弹窗深链入口不触发落地；无任何可用角色时保持解析缺省（角色中心）。
  */
@@ -206,7 +208,7 @@ function resetEmptyHash(): void {
 
 // ---------------------------------------------------------------------------
 
-test('空 Hash 首页落地：最新根会话所属角色的待命页，replace 全程不入历史栈', { timeout: 60_000 }, async (t) => {
+test('空 Hash 首页落地：非全新系统以 replace 落到会话总览（并发主入口）', { timeout: 60_000 }, async (t) => {
   const stub = stubFetch({ snapshotPayload: snapshotOf([CONV_ROOT]) })
   t.after(() => stub.restore())
   resetEmptyHash()
@@ -214,10 +216,10 @@ test('空 Hash 首页落地：最新根会话所属角色的待命页，replace 
   const historyLengthAtBoot = window.history.length
   try {
     await app.waitFor(allReady)
-    await app.waitFor((o) => o.target === 'a/assistant')
+    await app.waitFor((o) => o.target === 'overview')
     const current = app.probe()
-    assert.equal(current.target, 'a/assistant', '就绪后主屏落到最新根会话所属角色的待命页')
-    assert.equal(window.location.hash, '#/a/assistant')
+    assert.equal(current.target, 'overview', '就绪后主屏落到会话总览（存在可见根会话树）')
+    assert.equal(window.location.hash, '#/overview')
     assert.equal(current.historyLength, historyLengthAtBoot, '观测期（含落地当拍）历史长度不变')
     assert.equal(window.history.length, historyLengthAtBoot, '落地是 replace，绝不产生历史项')
   } finally {
@@ -297,7 +299,7 @@ test('弹窗深链入口不落地：无显式主屏目标但有弹窗时主屏�
     const params = new URLSearchParams((window.location.hash.split('?')[1] ?? ''))
     assert.equal(params.get('modal'), 'artifact', '弹窗参数在 URL 中保留')
     assert.equal(params.get('id'), 'abc')
-    assert.notEqual(window.location.hash, '#/a/assistant')
+    assert.notEqual(window.location.hash, '#/overview')
   } finally {
     app.unmount()
   }
@@ -346,16 +348,16 @@ test('App 空 Hash 落地期渲染 .home-landing-skeleton，绝不闪现 Profile
     assert.ok(host.querySelector('.home-landing-skeleton') !== null, '落地等待期渲染 .home-landing-skeleton')
     assert.equal(sawProfileCenter, false, '落地等待期绝不闪现 ProfileCenter')
 
-    // 释放 profiles：就绪后直接落入待命页，全程未闪现 ProfileCenter
+    // 释放 profiles：就绪后直接落入会话总览，全程未闪现 ProfileCenter
     await act(async () => { releaseProfiles() })
     const settleDeadline = Date.now() + 10_000
-    while (host.querySelector('.agent-standby-pane') === null) {
-      if (Date.now() > settleDeadline) throw new Error('等待 .agent-standby-pane 超时')
+    while (host.querySelector('.conversation-overview') === null) {
+      if (Date.now() > settleDeadline) throw new Error('等待 .conversation-overview 超时')
       await act(async () => { await new Promise((resolve) => setTimeout(resolve, 15)) })
     }
     assert.equal(sawProfileCenter, false, '全程未瞬时挂载 ProfileCenter')
     assert.ok(host.querySelector('.home-landing-skeleton') === null, '落地完成后骨架屏退场')
-    assert.equal(window.location.hash, '#/a/assistant')
+    assert.equal(window.location.hash, '#/overview')
   } finally {
     observer.disconnect()
     act(() => root.unmount())
@@ -509,13 +511,13 @@ test('慢资产接口阻塞 assetsLoaded 时，只要 profilesLoaded 就绪即�
   const historyLengthAtBoot = window.history.length
   try {
     await app.waitFor((o) => o.authenticated && o.profilesLoaded && o.sseConnected)
-    await app.waitFor((o) => o.target === 'a/assistant')
+    await app.waitFor((o) => o.target === 'overview')
     await app.settle()
     const current = app.probe()
     assert.equal(current.profilesLoaded, true, 'profiles 接口返回即置位 profilesLoaded')
     assert.equal(current.assetsLoaded, false, 'models 仍未返回时 assetsLoaded 保持 false，不得阻塞落地')
-    assert.equal(current.target, 'a/assistant')
-    assert.equal(window.location.hash, '#/a/assistant')
+    assert.equal(current.target, 'overview')
+    assert.equal(window.location.hash, '#/overview')
     assert.equal(current.historyLength, historyLengthAtBoot)
   } finally {
     releaseModels()

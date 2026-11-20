@@ -24,7 +24,7 @@
 | :--- | :--- |
 | `#/c/<id>` | 会话 |
 | `#/a/<profileId>` | 智能体待命页 |
-| `#/overview` | 会话总览（只读宿主视图，对话空间：根会话树卡片网格 + 筛选，卡面/后代芯片复用既有会话抽屉直达） |
+| `#/overview` | 会话总览（并发主入口：卡片/后代芯片直进主屏，抽屉速览与右分屏收进卡片菜单，顶栏新话题） |
 | `#/views/<pluginId>/<screenId>` | 插件全屏视图 |
 | `#/settings/profiles[/<profileId>]` | 角色中心 |
 | `#/settings/models[/<providerId> \| /defaults \| /<providerId>/defaults]` | 模型中心（`defaults` 保留段 = 全局默认 Tab） |
@@ -32,7 +32,7 @@
 | `#/settings/nodes[/<nodeId>]` | 节点中心 |
 | `#/settings/plugins[/<pluginId>]` | 插件中心 |
 
-侧栏空间（`conversations | views | settings`）由主屏目标唯一推导，不是独立 URL/Store 状态：Rail 点击经 `store.openSpace` 导航到该空间最近记忆的主屏目标（无记忆取空间缺省），经 push 入栈；已在当前空间 no-op 不产生历史项；记忆指向已失效目标时安全清理并回退缺省，绝不伪造不存在目标。浏览器前进/后退（hashchange/popstate）以 URL 为唯一事实来源。路径段内斜杠必须编码、冒号保留可读；非法段（含全部旧路径形态）静默回退默认主屏 `#/settings/profiles`。**首页落地**：空 Hash 进入不是导航意图——认证与资产就绪后主屏以 replace 落到对话空间缺省目标（最新根会话所属角色的待命页，无会话时首个可用角色），不入历史栈。
+侧栏空间（`conversations | views | settings`）由主屏目标唯一推导，不是独立 URL/Store 状态：Rail 点击经 `store.openSpace` 导航到该空间最近记忆的主屏目标（无记忆取空间缺省），经 push 入栈；已在当前空间 no-op 不产生历史项；记忆指向已失效目标时安全清理并回退缺省，绝不伪造不存在目标。浏览器前进/后退（hashchange/popstate）以 URL 为唯一事实来源。路径段内斜杠必须编码、冒号保留可读；非法段（含全部旧路径形态）静默回退默认主屏 `#/settings/profiles`。**首页落地**：空 Hash 进入不是导航意图——认证与资产就绪后主屏以 replace 落到会话总览 `#/overview`（并发主入口）；全新系统（无可见根会话树）回退对话空间缺省目标（最新根会话所属角色的待命页，无会话时首个可用角色），不入历史栈。
 
 ### 智能体待命目标与「首次发送才落库」
 

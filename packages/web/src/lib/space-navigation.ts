@@ -4,6 +4,7 @@
  */
 import type { ConversationSummary, Profile } from '@helmx/protocol/browser'
 import { isConversationArchived } from '../conversation/archive-model.js'
+import { collectEnabledPluginIds, isProfileVisible } from '../shell/sidebar-model.js'
 import {
   isPrototypeParamKey,
   resolveTargetString,
@@ -22,6 +23,31 @@ export interface SpaceTargetInput {
   /** Whether static assets finished loading this round (before that, profile existence cannot be falsified; treat as available). */
   assetsLoaded: boolean
   grouped: GroupedUiSpecs
+}
+
+/**
+ * Whether at least one visible conversation root tree exists — the honest
+ * "not a fresh system" verdict for the overview home landing. Exposure boundary
+ * mirrors aggregateAttentionTrees: archived roots and roots whose Profile is
+ * hidden by a disabled plugin are invisible everywhere (neither sidebar nor
+ * overview); a root whose Profile record is missing (orphan) still counts as
+ * visible, same as the sidebar's orphan-standing fallback.
+ */
+export function hasVisibleConversationRoots(input: {
+  conversations: ReadonlyArray<ConversationSummary>
+  profiles: ReadonlyArray<Profile>
+  plugins: ReadonlyArray<{ id: string; enabled: boolean }>
+}): boolean {
+  const enabledPluginIds = collectEnabledPluginIds(input.plugins)
+  return input.conversations.some(
+    (conv) =>
+      conv.parentConversationId === undefined &&
+      !isConversationArchived(conv) &&
+      (() => {
+        const profile = input.profiles.find((p) => p.id === conv.profileId)
+        return profile === undefined || isProfileVisible(profile, enabledPluginIds)
+      })(),
+  )
 }
 
 /** Whether a space jump-back target is still available: conversations must be

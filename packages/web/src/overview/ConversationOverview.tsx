@@ -1,20 +1,23 @@
 /**
- * 会话总览（只读宿主视图，对话空间主舞台 `#/overview`）：
+ * 会话总览（并发主入口，对话空间主舞台 `#/overview`，冷启动默认落地）：
  *
  * - 复用态势模型的唯一树聚合口径：一张卡片 = 一棵根会话树（含安静树），
- *   卡面只呈现真实事实（代表位灯、lastError / doing / 后台摘要 / 后代运行
- *   计数），绝不编造进度；
+ *   卡面只呈现真实事实（根会话状态 + 树级后台在途的灯位、lastError /
+ *   doing / 后台摘要 / 后代运行计数），绝不编造进度；
+ * - 直进语义：卡片主体 / 后代芯片点击直达主屏会话（树内有等待人类的会话
+ *   时直达最新审批现场），与会话列表点击完全一致；「抽屉速览」与「右分屏
+ *   打开」收进卡片 `...` 菜单（prependItems 通用前置动作），托管/受保护卡
+ *   也至少保留这两个只读视图动作；
+ * - 顶栏「新话题」：单候选角色直进待命页，多候选下拉选角（最近活跃根会话
+ *   所属角色置顶，远端节点 @后缀标注）；首次发送才落库，不预创建会话；
  * - 筛选：全部 / 需处理 / 进行中 / 未读（SegmentedControl）+ 角色 / 节点 /
  *   来源（SDK Select，来源 = 常规对话 vs 托管会话，托管判定与侧栏
  *   sidebarSection filterTag 同源，零插件 ID 特判）；排序桶序 + createdAt
  *   倒序，流式输出不跳卡；
  * - 卡片元信息区挂 OVERVIEW_CARD_META_SLOT 只读插槽（插件贡献跳转胶囊等，
  *   插槽内可点元素自行 stopPropagation，不误触卡片直达；无贡献零占位）；
- * - 打开真实会话：卡面点击直达 targetConversationId（树内有等待人类的会话
- *   时直达最新审批现场），后代会话芯片逐个直达——统一复用既有会话抽屉
- *   （conversation-drawer 模态，进 URL、浏览器返回即收起），人在总览不离场；
- * - 审批仍走 AskDoc、后台通知仍走浏览器通知旧链路——本视图是态势的只读
- *   总览，不是新的通知收件箱；
+ * - 审批仍走 AskDoc、后台通知仍走浏览器通知旧链路——本视图是态势的分发
+ *   大堂，不是新的通知收件箱；
  * - 移动端主舞台自适应：筛选折行、卡片网格单列化（responsive 断点）。
  */
 import { HubUpdateCard } from './HubUpdateCard.js'
@@ -37,10 +40,17 @@ import { useWebLocale } from '../i18n/use-web-locale.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConfirmDialog } from '../ui/AlertDialog.js'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuPortal,
+  DropdownMenuTrigger,
+} from '../ui/DropdownMenu.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { conversationsApi } from '../lib/api.js'
-import { ConversationStatusDot } from '../shell/SidebarPrimitives.js'
-import { partitionSidebarUi, isConversationArchivable } from '../shell/sidebar-model.js'
+import { ConversationStatusDot, RemoteNodeTag } from '../shell/SidebarPrimitives.js'
+import { buildAgentStandings, isConversationArchived, partitionSidebarUi, isConversationArchivable, type AgentStanding } from '../shell/sidebar-model.js'
 import { archiveBatchNotice, patchConversationsArchived } from '../shell/archive-ops.js'
 import { useGlobalAttention } from '../shell/use-attention-indicator.js'
 import {
@@ -61,11 +71,13 @@ export interface ConversationOverviewProps {
 type BucketFilterValue = OverviewBucketFilter
 type SourceFilterValue = OverviewSourceFilter
 
-/** 单卡：根会话树聚合卡（只读）；卡面直达 target，芯片逐后代直达。
+/** 单卡：根会话树聚合卡（只读）；卡面/芯片直进主屏会话。
  * 批量模式下整卡变为勾选目标（含芯片点击），不再触发导航。 */
 function OverviewCardView({
   card,
   onOpenConversation,
+  onDrawerPeek,
+  onOpenSplit,
   viewedConversationIds,
   batchMode = false,
   selectable = false,
@@ -74,6 +86,8 @@ function OverviewCardView({
 }: {
   card: OverviewCard
   onOpenConversation: (conversationId: number) => void
+  onDrawerPeek: (conversationId: number) => void
+  onOpenSplit: (conversationId: number) => void
   viewedConversationIds: ReadonlySet<number>
   batchMode?: boolean
   selectable?: boolean
@@ -149,7 +163,24 @@ function OverviewCardView({
         <span className="overview-card-id tabular-nums">#{card.root.id}</span>
         {!batchMode && (
           <span className="overview-card-actions" onClick={(e) => e.stopPropagation()}>
-            <ConversationRowActionsMenu conversation={card.root} enableDelete />
+            <ConversationRowActionsMenu
+              conversation={card.root}
+              enableDelete
+              prependItems={[
+                {
+                  key: 'drawer-peek',
+                  icon: 'panel-right',
+                  label: t('shell.overview.drawerPeek'),
+                  onSelect: () => onDrawerPeek(card.targetConversationId),
+                },
+                {
+                  key: 'open-split',
+                  icon: 'columns',
+                  label: t('shell.sidebar.openInRightSplit'),
+                  onSelect: () => onOpenSplit(card.targetConversationId),
+                },
+              ]}
+            />
           </span>
         )}
       </div>
@@ -221,7 +252,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
       <HubUpdateCard />
     </>
   )
-  const { t } = useWebLocale()
+  const { locale, t } = useWebLocale()
   const { openTarget, closeSplit, setActiveModal } = useStoreActions()
   const { background, viewedConversationIds } = useGlobalAttention()
   const conversations = useConversations()
@@ -370,9 +401,55 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     }
   }
 
-  const openConversationDrawer = (conversationId: number): void => {
+  const openConversation = (conversationId: number): void => {
+    // 直进语义：与会话列表点击完全一致（总览开在右分屏时进同侧分屏）。
+    openTarget({ kind: 'conversation', conversationId }, isSplit ? { split: true } : undefined)
+  }
+
+  const drawerPeek = (conversationId: number): void => {
     setActiveModal({ kind: 'conversation-drawer', conversationId })
   }
+
+  const openSplit = (conversationId: number): void => {
+    openTarget({ kind: 'conversation', conversationId }, { split: true })
+  }
+
+  // 顶栏「新话题」候选：与侧栏站位同源（buildAgentStandings），仅人类可选
+  // 且可见的角色可开新聊；最近活跃根会话所属角色置顶，其余按站位序。
+  const newTopicCandidates = useMemo(() => {
+    const standings = buildAgentStandings({
+      profiles,
+      conversations,
+      plugins,
+      sidebarItems: groupedUi.sidebarItems,
+      sidebarSections: groupedUi.sidebarSections,
+      locale,
+    })
+    const creatable = standings.filter((standing) => standing.canCreateConversation)
+    const latestRootProfileId =
+      conversations
+        .filter((c) => c.parentConversationId === undefined && !isConversationArchived(c))
+        .reduce<ConversationSummary | null>(
+          (best, c) =>
+            best === null || c.updatedAt > best.updatedAt || (c.updatedAt === best.updatedAt && c.id > best.id)
+              ? c
+              : best,
+          null,
+        )?.profileId ?? null
+    return [...creatable].sort((a, b) => {
+      if (a.profileId === latestRootProfileId) return -1
+      if (b.profileId === latestRootProfileId) return 1
+      return a.order - b.order || a.profileId.localeCompare(b.profileId)
+    })
+  }, [profiles, conversations, plugins, groupedUi.sidebarItems, groupedUi.sidebarSections, locale])
+
+  const openNewTopic = (profileId: string): void => {
+    openTarget({ kind: 'agent', profileId }, isSplit ? { split: true } : undefined)
+  }
+
+  // 单候选直进按钮的稳定绑定（闭包内索引访问会丢失窄化，这里一次性收敛）。
+  const singleNewTopicCandidate: AgentStanding | null =
+    newTopicCandidates.length === 1 ? (newTopicCandidates[0] ?? null) : null
 
   // 数据就绪门：会话快照未到（且资产未齐/SSE 未连）时如实展示加载态，
   // 绝不把「还没加载」伪报成「没有会话」；一旦有任何会话或资产+SSE 双就绪，
@@ -391,6 +468,60 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
           </span>
         </div>
         <div className="primary-center-topbar-actions pane-actions">
+          {singleNewTopicCandidate !== null && (
+            <button
+              type="button"
+              className="btn btn-sm overview-newtopic-btn"
+              aria-label={t('conv.pane.newTopic')}
+              title={t('shell.agents.newTopicUnder', { label: singleNewTopicCandidate.label })}
+              onClick={() => {
+                openNewTopic(singleNewTopicCandidate.profileId)
+              }}
+            >
+              <HelmxIcon name="plus" size={12} />
+              <span className="pane-action-label">{t('conv.pane.newTopic')}</span>
+            </button>
+          )}
+          {newTopicCandidates.length > 1 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  className="btn btn-sm overview-newtopic-btn"
+                  aria-label={t('conv.pane.newTopic')}
+                  title={t('conv.pane.newTopicTitle')}
+                  aria-haspopup="menu"
+                >
+                  <HelmxIcon name="plus" size={12} />
+                  <span className="pane-action-label">{t('conv.pane.newTopic')}</span>
+                  <HelmxIcon name="chevron-down" size={11} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuPortal>
+                <DropdownMenuContent className="pane-more-popover" align="end" sideOffset={4}>
+                  {newTopicCandidates.map((standing) => {
+                    const nodeId = standing.primaryConversation?.nodeId
+                    const remoteNodeId = nodeId !== undefined && nodeId !== '' && nodeId !== 'local' ? nodeId : null
+                    return (
+                      <DropdownMenuItem
+                        key={standing.profileId}
+                        title={t('shell.agents.newTopicUnder', { label: standing.label })}
+                        onSelect={() => {
+                          openNewTopic(standing.profileId)
+                        }}
+                      >
+                        <span className="pane-more-item-label">
+                          <HelmxIcon name="bot" size={13} />
+                          {standing.label}
+                          {remoteNodeId !== null && <RemoteNodeTag nodeId={remoteNodeId} />}
+                        </span>
+                      </DropdownMenuItem>
+                    )
+                  })}
+                </DropdownMenuContent>
+              </DropdownMenuPortal>
+            </DropdownMenu>
+          )}
           {isSplit ? (
             <CloseSplitButton onCloseSplit={onCloseSplit} />
           ) : (
@@ -529,7 +660,9 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
             <OverviewCardView
               key={card.root.id}
               card={card}
-              onOpenConversation={openConversationDrawer}
+              onOpenConversation={openConversation}
+              onDrawerPeek={drawerPeek}
+              onOpenSplit={openSplit}
               viewedConversationIds={viewedConversationIds}
               batchMode={batchMode}
               selectable={isCardSelectable(card.root)}

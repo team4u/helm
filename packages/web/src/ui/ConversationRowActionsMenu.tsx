@@ -4,6 +4,9 @@
  * - 菜单形态：Radix DropdownMenu 封装（Web 规范：操作菜单必须 DropdownMenu），
  *   内容经 Portal 挂载到 body，不再被侧栏滚动容器裁剪；受控 open 由 Radix
  *   负责点击外部 / Escape 关闭与焦点管理，无任何手写浮层与全局监听；
+ * - 调用方可经 prependItems 在宿主动作之前注入通用前置动作（如图表/卡片
+ *   场景的「抽屉速览 / 右分屏打开」视图动作）：仅 prependItems 时菜单也渲染
+ *   （其余动作全空不再整体吞掉），其后还有宿主/插件/删除动作时补分隔线；
  * - 宿主内置动作：归档会话 / 恢复会话（Web 宿主策略：宿主命名空间 tag，
  *   经现有会话 PATCH 落库；仅对可人工归档管理的会话提供，见 sidebar-model）；
  * - 插件动作：conversation.row.action 微插槽逐项渲染 PluginMicroAction（menu 形态，
@@ -39,14 +42,26 @@ import {
   partitionSidebarUi,
 } from '../shell/sidebar-model.js'
 
+/** 调用方注入的通用前置菜单动作（渲染于宿主归档/插件/删除动作之前）。 */
+export interface RowMenuPrependItem {
+  key: string
+  icon: string
+  label: string
+  onSelect: () => void
+}
+
 export function ConversationRowActionsMenu({
   conversation,
   enableDelete = false,
+  prependItems,
 }: {
   conversation: ConversationSummary
   /** 额外提供「删除会话」项（带确认弹窗；仅对可人类删除的会话渲染）。
    * 侧栏会话行保持默认 false（删除走会话面板），总览卡等大操作面开启。 */
   enableDelete?: boolean
+  /** 通用前置动作（视图速览/分屏等）：仅 prependItems 时菜单也渲染；
+   * 其后还有任何宿主/插件/删除动作时自动补一条分隔线。 */
+  prependItems?: ReadonlyArray<RowMenuPrependItem>
 }): ReactNode {
   const groupedUi = useGroupedUi()
   const { pushNotice } = useStoreActions()
@@ -71,8 +86,10 @@ export function ConversationRowActionsMenu({
       : 'archive'
     : null
   const canDelete = enableDelete && isConversationDeletable(conversation)
+  const hasPrependItems = prependItems !== undefined && prependItems.length > 0
+  const hasFollowingActions = hostArchiveAction !== null || actions.length > 0 || canDelete
 
-  if (actions.length === 0 && hostArchiveAction === null && !canDelete) return null
+  if (!hasPrependItems && actions.length === 0 && hostArchiveAction === null && !canDelete) return null
 
   const runHostArchiveAction = async (): Promise<void> => {
     if (archiving || hostArchiveAction === null) return
@@ -121,6 +138,26 @@ export function ConversationRowActionsMenu({
       </DropdownMenuTrigger>
       <DropdownMenuPortal>
         <DropdownMenuContent className="pane-more-popover" align="end" sideOffset={4}>
+          {hasPrependItems && (
+            <>
+              {prependItems!.map((item) => (
+                <DropdownMenuItem
+                  key={`prepend:${item.key}`}
+                  title={item.label}
+                  onSelect={() => {
+                    setOpen(false)
+                    item.onSelect()
+                  }}
+                >
+                  <span className="pane-more-item-label">
+                    <HelmxIcon name={item.icon} size={13} />
+                    {item.label}
+                  </span>
+                </DropdownMenuItem>
+              ))}
+              {hasFollowingActions && <DropdownMenuSeparator className="popover-separator" />}
+            </>
+          )}
           {hostArchiveAction !== null && (
             <DropdownMenuItem
               disabled={archiving}
