@@ -58,8 +58,8 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .trace-kv { grid-template-columns: 1fr; gap: 2px; }
   .composer-shell { padding-inline: var(--conversation-gutter); padding-bottom: max(8px, env(safe-area-inset-bottom)); }
   .composer-textarea { max-height: 120px; }
-  .composer-picker-root { max-width: 180px; }
-  .composer-toolbar .composer-model-button { max-width: 180px; }
+  .composer-toolbar .composer-picker-root { max-width: 220px; }
+  .composer-toolbar .composer-model-button { max-width: 100%; }
   .composer-toolbar .composer-queue-button { width: 32px; height: 32px; padding: 0; border-radius: 50%; }
   .composer-split-send .composer-split-main { padding: 0 8px; }
   .composer-split-trigger { width: 22px; }

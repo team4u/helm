@@ -13,6 +13,7 @@ import {
   usePanelShortcut,
   type HelmxPanel,
 } from './keybindings-model.js'
+import { formatModelRowDisplay, formatModelShortName } from './model-picker-model.js'
 
 // ---------------------------------------------------------------------------
 // ModelPicker (extracted from Composer.tsx): model and thinking level picking
@@ -169,11 +170,8 @@ export function ModelPickerControl({
     void onResetDefault()
   }
 
-  const rawShortName =
-    effectiveModel !== undefined && effectiveModel !== ''
-      ? effectiveModel.split('/').pop() ?? effectiveModel
-      : ''
-  const shortName = rawShortName.trim() !== '' ? rawShortName : (placeholderLabel ?? t('composer.model.defaultLabel'))
+  const rawShortName = formatModelShortName(effectiveModel)
+  const shortName = rawShortName !== '' ? rawShortName : (placeholderLabel ?? t('composer.model.defaultLabel'))
   const currentModel = effectiveModel !== undefined && effectiveModel !== ''
     ? models.find((model) => model.id === effectiveModel)
     : undefined
@@ -307,6 +305,7 @@ export function ModelPickerControl({
               const activeRowLevel = m.id === effectiveModel
                 ? resolveEffectiveThinkingLevel(levels, activeThinkingLevel)
                 : ''
+              const display = formatModelRowDisplay(m)
               return (
                 <div
                   key={m.id}
@@ -324,8 +323,8 @@ export function ModelPickerControl({
                     aria-current={m.id === effectiveModel ? 'true' : undefined}
                     onClick={() => applySelection(m.id, null)}
                   >
-                    <span className="mono">{m.modelId}</span>
-                    <span className="popover-item-meta">{m.provider}</span>
+                    <span className="mono composer-model-row-name">{display.name}</span>
+                    <span className="popover-item-meta composer-model-row-source">{display.source}</span>
                   </button>
                   {supportsThinking ? (
                     <span className="segmented-control composer-model-row-levels" role="group" aria-label={t('composer.model.thinkingHeader')}>

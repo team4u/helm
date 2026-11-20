@@ -23,6 +23,7 @@ const { makeTestStore } = await import('./helpers/store.js')
 Object.assign(globalThis, { React, IS_REACT_ACT_ENVIRONMENT: true })
 const { createRoot } = await import('react-dom/client')
 const { Composer } = await import('../src/conversation/Composer.js')
+const { formatModelRowDisplay, formatModelShortName } = await import('../src/conversation/model-picker-model.js')
 
 const e = React.createElement
 
@@ -35,19 +36,25 @@ function conv(partial: Partial<ConversationSummary>): ConversationSummary {
   }
 }
 
-function makeStore(conversation: ConversationSummary): HelmxExternalStore {
+type TestModelList = NonNullable<NonNullable<Parameters<typeof makeTestStore>[0]>['models']>
+
+function makeStore(conversation: ConversationSummary, extraModels: TestModelList = []): HelmxExternalStore {
   return makeTestStore({
     conversations: [conversation],
     models: [
       // The catalog explicitly caps B at high (aligned with the kernel's convergence).
       { id: 'faux-cap-b/model-b', provider: 'faux-cap-b', modelId: 'model-b', available: true, thinkingLevels: ['minimal', 'low', 'medium', 'high'] },
+      ...extraModels,
     ],
     primaryTarget: { kind: 'conversation', conversationId: conversation.id },
   })
 }
 
-async function mountComposer(conversation: ConversationSummary): Promise<{ host: HTMLElement; unmount: () => void }> {
-  const store = makeStore(conversation)
+async function mountComposer(
+  conversation: ConversationSummary,
+  extraModels: TestModelList = [],
+): Promise<{ host: HTMLElement; unmount: () => void }> {
+  const store = makeStore(conversation, extraModels)
   const host = document.createElement('div')
   document.body.appendChild(host)
   const root = createRoot(host)
@@ -117,6 +124,59 @@ test('DOM: when the catalog rejects the effective level (max), fall back to the 
     assert.equal(badgeOf(host), '· minimal', 'falls back to the first valid level for display')
     const popover = openModelPopover(host)
     assert.equal(selectedLevel(popover), 'minimal')
+  } finally {
+    unmount()
+  }
+})
+
+test('model picker display helpers: split nested route prefixes into source so row name matches short name', { timeout: 60_000 }, () => {
+  assert.equal(formatModelShortName('magpie/auto/deepseek-v4.1-flash'), 'deepseek-v4.1-flash')
+  assert.equal(formatModelShortName('anthropic/claude-3-7-sonnet'), 'claude-3-7-sonnet')
+  assert.equal(formatModelShortName(''), '')
+  assert.equal(formatModelShortName(undefined), '')
+
+  assert.deepEqual(
+    formatModelRowDisplay({ provider: 'magpie', modelId: 'auto/deepseek-v4.1-flash' }),
+    { name: 'deepseek-v4.1-flash', source: 'magpie/auto' },
+  )
+  assert.deepEqual(
+    formatModelRowDisplay({ provider: 'magpie', modelId: 'antigravity-bridge/gemini-4-neon' }),
+    { name: 'gemini-4-neon', source: 'magpie/antigravity-bridge' },
+  )
+  assert.deepEqual(
+    formatModelRowDisplay({ provider: 'anthropic', modelId: 'claude-3-7-sonnet' }),
+    { name: 'claude-3-7-sonnet', source: 'anthropic' },
+  )
+  assert.deepEqual(
+    formatModelRowDisplay({ provider: 'faux', modelId: 'trailing/' }),
+    { name: 'trailing/', source: 'faux' },
+  )
+})
+
+test('DOM: popover rows display the short model name consistent with the trigger button and keep provider/route in source', { timeout: 60_000 }, async () => {
+  const { host, unmount } = await mountComposer(
+    conv({ model: 'magpie/auto/deepseek-v4.1-flash', thinkingLevel: 'high' }),
+    [
+      { id: 'magpie/auto/deepseek-v4.1-flash', provider: 'magpie', modelId: 'auto/deepseek-v4.1-flash', available: true, thinkingLevels: ['off', 'low', 'high', 'max'] },
+      { id: 'magpie/antigravity-bridge/gemini-4-neon', provider: 'magpie', modelId: 'antigravity-bridge/gemini-4-neon', available: true, thinkingLevels: ['xhigh'] },
+    ],
+  )
+  try {
+    assert.equal(host.querySelector('.composer-model-label')?.textContent, 'deepseek-v4.1-flash')
+    const popover = openModelPopover(host)
+    const rows = Array.from(popover.querySelectorAll<HTMLElement>('.composer-model-row')).map((row) => ({
+      name: row.querySelector('.composer-model-row-name')?.textContent ?? '',
+      source: row.querySelector('.composer-model-row-source')?.textContent ?? '',
+      title: row.querySelector<HTMLButtonElement>('.composer-model-row-main')?.title ?? '',
+    }))
+    const deepseek = rows.find((r) => r.title.includes('magpie/auto/deepseek-v4.1-flash'))
+    const gemini = rows.find((r) => r.title.includes('magpie/antigravity-bridge/gemini-4-neon'))
+    assert.ok(deepseek, 'deepseek row must render with full canonical id in title')
+    assert.equal(deepseek.name, 'deepseek-v4.1-flash')
+    assert.equal(deepseek.source, 'magpie/auto')
+    assert.ok(gemini, 'gemini row must render with full canonical id in title')
+    assert.equal(gemini.name, 'gemini-4-neon')
+    assert.equal(gemini.source, 'magpie/antigravity-bridge')
   } finally {
     unmount()
   }
