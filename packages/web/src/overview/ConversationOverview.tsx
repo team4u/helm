@@ -17,6 +17,7 @@
  *   总览，不是新的通知收件箱；
  * - 移动端主舞台自适应：筛选折行、卡片网格单列化（responsive 断点）。
  */
+import { HubUpdateCard } from './HubUpdateCard.js'
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { HelmxIcon, PluginSlot, SegmentedControl, Select } from '@helmx/plugin-client'
@@ -139,6 +140,7 @@ function OverviewCardView({
 }
 
 export function ConversationOverview({ isSplit = false, onCloseSplit }: ConversationOverviewProps): ReactNode {
+  const hubUpdateCard = <HubUpdateCard />
   const { t } = useWebLocale()
   const { openTarget, closeSplit, setActiveModal } = useStoreActions()
   const { background, viewedConversationIds } = useGlobalAttention()
@@ -223,6 +225,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
           )}
         </div>
       </div>
+      {hubUpdateCard}
 
       <div className="primary-center-toolbar overview-toolbar">
         <SegmentedControl<BucketFilterValue>

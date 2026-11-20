@@ -209,6 +209,9 @@ importers:
       '@helmx/protocol':
         specifier: workspace:*
         version: link:../protocol
+      tar:
+        specifier: 7.5.23
+        version: 7.5.23
     devDependencies:
       '@helmx/test-kit':
         specifier: workspace:*
@@ -216,6 +219,9 @@ importers:
 
   packages/hub:
     dependencies:
+      '@helmx/env-io':
+        specifier: workspace:*
+        version: link:../env-io
       '@helmx/kernel':
         specifier: workspace:*
         version: link:../kernel
@@ -329,6 +335,10 @@ importers:
         version: 8.18.2
 
   packages/payload:
+    dependencies:
+      '@helmx/env-io':
+        specifier: workspace:*
+        version: link:../env-io
     devDependencies:
       '@earendil-works/chord':
         specifier: 1.5.2

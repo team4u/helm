@@ -4,7 +4,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 import { useTempDir, sanitizedHostEnv } from '@helmx/test-kit/node';
 import { readCurrentRelease } from '@helmx/env-io';
-import { cmdCheck, cmdStatus, cmdStop, cmdUpdate } from '../../src/launcher/commands.js';
+import { cmdCheck, cmdStart, cmdStop, cmdRestart, cmdUpdate, readLocalHubSnapshot } from '../../src/launcher/commands.js';
 import { defaultUpdateCore } from '../../src/launcher/update-core.js';
 import { readPidRecord } from '../../src/launcher/records.js';
 import {
@@ -15,6 +15,7 @@ import {
   fixtureTarballPacker,
   freePort,
   getJson,
+  spawnAlienProcess,
   waitUntilDead,
   writeFakePayload,
 } from './fixtures.js';
@@ -84,15 +85,11 @@ test('local control: install and start, report status, upgrade, and stop', { tim
   assert.deepEqual(await getJson(port, '/__version'), { version: '1.0.0' });
 
   const status = ioWith(root);
-  assert.equal(await cmdStatus({ root, io: status.io, core }, { json: true }), 0);
-  const statusPayload = JSON.parse(status.outText()) as {
-    current: { version: string };
-    running: { pid: number; version: string; alive: boolean; healthy: boolean };
-    launch: { port: number };
-  };
-  assert.equal(statusPayload.current.version, '1.0.0');
-  assert.equal(statusPayload.running.alive, true);
-  assert.equal(statusPayload.running.healthy, true);
+  const statusPayload = await readLocalHubSnapshot({ root, io: status.io });
+  assert.ok(statusPayload !== null);
+  assert.ok(statusPayload.current !== null && statusPayload.current.version === '1.0.0');
+  assert.ok(statusPayload.running !== null && statusPayload.running.alive === true);
+  assert.ok(statusPayload.running !== null && statusPayload.running.healthy === true);
   assert.equal(statusPayload.launch.port, port);
 
   const update = ioWith(root);
@@ -121,6 +118,91 @@ test('local control: install and start, report status, upgrade, and stop', { tim
   assert.equal(typeof stopPayload.pid, 'number');
   await waitUntilDead(updatedPid.pid);
   assert.equal(await readPidRecord(root), null);
+});
+
+test('stop prefers the verified control channel when the hub wrote a control record', { timeout: 60_000 }, async (t) => {
+  const root = useTempDir(t, 'helmx-launcher-chanstop-');
+  const dataDir = useTempDir(t, 'helmx-launcher-chanstop-data-');
+  const { createControlServer, atomicWriteJson, controlEndpoint } = await import('@helmx/env-io');
+  const { writePidRecord } = await import('../../src/launcher/records.js');
+
+  // A stand-in "hub": a live process recorded in hub.pid plus a real control server whose stop
+  // handler performs the graceful shutdown (killing the stand-in).
+  const alienPid = spawnAlienProcess();
+  t.after(() => cleanupPid(alienPid));
+  const instanceId = 'd'.repeat(32);
+  const endpoint = controlEndpoint(dataDir, instanceId, 'helmx-hub');
+  const server = createControlServer({
+    endpoint,
+    instanceId,
+    onStatus: () => ({ pid: alienPid, state: 'serving', version: '1.0.0' }),
+    onStop: async () => {
+      process.kill(alienPid, 'SIGTERM');
+    },
+  });
+  await server.listening;
+  t.after(() => server.close());
+  await atomicWriteJson(path.join(dataDir, 'hub-control.json'), {
+    instanceId,
+    endpoint,
+    pid: alienPid,
+    version: '1.0.0',
+    port: 4_321,
+    startedAt: new Date().toISOString(),
+  }, { mode: 0o600 });
+  await writePidRecord(root, {
+    pid: alienPid,
+    version: '1.0.0',
+    entryPath: '/nowhere/start.mjs',
+    port: 4_321,
+    dataDir,
+    startedAt: new Date().toISOString(),
+  });
+
+  const io = ioWith(root);
+  assert.equal(await cmdStop({ root, io: io.io }, { json: true }), 0);
+  const payload = JSON.parse(io.outText()) as { ok: boolean; wasRunning: boolean; via: string; pid: number };
+  assert.equal(payload.ok, true);
+  assert.equal(payload.wasRunning, true);
+  assert.equal(payload.via, 'control-channel');
+  await waitUntilDead(alienPid);
+  assert.equal(await readPidRecord(root), null, 'pid record removed after the channel stop');
+});
+
+test('start -d starts detached and restart stops then starts with a fresh pid', { timeout: 60_000 }, async (t) => {
+  const root = useTempDir(t, 'helmx-launcher-startd-');
+  const payloads = new Map<string, string>();
+  const core = createFakeCore({ pkgName: PKG, latest: '1.0.0', payloads });
+  const port = await freePort();
+
+  await writeFakePayload({ dir: path.join(root, 'payload-1.0.0'), pkgName: PKG, version: '1.0.0' });
+  const tarballPath = await fixtureTarballPacker()(path.join(root, 'payload-1.0.0'));
+  const dataDir = useTempDir(t, 'helmx-launcher-startd-data-');
+
+  const install = ioWith(root);
+  assert.equal(
+    await cmdUpdate({ root, io: install.io, core }, { tarball: tarballPath, version: '1.0.0', port, dataDir }),
+    0,
+  );
+  const firstPid = (await readPidRecord(root))!.pid;
+  t.after(() => cleanupPid(firstPid));
+
+  // restart: stops the running hub (pid-proof fallback — the fake payload has no channel) and
+  // starts detached again with the sticky launch configuration.
+  const restart = ioWith(root);
+  assert.equal(await cmdRestart({ root, io: restart.io, core }, {}), 0);
+  assert.match(restart.outText(), /hub pid \d+ stopped/);
+  assert.match(restart.outText(), /hub started \(pid \d+/);
+  const secondPid = (await readPidRecord(root))!.pid;
+  assert.notEqual(secondPid, firstPid);
+  t.after(() => cleanupPid(secondPid));
+  await waitUntilDead(firstPid);
+  assert.deepEqual(await getJson(port, '/__version'), { version: '1.0.0' });
+
+  const stop = ioWith(root);
+  assert.equal(await cmdStop({ root, io: stop.io, core }, {}), 0);
+  assert.match(stop.outText(), /hub pid \d+ stopped/);
+  await waitUntilDead(secondPid);
 });
 
 test('CLI check routes the registry through the fetchFn seam against the real engine core', { timeout: 60_000 }, async (t) => {

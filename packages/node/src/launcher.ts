@@ -31,6 +31,7 @@ import {
   CONTROL_TIMEOUT_MS,
   READY_TIMEOUT_MS,
   STOP_EXIT_TIMEOUT_MS,
+  NODE_CONTROL_PRODUCT,
   type DaemonReadyState,
 } from './control.js';
 
@@ -250,7 +251,7 @@ export async function startDaemon(
   return await withStartLock(dataDir, async () => {
     await assertNoLiveInstance(io, dataDir);
     const instanceId = randomBytes(16).toString('hex');
-    const endpoint = controlEndpoint(dataDir, instanceId);
+    const endpoint = controlEndpoint(dataDir, instanceId, NODE_CONTROL_PRODUCT);
     const spawnDaemon = io.spawnDaemon ?? defaultSpawnDaemon;
     const target = await resolveDaemonLaunchTarget(dataDir, cliSelfEntry());
     const args = [target.entryPath, 'start', '--data-dir', dataDir];

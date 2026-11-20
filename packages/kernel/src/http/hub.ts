@@ -33,7 +33,7 @@ import { decodeSegments, findPluginRoute, PathDecodeError } from './route-match.
 import { createStaticServe, type StaticServe } from './static.js'
 import { acceptsGzip, gzipJsonResponse } from './gzip.js'
 import { HelmxError } from '@helmx/protocol'
-import type { KernelRuntimeLike } from './contracts.js'
+import type { KernelRuntimeLike, ProductRouteHandler } from './contracts.js'
 
 export interface HubHandlerOptions {
   kernel: KernelRuntimeLike
@@ -45,6 +45,8 @@ export interface HubHandlerOptions {
    * Kernel HTTP behavior does not vary based on adjacent `web/dist` files).
    */
   webDistDir?: string | false
+  /** Composition-root product routes (see `ProductRouteHandler`); consulted after auth, before core dispatch. */
+  productRoutes?: ProductRouteHandler
 }
 
 const PUBLIC_PATHS = new Set(['/api/auth/setup', '/api/auth/login', '/api/auth/status'])
@@ -64,6 +66,7 @@ export function createHubHandler(
   const { kernel } = options
   const redactor: JsonRedactor | undefined = makeRedactor(kernel)
   const webDistDir = options.webDistDir
+  const productRoutes = options.productRoutes
   // Directory resolution cache (per handler instance, caches successful resolutions only): dir -> StaticServe
   let staticServeCache: StaticCacheEntry | null = null
   const resolveStaticServe = async (): Promise<StaticServe | undefined> => {
@@ -158,6 +161,14 @@ export function createHubHandler(
       const valid = await kernel.auth.verifyToken(token)
       if (valid !== true) {
         return gzipJsonResponse(request, withCors(errorResponse(redactor, 401, 'unauthorized', 'invalid or expired token'), origin))
+      }
+
+      // Composition-root product routes: authenticated, ahead of core dispatch, never shadowed by it.
+      if (productRoutes !== undefined) {
+        const handled = await productRoutes(request)
+        if (handled !== undefined) {
+          return gzipJsonResponse(request, withCors(handled, origin))
+        }
       }
 
       return gzipJsonResponse(request, withCors(await handleApi(request, kernel, redactor), origin))

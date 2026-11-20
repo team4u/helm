@@ -10,10 +10,10 @@ Helmx 用来在自己的机器上运行和管理编程助手。Hub 保存会话�
 
 ```bash
 npm install -g @helmx/cli
-helmx update --watch
+helmx start
 ```
 
-保持这个终端开着，访问 <http://127.0.0.1:3202>。设置管理员密码，在「模型与凭证中心」配置供应商凭据，再选一个默认模型。打开新会话，把工作目录设为你的项目，先问一句「这里的测试从哪儿跑？」需要给成员分配独立工作树时，在实际执行的机器上安装 Git。 [安装与 CLI 配置](docs/getting-started/installation.md)
+保持这个终端开着，访问 <http://127.0.0.1:3202>。设置管理员密码，在「模型与凭证中心」配置供应商凭据，再选一个默认模型。想让 Hub 在后台常驻（关终端不停）：`helmx start -d`，用 `helmx stop` / `helmx restart` 管理；`helmx service install` 可注册为开机自启的系统服务。打开新会话，把工作目录设为你的项目，先问一句「这里的测试从哪儿跑？」需要给成员分配独立工作树时，在实际执行的机器上安装 Git。 [安装与 CLI 配置](docs/getting-started/installation.md)
 
 ## 试试 Swarm
 

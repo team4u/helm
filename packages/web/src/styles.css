@@ -19,3 +19,31 @@
 @import './styles/standby.css';
 @import './styles/outline.css';
 @import './styles/overview.css';
+
+/* Hub 更新卡片（总览页顶部；仅存在就绪更新时渲染） */
+.hub-update-card {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 var(--pane-pad-x, 16px) 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--border-subtle, rgba(127, 127, 127, 0.28));
+  border-radius: 8px;
+  background: var(--surface-raised, rgba(127, 127, 127, 0.08));
+  font-size: 13px;
+  line-height: 1.45;
+}
+.hub-update-card-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.hub-update-card-error, .hub-update-card-busy { color: var(--text-muted, #8a8f98); flex: 0 1 auto; overflow-wrap: anywhere; }
+.hub-update-card-action {
+  flex: 0 0 auto;
+  border: 1px solid var(--border-subtle, rgba(127, 127, 127, 0.35));
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.hub-update-card-action:disabled { opacity: 0.55; cursor: default; }
+.hub-update-card-switching, .hub-update-card-switched { border-style: dashed; }

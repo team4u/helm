@@ -6,10 +6,10 @@
 
 ```bash
 npm install -g @helmx/cli
-helmx update --watch
+helmx start
 ```
 
-`helmx update --watch` 会安装并启动 Hub。保持终端开着，然后用浏览器打开 <http://127.0.0.1:3202>。首次访问时设置管理员密码并登录。Docker、源码开发和 CLI 登录的步骤也可以单独查阅。 [安装与配置](installation.md)
+`helmx start` 会安装并启动 Hub。保持终端开着，然后用浏览器打开 <http://127.0.0.1:3202>。首次访问时设置管理员密码并登录。想让 Hub 后台常驻，用 `helmx start -d`。Docker、源码开发和 CLI 登录的步骤也可以单独查阅。 [安装与配置](installation.md)
 
 ## 配置模型
 

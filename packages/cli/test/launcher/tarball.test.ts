@@ -184,7 +184,7 @@ test('golden: registry payload embedding file: tgz dependencies stages with a re
   const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
 
   const staged = await stageHubRelease({
-    io,
+    env: sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }),
     root,
     version: '1.0.0',
     pkgName: PKG,
@@ -208,7 +208,7 @@ test('golden: local --tarball payload embedding file: tgz dependencies installs 
   const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
 
   const staged = await stageHubRelease({
-    io,
+    env: sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }),
     root,
     version: '2.0.0',
     pkgName: PKG,

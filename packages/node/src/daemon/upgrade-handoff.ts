@@ -12,6 +12,7 @@
  *      and **never** kills the candidate or rolls back `node.pid`, since the candidate may already have committed.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
+import { NODE_CONTROL_PRODUCT } from '../control.js';
 import fsp from 'node:fs/promises';
 import process from 'node:process';
 import { randomBytes } from 'node:crypto';
@@ -40,7 +41,7 @@ export interface PrepareNodeReplacementOptions {
   dataDir: string;
   hubUrl: string;
   logPath: string;
-  controlEndpoint(dataDir: string, instanceId: string): string;
+  controlEndpoint(dataDir: string, instanceId: string, product: string): string;
   readPidRecord(): Promise<HandoffPidRecord | null>;
   writePidRecord(record: HandoffPidRecord): Promise<void>;
   removePidFile(): Promise<void>;
@@ -129,7 +130,7 @@ export async function prepareNodeReplacement(
   const readyTimeoutMs = options.readyTimeoutMs ?? CANDIDATE_READY_TIMEOUT_MS;
   const activateAckTimeoutMs = options.activateAckTimeoutMs ?? ACTIVATE_ACK_TIMEOUT_MS;
   const instanceId = randomBytes(16).toString('hex');
-  const endpoint = options.controlEndpoint(options.dataDir, instanceId);
+  const endpoint = options.controlEndpoint(options.dataDir, instanceId, NODE_CONTROL_PRODUCT);
   const childEnv: NodeJS.ProcessEnv = { ...(options.env ?? process.env) };
   // Isolate candidate control/version env vars and strip NODE_OPTIONS so dev tsx loaders don't leak into compiled releases.
   delete childEnv['HELMX_NODE_INSTANCE_ID'];

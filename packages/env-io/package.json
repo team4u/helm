@@ -9,6 +9,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./hub-payload": {
+      "types": "./dist/hub-payload.d.ts",
+      "default": "./dist/hub-payload.js"
     }
   },
   "scripts": {
@@ -17,7 +21,8 @@
     "test": "tsx --test"
   },
   "dependencies": {
-    "@helmx/protocol": "workspace:*"
+    "@helmx/protocol": "workspace:*",
+    "tar": "7.5.23"
   },
   "devDependencies": {
     "@helmx/test-kit": "workspace:*"

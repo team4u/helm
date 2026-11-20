@@ -188,6 +188,20 @@ export const shellMessages = {
 
   // Conversation overview (read-only host stage, #/overview)
   'shell.overview.title': { en: 'Conversation overview', 'zh-CN': '会话总览' },
+  'shell.hubUpdate.ready': {
+    en: 'Hub update staged: {current} -> {version}. Switching restarts the Hub.',
+    'zh-CN': 'Hub 更新已就绪：{current} -> {version}，切换会重启 Hub。',
+  },
+  'shell.hubUpdate.apply': { en: 'Switch now', 'zh-CN': '立即切换' },
+  'shell.hubUpdate.forceApply': { en: 'Switch anyway', 'zh-CN': '仍要切换' },
+  'shell.hubUpdate.busy': { en: 'Hub is busy ({counts}); retry when idle', 'zh-CN': 'Hub 正在忙（{counts}），空闲后再切换' },
+  'shell.hubUpdate.switching': { en: 'Switching to {version}; the page reconnects automatically', 'zh-CN': '正在切换到 {version}，页面会自动重连' },
+  'shell.hubUpdate.switched': { en: 'Hub is now {version}; reload to load the new web assets', 'zh-CN': 'Hub 已切换到 {version}，刷新页面加载新前端' },
+  'shell.hubUpdate.reload': { en: 'Reload', 'zh-CN': '刷新页面' },
+  'shell.hubUpdate.switchTimeout': {
+    en: 'Switch to {version} did not complete within the budget; check helmx status',
+    'zh-CN': '切换到 {version} 未在时限内完成，请用 helmx status 检查',
+  },
   'shell.overview.stats': { en: '{count} trees', 'zh-CN': '{count} 棵会话树' },
   'shell.overview.filterAll': { en: 'All', 'zh-CN': '全部' },
   'shell.overview.filterNeeds': { en: 'Needs attention', 'zh-CN': '需处理' },

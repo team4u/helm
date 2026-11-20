@@ -447,7 +447,7 @@ test('golden path: real npm pack tarball stages through the production extractor
   const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
 
   const staged = await stageHubRelease({
-    io,
+    env: io.env,
     root,
     version: '2.1.0',
     pkgName: PKG,
@@ -467,7 +467,7 @@ test('golden path: real npm pack tarball stages through the production extractor
   await registry.serve('2.2.0', await packPayloadTarball(tamperedPayload), { integrity: badSri });
   await assert.rejects(
     stageHubRelease({
-      io,
+      env: io.env,
       root,
       version: '2.2.0',
       pkgName: PKG,
@@ -486,7 +486,7 @@ test('golden path: local --tarball of a real npm pack artifact installs and self
   const { io } = captureIo(sanitizedHostEnv({ HELMX_PAYLOAD_PACKAGE: PKG }));
 
   const staged = await stageHubRelease({
-    io,
+    env: io.env,
     root,
     version: '3.0.0',
     pkgName: PKG,

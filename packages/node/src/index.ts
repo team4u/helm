@@ -68,7 +68,7 @@ export {
   type ServiceOperationResult,
   type ServiceRunningState,
   type ServiceSpec,
-  type ServiceSpecOptions,
+  type NodeServiceSpecOptions,
   type NodeServiceStatus,
 } from './daemon/service.js';
 export { runNodeCli, isDirectRun, resolveServiceEntry, defaultSpawnDaemon, controlEndpoint, type NodeCliIo, type DaemonReadyState, type PidRecord } from './cli.js';

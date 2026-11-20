@@ -4,6 +4,9 @@ import { fileURLToPath } from 'node:url';
 import { createHelmx } from './app.js';
 import { hubActivityFilePath, startActivityHeartbeat, startHub } from '@helmx/kernel';
 import { resolveWebDistOption } from './web-dist.js';
+import { hubPackageVersion, startHubControlServer, readHubControlRecord, type HubControlHandle } from './control.js';
+import { startHubUpdater } from './updater.js';
+import { createHubUpdateRoutes } from './updater-routes.js';
 
 const launchId = process.env.HELMX_HUB_ACTIVITY_LAUNCH_ID;
 delete process.env.HELMX_HUB_ACTIVITY_LAUNCH_ID;
@@ -28,7 +31,27 @@ const app = await createHelmx({
 });
 let hub: Awaited<ReturnType<typeof startHub>> | undefined;
 try {
-  hub = await startHub({ kernel: app.kernel, port, hostname, ...(webDistDir !== undefined ? { webDistDir } : {}) });
+  // Background updater + product update routes (`/api/hub-update/*`): silent check/stage only —
+  // switching is always an explicit act (`helmx update` or the Web UI apply). Inactive unless the
+  // launcher marked this Hub as payload-managed via `HELMX_HUB_INSTALL_ROOT` (docker/dev hubs
+  // report `active: false` and apply explains how to update them instead).
+  const updater = startHubUpdater({
+    root: process.env.HELMX_HUB_INSTALL_ROOT && process.env.HELMX_HUB_INSTALL_ROOT !== '' ? process.env.HELMX_HUB_INSTALL_ROOT : undefined,
+    pkgName: process.env.HELMX_PAYLOAD_PACKAGE ?? '@helmx/hub',
+    env: process.env,
+    dataDir: app.kernel.dataDir,
+  });
+  hub = await startHub({
+    kernel: app.kernel,
+    port,
+    hostname,
+    ...(webDistDir !== undefined ? { webDistDir } : {}),
+    productRoutes: createHubUpdateRoutes({
+      updater,
+      kernel: { activitySnapshot: () => app.kernel.activitySnapshot(), dataDir: app.kernel.dataDir },
+      root: updater !== null ? process.env.HELMX_HUB_INSTALL_ROOT! : null,
+    }),
+  });
   // Recovery + scheduler resume happen only after the socket is listening (`503 hub_starting` gate
   // covers API requests arriving in between; the readiness banner below still prints only when the
   // Hub is fully started, preserving the launcher's listen-line readiness contract).
@@ -49,9 +72,14 @@ try {
   process.stdout.write(`Helmx Hub: ${hub.url}\nData directory: ${app.kernel.dataDir}\n`);
   const listeningHub = hub;
   let stopping = false;
+  let control: HubControlHandle | undefined;
+  // Graceful shutdown order: heartbeat -> HTTP listener -> kernel -> control channel. The control
+  // channel's own `stop` handler runs this function and then removes its record itself, so that
+  // path must never reach the `control.close()` tail (it would await its own in-flight stop chain).
   const stop = async () => {
     if (stopping) return;
     stopping = true;
+    const heldControl = control;
     try {
       try {
         await heartbeat.stop();
@@ -62,11 +90,22 @@ try {
           await app.close();
         }
       }
+      await updater?.stop();
+      await heldControl?.close();
     } catch (error) {
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       process.exitCode = 1;
     }
   };
+  // Control channel (cross-platform verified stop/restart; record lives under the data directory).
+  // Failure to listen is fatal honesty: without it `helmx stop` cannot address this Hub, so we
+  // refuse to serve as an unstoppable process instead of degrading silently.
+  control = await startHubControlServer({
+    dataDir: app.kernel.dataDir,
+    version: hubPackageVersion(),
+    port: listeningHub.url !== null ? Number(new URL(listeningHub.url).port) : port,
+    requestStop: stop,
+  });
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
 } catch (error) {

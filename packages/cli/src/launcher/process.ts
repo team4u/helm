@@ -31,8 +31,8 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fsp from 'node:fs/promises';
 import process from 'node:process';
-import { killProcessTree } from '@helmx/env-io';
-import { DEFAULTS, assertInstallIsolation, pathsOf } from './layout.js';
+import { controlRequest, CONTROL_STOP_TIMEOUT_MS, killProcessTree, readHubControlRecord } from '@helmx/env-io';
+import { DEFAULTS, assertInstallIsolation, defaultHubDataDir, pathsOf } from './layout.js';
 import {
   assertEntryExists,
   persistableLaunchConfig,
@@ -293,6 +293,9 @@ export async function startHubLocked(root: string, io: LauncherIo, options: Star
     HELMX_PORT: String(config.port),
     HELMX_HUB_ACTIVITY_LAUNCH_ID: launchId,
     HELMX_HOST: config.host,
+    // Mark the hub as payload-managed: enables its in-process background updater and the
+    // /api/hub-update surface (docker/dev hubs run without it and honestly report inactive).
+    HELMX_HUB_INSTALL_ROOT: root,
   };
   if (config.dataDir !== undefined) childEnv.HELMX_DATA_DIR = config.dataDir;
   if (config.model !== undefined) childEnv.HELMX_MODEL = config.model;
@@ -425,6 +428,68 @@ export async function stopHubLocked(root: string, io: LauncherIo, options?: Stop
 /** Public stop: one atomic lifecycle-lock section. */
 export function stopHub(root: string, io: LauncherIo, options?: StopHubOptions): Promise<StopHubResult> {
   return withLifecycleLock(root, () => stopHubLocked(root, io, options));
+}
+
+export interface GracefulStopResult extends StopHubResult {
+  /** Which stop mechanism actually addressed the hub. */
+  via: 'control-channel' | 'pid-proof';
+}
+
+/**
+ * Stop the running Hub gracefully, control channel first: the live process itself verifies the
+ * request (`instanceId` secret from the `0600` `hub-control.json` record) and runs its full
+ * graceful shutdown — this is the only path that works uniformly on Linux, macOS, and Windows.
+ * When the channel is unavailable (stale/missing record, pre-channel hub, connect failure) the
+ * call degrades to the pid-record identity-proof stop (`stopHubLocked`), which keeps its own
+ * honest platform limitations.
+ */
+export async function stopHubGraceful(root: string, io: LauncherIo, options?: StopHubOptions): Promise<GracefulStopResult> {
+  const isAlive = isAliveOf(io);
+  const record = await readPidRecord(root);
+  if (record === null) return { wasRunning: false, escalated: false, cleanedStalePid: false, via: 'pid-proof' };
+  if (!isAlive(record.pid)) {
+    // Reuse the proof-based cleanup for dead/stale records (also removes the pid file).
+    const cleaned = await stopHub(root, io, options);
+    return { ...cleaned, via: 'pid-proof' };
+  }
+
+  // Control-channel attempt against the data directory this hub was launched with. The channel
+  // stop is a lifecycle mutation (the hub drains and exits, the pid record is removed), so it runs
+  // inside the same lifecycle lock as every other start/stop mutation.
+  const dataDir =
+    record.dataDir ??
+    resolveEffectiveLaunchConfig({ env: io.env, saved: await readLaunchConfig(root) }).dataDir ??
+    defaultHubDataDir(io.env);
+  const control = await readHubControlRecord(dataDir).catch(() => null);
+  if (control !== null) {
+    const reply = await controlRequest(control.endpoint, { type: 'stop', instanceId: control.instanceId }, CONTROL_STOP_TIMEOUT_MS, {
+      instanceId: control.instanceId,
+    });
+    if (reply !== null && reply.ok === true) {
+      return await withLifecycleLock(root, async () => {
+        const stopTimeoutMs = options?.stopTimeoutMs ?? DEFAULTS.stopTimeoutMs;
+        const exited = await waitForExitPid(record.pid, stopTimeoutMs, isAlive);
+        let escalated = false;
+        if (!exited) {
+          // The wrapper survived the hub's own graceful window: escalate the whole tree.
+          killProcessTree(record.pid);
+          const escalationWaitMs = options?.escalationWaitMs ?? DEFAULTS.stopEscalationWaitMs;
+          if (!(await waitForExitPid(record.pid, escalationWaitMs, isAlive))) {
+            throw new Error(
+              `hub pid ${record.pid} accepted the control-channel stop but did not exit within ${stopTimeoutMs}ms graceful budget plus ${escalationWaitMs}ms after escalation; pid file retained for diagnostics (${pathsOf(root).pidPath})`,
+            );
+          }
+          escalated = true;
+        }
+        await removePidFileIfMatch(root, record);
+        return { wasRunning: true, pid: record.pid, escalated, cleanedStalePid: false, via: 'control-channel' as const };
+      });
+    }
+  }
+
+  // Channel unavailable or rejected: proof-based stop (keeps its explicit platform refusal).
+  const result = await stopHub(root, io, options);
+  return { ...result, via: 'pid-proof' };
 }
 
 export interface RunningHubInfo {

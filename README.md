@@ -10,10 +10,10 @@ With Node.js 24.12 or newer installed, run:
 
 ```bash
 npm install -g @helmx/cli
-helmx update --watch
+helmx start
 ```
 
-Leave this terminal open and visit <http://127.0.0.1:3202>. Create an admin password, add your provider credentials under **Models & Credentials Center**, and choose a default model. Open a conversation in your project directory and try asking where the tests start and how to run them. Use Git on any machine where agents will work in separate worktrees. [Installation and CLI setup (Chinese)](docs/getting-started/installation.md)
+Leave this terminal open and visit <http://127.0.0.1:3202>. Prefer a background Hub that survives the terminal: `helmx start -d`, and `helmx stop` / `helmx restart` manage it. Register it as an OS login service with `helmx service install`. Create an admin password, add your provider credentials under **Models & Credentials Center**, and choose a default model. Open a conversation in your project directory and try asking where the tests start and how to run them. Use Git on any machine where agents will work in separate worktrees. [Installation and CLI setup (Chinese)](docs/getting-started/installation.md)
 
 ## Try Swarm
 

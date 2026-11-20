@@ -41,18 +41,20 @@
 
 ### 本机 Hub 生命周期（npm 制品）
 
-**`helmx update [--check] [--watch] [--status] [--stop] [--channel <tag>] [--interval-ms <ms>] [--tarball <path> --version <ver>]`** — 本机 Hub payload 的安装、更新与生命周期管理（`npm install -g @helmx/cli` 制品的主入口；生命周期面实现于 `@helmx/cli` 内的 launcher 模块 `packages/cli/src/launcher/`，不单独发布 bin）。安装根 `~/.helmx-hub`（`HELMX_HUB_INSTALL_ROOT`）与用户数据 `~/.helmx` 严格分离。
+**`helmx start [-d] [--channel <tag>] [--port <n>] [--host <addr>] [--data-dir <dir>] ...`** — 启动本机 Hub（`npm install -g @helmx/cli` 制品；生命周期面实现于 `@helmx/cli` 内的 launcher 模块 `packages/cli/src/launcher/`，不单独发布 bin）。本机尚无已提交 release 时先安装所选通道最新版。默认前台运行（流式日志，`Ctrl+C` 优雅停止自己启动的 Hub）；`-d` 后台常驻（detached、写 `hub.pid`、日志落 `~/.helmx-hub/logs/hub.log`），`--json` 仅支持 `-d`。安装根 `~/.helmx-hub`（`HELMX_HUB_INSTALL_ROOT`）与用户数据 `~/.helmx` 严格分离。
 
 | 调用 | 说明 |
 | :--- | :--- |
-| `helmx update` | 一次性更新：本机尚无已提交 release 时安装所选通道最新版**并启动**（默认动作，无 `--start`）；已安装则升级到最新（同版本为 no-op） |
-| `helmx update --check` | 只读检查 registry 所选通道是否有更新，不改状态 |
-| `helmx update --watch` | **推荐的常驻入口**：安装（如需）→ 启动 → 按周期自动更新；只监督自己启动的 Hub，本机已有实例在跑时显式拒绝（先 `--stop`） |
-| `helmx update --status` | 安装/运行/blocked 状态摘要；`--json` 输出快照对象（`current` / `running` / `blocked`） |
-| `helmx update --stop` | 优雅停止运行中的 Hub（跨进程身份核验 fail-closed，见[安装指南](../getting-started/installation.md)） |
-| `helmx update --tarball <path> --version <ver>` | 从本地 payload tgz 安装并启动（离线/内网；`--version` 必填） |
+| `helmx start` | 安装（如需）+ 前台启动；已有 Hub 在跑时显式拒绝（`start_refuses_existing_hub`，提示 restart/stop） |
+| `helmx start -d` | 安装（如需）+ 后台常驻启动 |
+| `helmx stop` | 优雅停止：优先 Hub 控制通道（`~/.helmx/hub-control.json` + instanceId 校验，三平台一致），不可达时退回 pid 记录 `/proc` 身份证明；验证失败显式报错绝不盲发信号 |
+| `helmx restart` | 优雅停止后按粘性 launch 配置后台重启 |
+| `helmx service <install\|uninstall\|status>` | 注册/卸载/查询开机自启系统服务（launchd / systemd --user / schtasks），以前台 `helmx start` 运行、OS 监督器负责重启 |
+| `helmx status` | 登录态 + 本机 Hub 快照（`--json` 附加 `localHub`：current/running/blocked/launch/日志路径；本机无安装根时不附加） |
 
-通道与周期：`--channel <dist-tag>`（默认 `latest`，预发布 `beta`；env `HELMX_HUB_UPDATE_TAG`）与 `--interval-ms <毫秒>`（`--watch` 周期，默认 `900000` 即 15 分钟；env `HELMX_HUB_UPDATE_INTERVAL_MS`）。升级编排与健康门控/回滚、启动配置（`HELMX_PORT` / `HELMX_HOST` / `HELMX_DATA_DIR` / `HELMX_MODEL` > `launch.json` 粘性配置 > 默认值）详见[安装与配置指南](../getting-started/installation.md)。
+**`helmx update [--check] [--channel <tag>] [--version <ver>] [--tarball <path> --version <ver>]`** — 主动更新（`claude update` 语义：检查 → 校验暂存 → 空闲时切换重启；未安装时先安装并启动）。`--check` 只读查询不改状态；`--tarball` 从本地 payload tgz 安装（离线/内网，`--version` 必填）；`--force` 跳过空闲门控/重装/降级守卫。忙时（在跑会话、工具、压缩、排队输入）候选版本先暂存、当前版本继续服务，下次确认空闲再切。
+
+后台静默备包：npm 管理的 Hub 进程内建更新检查器（默认 15 分钟一次；`HELMX_HUB_UPDATE_INTERVAL_MS`，`0` 关闭；`HELMX_HUB_UPDATE_TAG` 选通道），发现新版本静默下载校验暂存，Web 总览页出现「立即切换」卡片，`POST /api/hub-update/apply` 一键切换（busy 门控 + `force` 显式绕过；handoff 负责停旧→提交→起新→失败回滚）。通道与启动配置（`HELMX_PORT` / `HELMX_HOST` / `HELMX_DATA_DIR` / `HELMX_MODEL` > `launch.json` 粘性配置 > 默认值）详见[安装与配置指南](../getting-started/installation.md)。
 
 ### 会话与输入
 
