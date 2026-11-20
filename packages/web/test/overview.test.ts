@@ -13,7 +13,7 @@ import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import * as React from 'react'
 import { act } from 'react'
-import { createRoot, type Root } from 'react-dom/client'
+import type { Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import type { ConversationSummary } from '@helmx/protocol'
 import { ARCHIVED_TAG, type ResolvedSidebarBadge, type SidebarViewItem } from '../src/shell/sidebar-model.js'
@@ -21,12 +21,15 @@ import type { ConversationBackgroundIndex } from '../src/shell/background-activi
 import {
   buildOverviewCards,
   filterOverviewCards,
+  overviewBucketCounts,
+  overviewFilterParamsRepair,
   overviewNodeKey,
   overviewNodeOptions,
   overviewProfileOptions,
+  parseOverviewFilterParams,
   OVERVIEW_DESCENDANT_LIMIT,
 } from '../src/overview/overview-model.js'
-import { formatLocationHash, hashHasPrimaryTarget, parseLocationHash } from '../src/lib/url-hash-model.js'
+import { formatLocationHash, hashHasPrimaryTarget, parseLocationHash, shouldPushLocationHistory } from '../src/lib/url-hash-model.js'
 import { spaceForTarget } from '../src/lib/types.js'
 import { makeTestStore, HelmxExternalStoreContext, type TestStoreOverrides } from './helpers/store.js'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
@@ -37,6 +40,10 @@ const e = React.createElement
 import { GlobalRegistrator } from '@happy-dom/global-registrator'
 GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
+// 受控输入契约：createRoot 须在 happy-dom 注册之后动态加载（react-dom 在
+// import 期绑定事件委托的全局 DOM，先于 register 静态加载会让受控输入的
+// onChange 静默失效；与 ask-dock.test.tsx 同约定）。
+const { createRoot } = await import('react-dom/client')
 
 const { ConversationOverview } = await import('../src/overview/ConversationOverview.js')
 const { HostStoreProviders } = await import('./helpers/host-store.js')
@@ -103,7 +110,7 @@ test('buildOverviewCards: attention trees lead, quiet trees follow; bucket order
   )
 })
 
-test('buildOverviewCards: descendants render signal-first, cap at the limit, hidden count stays honest', { timeout: 60_000 }, () => {
+test('buildOverviewCards: descendants list is signal-first and deterministic; hidden count stays honest against the view cap', { timeout: 60_000 }, () => {
   const members = [
     conv({ id: 1, createdAt: 9000, updatedAt: 9000 }),
     conv({ id: 11, parentConversationId: 1, status: 'idle', createdAt: 9100 }),
@@ -117,9 +124,16 @@ test('buildOverviewCards: descendants render signal-first, cap at the limit, hid
   const cards = buildCards(members)
   assert.equal(cards.length, 1)
   const card = cards[0]!
-  assert.equal(card.descendants.length, OVERVIEW_DESCENDANT_LIMIT)
+  // 契约修订：descendants 携带全量确定性排序列表（信号优先 + createdAt 倒序），
+  // 展示截断由视图按 OVERVIEW_DESCENDANT_LIMIT 切片，展开补齐剩余时不重排。
+  assert.equal(card.descendants.length, members.length - 1)
   assert.equal(card.descendants[0]!.conv.id, 13, 'signal descendants (blocked/working) lead; within signals createdAt descending')
   assert.equal(card.descendants[1]!.conv.id, 12)
+  assert.deepEqual(
+    card.descendants.slice(0, OVERVIEW_DESCENDANT_LIMIT).map((d) => d.conv.id),
+    [13, 12, 17, 16, 15],
+    'the collapsed view slice matches the previous capped contract exactly',
+  )
   assert.equal(card.hiddenDescendantCount, members.length - 1 - OVERVIEW_DESCENDANT_LIMIT)
   assert.equal(card.targetConversationId, 12, 'the direct target is the newest waiting descendant')
   assert.equal(card.summaryText, '2 sub-conversations active', 'honest summary falls back to the active descendant count')
@@ -235,6 +249,82 @@ test('filterOverviewCards: source filter ANDs with the other dimensions; default
   )
 })
 
+test('filterOverviewCards: query matches root title, profile label, honest summary and descendant titles; ANDs with the other dimensions', { timeout: 60_000 }, () => {
+  const cards = buildCards([
+    conv({ id: 1, title: '出错的重构', profileId: 'assistant', status: 'error', createdAt: 9000, updatedAt: 9000 }),
+    conv({ id: 11, parentConversationId: 1, title: '待审批子任务', status: 'blocked', createdAt: 9100, updatedAt: 9200 }),
+    conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', doing: '正在检索文档', createdAt: 8000, updatedAt: 8000 }),
+    conv({ id: 3, title: '安静会话', profileId: 'coder', status: 'idle', createdAt: 7000, updatedAt: 7000 }),
+  ])
+  const base = { bucket: 'all' as const, profileId: '', nodeId: '' }
+  assert.deepEqual(filterOverviewCards(cards, { ...base, query: '重构' }).map((c) => c.root.id), [1], 'root title substring matches (case-insensitive)')
+  assert.deepEqual(filterOverviewCards(cards, { ...base, query: 'REFACTOR' }).map((c) => c.root.id), [], 'matching is case-insensitive but never fabricates absent text')
+  assert.deepEqual(filterOverviewCards(cards, { ...base, query: '检索' }).map((c) => c.root.id), [2], 'the honest doing summary is searchable')
+  assert.deepEqual(filterOverviewCards(cards, { ...base, query: '待审批' }).map((c) => c.root.id), [1], 'descendant titles keep their tree findable')
+  assert.deepEqual(filterOverviewCards(cards, { ...base, query: '  ' }).map((c) => c.root.id), [1, 2, 3], 'a blank query filters nothing')
+  assert.deepEqual(filterOverviewCards(cards, { ...base, query: '#11' }).map((c) => c.root.id), [1], 'an exact #id form matches the descendant id')
+  assert.deepEqual(filterOverviewCards(cards, { ...base, query: '2' }).map((c) => c.root.id), [2], 'a bare numeric needle matches the root id exactly, not substrings of other ids')
+  assert.deepEqual(
+    filterOverviewCards(cards, { bucket: 'running', profileId: '', nodeId: '', query: '调研' }).map((c) => c.root.id),
+    [2],
+    'query ANDs with bucket/profile/node/source',
+  )
+})
+
+test('overviewBucketCounts: bucket badges count inside the profile/node/source/query context, never misleading global totals', { timeout: 60_000 }, () => {
+  const cards = buildCards([
+    conv({ id: 1, title: '出错的重构', status: 'blocked', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
+    conv({ id: 2, title: '在跑的调研', status: 'working', profileId: 'coder', createdAt: 8000, updatedAt: 8000 }),
+    conv({ id: 3, title: '安静会话', status: 'idle', profileId: 'coder', createdAt: 7000, updatedAt: 7000 }),
+  ])
+  assert.deepEqual(
+    overviewBucketCounts(cards),
+    { all: 3, needs_attention: 1, running: 1, unread_done: 0 },
+    'no context: every bucket badge reflects the full card set',
+  )
+  assert.deepEqual(
+    overviewBucketCounts(cards, { profileId: 'coder' }),
+    { all: 2, needs_attention: 0, running: 1, unread_done: 0 },
+    'inside the coder context the needs-attention badge honestly reads zero (the assistant tree is out of context)',
+  )
+  assert.deepEqual(
+    overviewBucketCounts(cards, { query: '安静' }),
+    { all: 1, needs_attention: 0, running: 0, unread_done: 0 },
+    'query context scopes the badges as well',
+  )
+})
+
+test('parseOverviewFilterParams / overviewFilterParamsRepair: deep-link params parse to the canonical filter; invalid values fall back and get repaired', { timeout: 60_000 }, () => {
+  assert.deepEqual(parseOverviewFilterParams(undefined), {
+    bucket: 'all',
+    profileId: '',
+    nodeId: '',
+    source: 'all',
+    query: '',
+  }, 'no params: pure defaults')
+  assert.deepEqual(parseOverviewFilterParams({ bucket: 'running', profile: 'coder', node: 'local', source: 'managed', q: '调研' }), {
+    bucket: 'running',
+    profileId: 'coder',
+    nodeId: 'local',
+    source: 'managed',
+    query: '调研',
+  }, 'every known key parses verbatim')
+  assert.equal(parseOverviewFilterParams({ bucket: 'bogus' }).bucket, 'all', 'an invalid bucket value falls back to all (hash-model invalid-segment philosophy)')
+  assert.equal(parseOverviewFilterParams({ bucket: 'all' }).bucket, 'all', 'the redundant all value parses as the default')
+  assert.equal(parseOverviewFilterParams({ source: 'weird' }).source, 'all', 'an invalid source value falls back to all')
+  assert.equal(parseOverviewFilterParams({ profile: 'some-stale-id' }).profileId, 'some-stale-id', 'profile/node/q are opaque ids kept verbatim')
+
+  assert.equal(overviewFilterParamsRepair(undefined), null, 'no params: nothing to repair')
+  assert.equal(
+    overviewFilterParamsRepair({ bucket: 'running', profile: 'coder', q: 'x' }),
+    null,
+    'already-canonical params produce no patch (no write amplification)',
+  )
+  assert.deepEqual(overviewFilterParamsRepair({ bucket: 'bogus', q: 'x' }), { bucket: undefined }, 'an invalid bucket value is deleted')
+  assert.deepEqual(overviewFilterParamsRepair({ bucket: 'all', source: 'all' }), { bucket: undefined, source: undefined }, 'redundant default enums are deleted')
+  assert.deepEqual(overviewFilterParamsRepair({ tab: 'runs' }), { tab: undefined }, 'unknown keys are deleted (the overview owns its sp. namespace)')
+})
+
 // ---------------------------------------------------------------------------
 // URL：#/overview 解析与序列化
 // ---------------------------------------------------------------------------
@@ -247,6 +337,55 @@ test('#/overview parses and serializes round-trip; belongs to the conversations 
   assert.equal(spaceForTarget({ kind: 'overview' }), 'conversations', 'the overview is a conversations-space host stage')
   const splitParsed = parseLocationHash('#/overview?split=overview')
   assert.deepEqual(splitParsed.splitTarget, { kind: 'overview' }, 'the overview can ride the split pane (same canonical path via the split param)')
+})
+
+test('#/overview filter state rides the sp./ssp. route-param namespaces round-trip; history policy keeps param-only changes replace', { timeout: 60_000 }, () => {
+  // 深链解析：主屏 sp.* 归主屏 overview，分屏 ssp.* 归分屏 overview。
+  const parsed = parseLocationHash('#/overview?sp.bucket=running&sp.profile=coder&sp.q=%E8%B0%83%E7%A0%94&split=overview&ssp.source=managed')
+  assert.deepEqual(parsed.primaryTarget, {
+    kind: 'overview',
+    params: { bucket: 'running', profile: 'coder', q: '调研' },
+  })
+  assert.deepEqual(parsed.splitTarget, { kind: 'overview', params: { source: 'managed' } }, 'the split overview carries its own ssp.* filter params')
+  // 序列化往返无损（键按字典序稳定输出）。
+  const state = { ...parsed, workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null }
+  const hash = formatLocationHash(state)
+  assert.equal(hash, '#/overview?split=overview&sp.bucket=running&sp.profile=coder&sp.q=%E8%B0%83%E7%A0%94&ssp.source=managed')
+  assert.deepEqual(parseLocationHash(hash), state, 'round-trip is lossless')
+  // 主屏从 overview 切回会话：sp.* 无处可挂自然丢弃（重新进入即未筛选态）。
+  const leftOverview = parseLocationHash('#/c/1?sp.bucket=running&split=overview&ssp.source=managed')
+  assert.deepEqual(leftOverview.primaryTarget, { kind: 'conversation', conversationId: 1 })
+  assert.deepEqual(leftOverview.splitTarget, { kind: 'overview', params: { source: 'managed' } }, 'the split overview keeps its params')
+  // 非法 sp.* 键与空值沿用 Hash 模型的丢弃纪律（不产生半损参数）。
+  assert.deepEqual(
+    parseLocationHash('#/overview?sp.bucket=running&sp.bad%20key=v&sp.profile=').primaryTarget,
+    { kind: 'overview', params: { bucket: 'running' } },
+  )
+  // 历史策略：仅筛选参数变化 replace（不污染后退栈）；坐标级切换 push。
+  const base = { splitTarget: null, workbenchOpen: false, workbenchTab: 'artifacts', activeModal: null }
+  assert.equal(
+    shouldPushLocationHistory(
+      { ...base, primaryTarget: { kind: 'overview' } },
+      { ...base, primaryTarget: { kind: 'overview', params: { bucket: 'running' } } },
+    ),
+    false,
+    'a filter-only change replaces the current history entry',
+  )
+  assert.equal(
+    shouldPushLocationHistory(
+      { ...base, primaryTarget: { kind: 'overview', params: { bucket: 'running' } } },
+      { ...base, primaryTarget: { kind: 'overview', params: { bucket: 'running', q: 'x' } } },
+    ),
+    false,
+  )
+  assert.equal(
+    shouldPushLocationHistory(
+      { ...base, primaryTarget: { kind: 'overview', params: { bucket: 'running' } } },
+      { ...base, primaryTarget: { kind: 'conversation', conversationId: 1 } },
+    ),
+    true,
+    'leaving the overview for a conversation pushes',
+  )
 })
 
 // ---------------------------------------------------------------------------
@@ -454,7 +593,7 @@ test('ConversationOverview hides the unread completion light as soon as the conv
   }
 })
 
-test('ConversationOverview bucket filter narrows the grid (segmented control)', { timeout: 60_000 }, async () => {
+test('ConversationOverview bucket filter narrows the grid (segmented control) and rides the URL hash model', { timeout: 60_000 }, async () => {
   const store = overviewScenarioStore()
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -475,11 +614,73 @@ test('ConversationOverview bucket filter narrows the grid (segmented control)', 
     const cards = container.querySelectorAll('.overview-card')
     assert.equal(cards.length, 1)
     assert.ok(cards[0]!.textContent?.includes('在跑的调研'), 'only the running tree stays visible')
+    // 筛选变化写入 overview 目标的 sp.* 路由参数（唯一导航模型，replace 语义）。
+    assert.deepEqual(
+      store.getNavSlice().primaryTarget,
+      { kind: 'overview', params: { bucket: 'running' } },
+      'the bucket filter persists into the overview route params',
+    )
+    // 切回 all：参数键删除，目标形状回到无 params 的稳定形态。
+    const allTab = [...container.querySelectorAll('.segmented-control-btn')].find((btn) =>
+      btn.textContent?.startsWith('All'),
+    ) as HTMLElement | undefined
+    await act(async () => {
+      allTab?.click()
+    })
+    assert.deepEqual(
+      store.getNavSlice().primaryTarget,
+      { kind: 'overview' },
+      'returning to the all bucket deletes the param key (canonical shape)',
+    )
+    assert.equal(container.querySelectorAll('.overview-card').length, 3, 'the grid restores')
+
+    // 浏览器后退语义（hashchange/popstate 同链路）：applyExternalLocation
+    // 以地址栏为唯一事实源恢复上一组筛选参数。
+    await act(async () => {
+      runningTab.click()
+    })
+    await act(async () => {
+      store.applyExternalLocation(parseLocationHash('#/overview'))
+    })
+    assert.equal(container.querySelectorAll('.overview-card').length, 3, 'an external back-to-unfiltered location restores the full grid')
+    assert.ok(store.getNavSlice().primaryTarget.kind === 'overview', 'the nav state follows the external location')
   } finally {
     await act(async () => {
       root?.unmount()
     })
     container.remove()
+  }
+})
+
+test('ConversationOverview restores filter state from a deep-linked #/overview?sp.* location and repairs invalid params', { timeout: 60_000 }, async () => {
+  // 深链/刷新恢复：主屏目标带参数挂载即按参数渲染（不闪全量再收敛）。
+  const store = overviewStore({
+    conversations: [
+      conv({ id: 1, title: '出错的重构', profileId: 'assistant', status: 'error', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
+      conv({ id: 3, title: '安静会话', profileId: 'coder', status: 'idle', createdAt: 7000, updatedAt: 7000 }),
+    ],
+    primaryTarget: { kind: 'overview', params: { profile: 'coder' } },
+  })
+  const mount = await mountOverview(store)
+  try {
+    const cards = mount.container.querySelectorAll('.overview-card')
+    assert.equal(cards.length, 2, 'the deep-linked profile filter restores without flashing the unfiltered grid')
+    assert.ok(mount.container.textContent?.includes('2 of 3 trees'), 'the stats line states the filtered count over the total')
+    // 未知参数键一次自愈删除（replace 修正地址栏，不产生额外历史项）。
+    await act(async () => {
+      store.applyExternalLocation(parseLocationHash('#/overview?sp.bucket=bogus&sp.q=%E8%B0%83%E7%A0%94'))
+    })
+    await overviewSettle()
+    assert.deepEqual(
+      store.getNavSlice().primaryTarget,
+      { kind: 'overview', params: { q: '调研' } },
+      'the invalid bucket value is repaired away while the valid query survives',
+    )
+    assert.equal(mount.container.querySelectorAll('.overview-card').length, 1, 'the surviving query keeps filtering')
+    assert.ok(mount.container.querySelector('.overview-card')?.textContent?.includes('在跑的调研'))
+  } finally {
+    await mount.unmount()
   }
 })
 
@@ -537,20 +738,22 @@ test('ConversationOverview source filter: appears only with managed trees, narro
     assert.equal(cards.length, 1, 'only the managed tree stays visible')
     assert.ok(cards[0]!.textContent?.includes('应用会话'))
 
-    // 插件 section 贡献消失（停用）但筛选仍停在 managed：筛选器保持可见防困住，
-    // 卡片如实归零（绝不伪报常规树为托管）。
+    // 插件 section 贡献消失（停用）但深链/地址栏仍停在 managed：筛选器保持
+    // 可见防困住，卡片如实归零（绝不伪报常规树为托管）。筛选状态现在住在
+    // URL 参数里，用「带参挂载 + 无 section 贡献」还原真实停用后刷新场景。
     const disabled = overviewStore({
       conversations: [
         conv({ id: 1, title: '应用会话', profileId: 'assistant', tags: ['app'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
         conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
       ],
-      primaryTarget: { kind: 'overview' },
+      primaryTarget: { kind: 'overview', params: { source: 'managed' } },
     })
     await act(async () => {
       root!.render(e(HostStoreProviders, { value: disabled }, e(ConversationOverview)))
     })
     assert.equal(container.querySelectorAll('.overview-card').length, 0, 'with the managed filter held, no managed tree stays visible')
     assert.ok(container.querySelector('[aria-label="Filter by source"]') !== null, 'the source select stays visible (never traps the user on a stale value)')
+    assert.ok(container.textContent?.includes('No conversations match'), 'the filtered-empty semantics point at the filters, not at the system being empty')
   } finally {
     await act(async () => {
       root?.unmount()
@@ -945,9 +1148,9 @@ test('ConversationOverview data-ready gate: loading state before the first snaps
       root.render(e(HostStoreProviders, { value: loading }, e(ConversationOverview)))
     })
     assert.ok(container.textContent?.includes('Loading conversations'), 'pre-snapshot renders the loading state')
-    assert.ok(!container.textContent?.includes('No conversations match'), 'never misreports unloaded as empty')
+    assert.ok(!container.textContent?.includes('No conversations yet'), 'never misreports unloaded as empty')
 
-    // 资产 + SSE 双就绪且真实无会话：如实空态（不永久挂加载）。
+    // 资产 + SSE 双就绪且真实无会话：如实空态（区分真实空系统与筛选无命中）。
     const empty = overviewStore({
       conversations: [],
       primaryTarget: { kind: 'overview' },
@@ -955,7 +1158,7 @@ test('ConversationOverview data-ready gate: loading state before the first snaps
     await act(async () => {
       root!.render(e(HostStoreProviders, { value: empty }, e(ConversationOverview)))
     })
-    assert.ok(container.textContent?.includes('No conversations match'), 'a genuinely empty synced workspace shows the honest empty state')
+    assert.ok(container.textContent?.includes('No conversations yet'), 'a genuinely empty synced workspace shows the honest empty-system state')
     assert.ok(!container.textContent?.includes('Loading conversations'), 'loading never sticks once data is ready')
 
     // 有会话即卡片（即使 SSE 瞬时断连也保留快照，不闪加载）。
@@ -1364,6 +1567,196 @@ test('ConversationOverview card actions menu: archive and delete for human roots
     assert.ok(
       managedItems.every((label) => !label.includes('Archive conversation')),
       'archive is not offered for a managed root (no visible effect)',
+    )
+  } finally {
+    await mount.unmount()
+    stub.restore()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 交互：搜索、无结果语义与清除筛选、+N 展开、卡片语义可访问性
+// ---------------------------------------------------------------------------
+
+test('ConversationOverview search box narrows by title/summary and rides the q route param with a clear button', { timeout: 60_000 }, async () => {
+  const store = overviewScenarioStore()
+  const mount = await mountOverview(store)
+  try {
+    const input = mount.container.querySelector<HTMLInputElement>('.overview-search-box input')
+    assert.ok(input !== null, 'the toolbar renders the search input')
+    assert.equal(input.getAttribute('aria-label'), 'Search overview by title or summary')
+    assert.equal(mount.container.querySelectorAll('.overview-card').length, 3)
+    // React 受控输入需绕过原生 value setter 才能触发 onChange（与 ask-dock 同法）。
+    const valueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value')?.set
+    await act(async () => {
+      valueSetter?.call(input, '调研')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    assert.equal(mount.container.querySelectorAll('.overview-card').length, 1, 'the query narrows the grid')
+    assert.ok(mount.container.querySelector('.overview-card')?.textContent?.includes('在跑的调研'))
+    assert.deepEqual(
+      store.getNavSlice().primaryTarget,
+      { kind: 'overview', params: { q: '调研' } },
+      'the query persists into the q route param',
+    )
+    assert.ok(mount.container.textContent?.includes('1 of 3 trees'), 'the stats line states visible over total')
+    const clear = mount.container.querySelector<HTMLButtonElement>('.overview-search-clear')
+    assert.ok(clear !== null, 'a non-empty query renders the clear button')
+    await act(async () => {
+      clear.click()
+    })
+    assert.deepEqual(store.getNavSlice().primaryTarget, { kind: 'overview' }, 'clearing deletes the q param')
+    assert.equal(mount.container.querySelectorAll('.overview-card').length, 3, 'the grid restores')
+  } finally {
+    await mount.unmount()
+  }
+})
+
+test('ConversationOverview empty semantics: filtered no-match offers clear filters; a truly empty system stays distinct', { timeout: 60_000 }, async () => {
+  const store = overviewScenarioStore()
+  const mount = await mountOverview(store)
+  try {
+    await act(async () => {
+      store.setScreenParams({ q: '不存在的词' }, {})
+    })
+    await overviewSettle()
+    assert.equal(mount.container.querySelectorAll('.overview-card').length, 0)
+    assert.ok(mount.container.textContent?.includes('No conversations match'), 'the filtered empty state points at the filters')
+    assert.ok(!mount.container.textContent?.includes('No conversations yet'), 'never misreports a filter miss as an empty system')
+    const clearBtn = mount.container.querySelector<HTMLButtonElement>('.overview-clear-filters')
+    assert.ok(clearBtn !== null, 'the clear-filters entry renders')
+    assert.equal(clearBtn.textContent, 'Clear filters')
+    await act(async () => {
+      clearBtn.click()
+    })
+    assert.deepEqual(store.getNavSlice().primaryTarget, { kind: 'overview' }, 'clearing drops every filter param at once')
+    assert.equal(mount.container.querySelectorAll('.overview-card').length, 3, 'all trees return')
+  } finally {
+    await mount.unmount()
+  }
+})
+
+test('ConversationOverview +N more is a real entry: expanding reveals the remaining descendants in the same deterministic order', { timeout: 60_000 }, async () => {
+  const conversations = [
+    conv({ id: 1, title: '多子代理任务', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
+    ...Array.from({ length: 7 }, (_, index) =>
+      conv({ id: 11 + index, parentConversationId: 1, title: `子任务 ${index + 1}`, status: 'idle', createdAt: 9100 + index }),
+    ),
+  ]
+  const store = overviewStore({ conversations, primaryTarget: { kind: 'overview' } })
+  const mount = await mountOverview(store)
+  try {
+    const chips = mount.container.querySelectorAll('.overview-chip')
+    assert.equal(chips.length, OVERVIEW_DESCENDANT_LIMIT, 'the collapsed card shows exactly the capped slice')
+    const collapsedLabels = [...chips].map((chip) => chip.querySelector('.overview-chip-label')?.textContent ?? '')
+    const more = mount.container.querySelector<HTMLButtonElement>('.overview-chip-more')
+    assert.ok(more !== null, 'the +N affordance renders as a real button')
+    assert.equal(more.tagName, 'BUTTON')
+    assert.equal(more.getAttribute('aria-expanded'), 'false')
+    assert.equal(more.textContent, '+2 more', 'the hidden count stays honest')
+    await act(async () => {
+      more.click()
+    })
+    const expandedChips = mount.container.querySelectorAll('.overview-chip')
+    assert.equal(expandedChips.length, 7, 'expanding reveals every descendant in-card')
+    const expandedLabels = [...expandedChips].map((chip) => chip.querySelector('.overview-chip-label')?.textContent ?? '')
+    // 折叠切片是展开列表的前缀（同一确定性排序，展开仅补齐不重排）。
+    assert.deepEqual(expandedLabels.slice(0, OVERVIEW_DESCENDANT_LIMIT), collapsedLabels, 'expanding appends in the same deterministic order, never reshuffles')
+    const collapse = mount.container.querySelector<HTMLButtonElement>('.overview-chip-more')
+    assert.equal(collapse?.getAttribute('aria-expanded'), 'true')
+    assert.equal(collapse?.textContent, 'Show less')
+    const navTarget = store.getNavSlice().primaryTarget
+    assert.ok(navTarget.kind === 'overview' && navTarget.params === undefined, 'expansion is card-local UI state and never enters the URL')
+    await act(async () => {
+      collapse?.click()
+    })
+    assert.equal(mount.container.querySelectorAll('.overview-chip').length, OVERVIEW_DESCENDANT_LIMIT, 'collapsing restores the capped slice')
+  } finally {
+    await mount.unmount()
+  }
+})
+
+test('ConversationOverview card semantics: the open action is a real button with readable status label; keyboard Enter opens; batch mode carries aria-pressed', { timeout: 60_000 }, async () => {
+  const store = overviewScenarioStore()
+  const mount = await mountOverview(store)
+  try {
+    const cards = mount.container.querySelectorAll('.overview-card')
+    assert.ok(cards.length === 3)
+    const card = [...cards].find((el) => el.textContent?.includes('在跑的调研'))
+    assert.ok(card !== undefined, 'the working-root card renders')
+    const open = card.querySelector<HTMLButtonElement>('.overview-card-open')
+    assert.ok(open !== null, 'the title cluster renders as a real semantic button')
+    assert.equal(open.tagName, 'BUTTON')
+    assert.equal(card.querySelectorAll('button button').length, 0, 'no interactive control is ever nested inside another button')
+    // 可访问名称来自按钮内容：状态灯的 aria-label（真实运行事实）与标题。
+    const light = open.querySelector('.nav-status-slot [aria-label]')
+    assert.ok(light !== null, 'the status light carries a readable label inside the semantic entry')
+    assert.ok((light.getAttribute('aria-label') ?? '').length > 0)
+    assert.ok(open.textContent?.includes('在跑的调研'))
+    assert.equal(open.getAttribute('aria-pressed'), null, 'normal mode never fakes a pressed state')
+    // 原生按钮 = 键盘契约本体（Tab 可达、Enter/Space 由浏览器激活）；
+    // happy-dom 不合成按键激活，这里断言可聚焦与默认 Tab 序，点击语义另行验证。
+    assert.equal(open.disabled, false, 'the semantic entry stays focusable in the default tab order')
+    open.focus()
+    assert.equal(document.activeElement === open, true, 'the button takes focus')
+    await act(async () => {
+      open.click()
+    })
+    assert.deepEqual(
+      store.getNavSlice().primaryTarget,
+      { kind: 'conversation', conversationId: 2 },
+      'the semantic button navigates exactly like a whole-card click',
+    )
+    // 批量模式：同一按钮承载勾选语义（aria-pressed），整卡点击仍是勾选。
+    const toggle = mount.container.querySelector<HTMLButtonElement>('.overview-batch-toggle')
+    await act(async () => {
+      toggle?.click()
+    })
+    const batchOpen = mount.container.querySelector<HTMLButtonElement>('.overview-card-open')
+    assert.equal(batchOpen?.getAttribute('aria-pressed'), 'false', 'batch mode exposes the toggle state')
+    await act(async () => {
+      batchOpen?.click()
+    })
+    assert.equal(mount.container.querySelector<HTMLElement>('.overview-card')?.classList.contains('is-selected'), true)
+    assert.equal(mount.container.querySelector<HTMLButtonElement>('.overview-card-open')?.getAttribute('aria-pressed'), 'true')
+  } finally {
+    await mount.unmount()
+  }
+})
+
+test('ConversationOverview batch boundary: selection stays within the visible selectable cards as filters change', { timeout: 60_000 }, async () => {
+  const stub = installConversationMutationStub()
+  const store = batchScenarioStore()
+  const mount = await mountOverview(store)
+  try {
+    await act(async () => {
+      mount.container.querySelector<HTMLButtonElement>('.overview-batch-toggle')?.click()
+    })
+    const selectAll = [...mount.container.querySelectorAll<HTMLButtonElement>('.overview-batch-bar button')]
+      .find((btn) => btn.textContent === 'Select all')
+    await act(async () => {
+      selectAll?.click()
+    })
+    assert.ok(mount.container.textContent?.includes('2 selected'), 'both visible human roots are selected')
+
+    // 收窄筛选：常规根 A 出局（assistant），选择集合立即收敛到可见项。
+    await act(async () => {
+      store.setScreenParams({ profile: 'coder' }, {})
+    })
+    await overviewSettle()
+    assert.ok(mount.container.textContent?.includes('1 selected'), 'hidden selections drop out immediately')
+    assert.equal(cardById(mount.container, 2)?.classList.contains('is-selected'), true, 'the still-visible selection survives')
+    const archiveBtn = [...mount.container.querySelectorAll<HTMLButtonElement>('.overview-batch-bar button')]
+      .find((btn) => btn.textContent?.startsWith('Archive'))
+    assert.ok(archiveBtn?.textContent === 'Archive (1)', 'the action labels reflect the effective selection')
+    await act(async () => {
+      archiveBtn?.click()
+    })
+    await overviewSettle()
+    assert.deepEqual(
+      stub.patches.map((patch) => patch.id),
+      [2],
+      'batch archive only ever touches the visible selected card (never the hidden one)',
     )
   } finally {
     await mount.unmount()

@@ -55,9 +55,35 @@
   background: var(--bg-hover);
 }
 
-.overview-card:focus-visible {
+/* 需处理桶强调：等待人类/异常的树以警示描边从普通卡中突出（事实仍是
+ * 灯位与诚实摘要，不新增文案、不编造进度）。 */
+.overview-card-needs_attention {
+  border-color: color-mix(in srgb, var(--warn) 45%, var(--border));
+}
+
+.overview-card-needs_attention:hover {
+  border-color: color-mix(in srgb, var(--warn) 60%, var(--border-strong));
+}
+
+/* 语义主入口：标题簇真按钮（灯 + 标题 + #id），承载键盘/读屏语义；
+ * 视觉延续原 span 排版（透明底、无描边、左对齐、flex 布局）。 */
+.overview-card-open {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.overview-card-open:focus-visible {
   outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
 }
 
 /* 批量模式勾选态：accent 边框 + 淡染底色，与筛选控件同一 accent 词汇。 */
@@ -207,9 +233,40 @@
 }
 
 .overview-chip-more {
+  padding: 2px 7px;
+  border: 1px dashed var(--border);
+  border-radius: 999px;
+  background: transparent;
   font-size: 11px;
+  line-height: 1.5;
   color: var(--fg-muted);
   align-self: center;
+  cursor: pointer;
+}
+
+.overview-chip-more:hover {
+  color: var(--fg);
+  border-color: var(--border-strong);
+}
+
+.overview-chip-more:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* 工具栏搜索框：复用通用 .search-box 原语，仅收敛到筛选控件同量级
+ * （27px 高、12.5px 字），宽度弹性限幅不挤占分段器。 */
+.overview-search-box {
+  height: 27px;
+  padding: 0 8px;
+  gap: 6px;
+  flex: 0 1 180px;
+  min-width: 120px;
+  font-size: 12.5px;
+}
+
+.overview-search-clear {
+  flex-shrink: 0;
 }
 
 .overview-empty {
@@ -218,6 +275,14 @@
   text-align: center;
   font-size: 12.5px;
   color: var(--fg-subtle);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+}
+
+.overview-empty.overview-loading {
+  display: block;
 }
 
 /* 批量操作条：横贯工具栏下方，仅批量模式渲染；按钮沿用通用 btn 词汇，
@@ -275,6 +340,10 @@
   .overview-filter-select {
     flex: 1;
     min-width: 104px;
+  }
+
+  .overview-search-box {
+    flex: 1 1 100%;
   }
 
   .overview-batch-bar {

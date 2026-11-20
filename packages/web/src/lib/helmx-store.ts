@@ -1728,7 +1728,7 @@ export class HelmxExternalStore {
       })
     }
     const currentTarget = options?.split ? this.navState.splitTarget : this.navState.primaryTarget
-    if (validEntries.length === 0 || currentTarget?.kind !== 'screen') return
+    if (validEntries.length === 0 || (currentTarget?.kind !== 'screen' && currentTarget?.kind !== 'overview')) return
     if (options?.push) this.pendingHistoryMode.current = 'push'
     if (options?.split) {
       this.setSplitTarget((current) => (current === null ? current : applyScreenParamsPatch(current, validEntries)))

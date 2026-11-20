@@ -190,14 +190,17 @@ export function applyScreenParamsPatch(
   current: ResolvedTarget,
   validEntries: ReadonlyArray<[string, string | undefined]>,
 ): ResolvedTarget {
-  if (current.kind !== 'screen') return current
+  if (current.kind !== 'screen' && current.kind !== 'overview') return current
   const next: Record<string, string> = { ...(current.params ?? {}) }
   for (const [rawKey, rawValue] of validEntries) {
     if (rawValue === undefined) delete next[rawKey]
     else if (rawValue !== '') next[rawKey] = rawValue
   }
   const params = Object.keys(next).length === 0 ? undefined : next
-  return params === undefined
-    ? { kind: 'screen', pluginId: current.pluginId, screenId: current.screenId }
-    : { kind: 'screen', pluginId: current.pluginId, screenId: current.screenId, params }
+  if (current.kind === 'screen') {
+    return params === undefined
+      ? { kind: 'screen', pluginId: current.pluginId, screenId: current.screenId }
+      : { kind: 'screen', pluginId: current.pluginId, screenId: current.screenId, params }
+  }
+  return params === undefined ? { kind: 'overview' } : { kind: 'overview', params }
 }
