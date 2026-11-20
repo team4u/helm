@@ -623,7 +623,7 @@ test('ConversationOverview card meta slot: contributions render with tree props;
   }
 })
 
-test('Sidebar overview entry: the rail button is gone; the header button opens #/overview with the same-source tone dot', { timeout: 60_000 }, async () => {
+test('Sidebar overview entry: the rail button is gone; the header button opens #/overview with the same-source count badge', { timeout: 60_000 }, async () => {
   const store = overviewStore({
     conversations: [
       conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
@@ -647,7 +647,9 @@ test('Sidebar overview entry: the rail button is gone; the header button opens #
       overviewBtn.getAttribute('aria-label')?.includes('Conversation overview'),
       'the tooltip label states the overview',
     )
-    assert.ok(overviewBtn.querySelector('.rail-overview-dot[data-tone="running"]') !== null, 'the same-source attention tone dot rides the button')
+    const badge = overviewBtn.querySelector<HTMLElement>('.overview-count-badge[data-tone="running"]')
+    assert.ok(badge !== null, 'the same-source attention count badge rides the button')
+    assert.ok(badge.textContent === '1', 'the badge states the honest signal-tree count (1 working tree)')
     await act(async () => {
       overviewBtn.click()
     })
@@ -687,7 +689,7 @@ test('Sidebar overview entry: the rail button is gone; the header button opens #
     container.remove()
   }
 
-  // 无信号时灯点不渲染（诚实：无信号不装忙）
+  // 无信号时徽标不渲染（诚实：无信号不装忙）
   const quiet = overviewStore({
     conversations: [conv({ id: 50, title: '安静', profileId: 'coder' })],
     primaryTarget: { kind: 'conversation', conversationId: 50 },
@@ -695,7 +697,7 @@ test('Sidebar overview entry: the rail button is gone; the header button opens #
   const html = renderToString(e(HelmxExternalStoreContext.Provider, { value: quiet }, e(Sidebar)))
   assert.ok(!html.includes('rail-overview-btn'), 'the rail overview button never renders')
   assert.ok(html.includes('sidebar-overview-open-btn'), 'the header entry always renders in the conversations space')
-  assert.ok(!html.includes('rail-overview-dot'), 'no tone dot without any signal')
+  assert.ok(!html.includes('overview-count-badge'), 'no count badge without any signal')
 })
 
 // ---------------------------------------------------------------------------
@@ -723,7 +725,7 @@ function stubMatchMedia(matches: boolean): () => void {
   }
 }
 
-test('MobileQuickNav: one-tap direct navigation with the shared tone dot; entries hide when their view is already on stage', { timeout: 60_000 }, async () => {
+test('MobileQuickNav: one-tap direct navigation with the shared count badge; entries hide when their view is already on stage', { timeout: 60_000 }, async () => {
   const restoreMobile = stubMatchMedia(true)
   const store = overviewStore({
     conversations: [
@@ -769,7 +771,9 @@ test('MobileQuickNav: one-tap direct navigation with the shared tone dot; entrie
       overviewBtn.getAttribute('aria-label')?.includes('1 running'),
       'the attention summary rides the overview button aria for screen readers',
     )
-    assert.ok(overviewBtn.querySelector('.rail-overview-dot[data-tone="running"]') !== null, 'the tone dot rides the overview button (same as the PC rail, no count badge)')
+    const badge = overviewBtn.querySelector<HTMLElement>('.overview-count-badge[data-tone="running"]')
+    assert.ok(badge !== null, 'the count badge rides the overview button (same source as the sidebar header entry)')
+    assert.ok(badge.textContent === '1', 'the badge states the honest signal-tree count')
 
     const quickBtn = buttons[0] as HTMLElement
     await act(async () => {
@@ -802,7 +806,7 @@ test('MobileQuickNav: one-tap direct navigation with the shared tone dot; entrie
       )
     })
     assert.equal(container.querySelectorAll('.mobile-quick-btn').length, 1, 'overview-only cluster without any quickEntry')
-    assert.ok(container.querySelector('.rail-overview-dot') === null, 'no tone dot without any signal')
+    assert.ok(container.querySelector('.overview-count-badge') === null, 'no count badge without any signal')
 
     // 主屏已停在入口目标时对应按钮就地隐藏：总览页只留 quickEntry，
     // quickEntry 视图只留总览；两钮皆隐时整簇不渲染（零占位残留）。

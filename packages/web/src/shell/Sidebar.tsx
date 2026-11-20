@@ -686,8 +686,10 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                   }}
                 >
                   <HelmxIcon name="activity" size={13} />
-                  {attentionIndicator.tone !== null && (
-                    <span className="rail-overview-dot" data-tone={attentionIndicator.tone} />
+                  {attentionIndicator.totalCount > 0 && attentionIndicator.tone !== null && (
+                    <span className="overview-count-badge" data-tone={attentionIndicator.tone}>
+                      {sidebarBadgeCountLabel(attentionIndicator.totalCount)}
+                    </span>
                   )}
                 </button>
               </Tooltip>

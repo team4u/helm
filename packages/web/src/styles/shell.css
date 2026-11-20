@@ -93,7 +93,7 @@
 
 /* 快捷入口计数徽标（sidebar.item 通用 badge 声明驱动）：紧凑计数 + 灯色，
  * 只呈现插件公开 doc 的真实聚合事实，无信号时不渲染；专用类与对话空间
- * 按钮解耦（态势感知统一走 rail-overview-dot tone 灯点）。
+ * 按钮解耦（态势感知统一走 overview-count-badge 计数徽标）。
  * tone 词汇 = SidebarBadgeTone 五值。 */
 .rail-quick-badge {
   position: absolute;
@@ -556,20 +556,31 @@
 }
 
 
-/* 总览同源 tone 灯点（6px 圆点）：宿主侧栏头部总览入口（搜索钮旁，相对定
+/* 总览入口计数徽标（tone 染色）：宿主侧栏头部总览入口（搜索钮旁，相对定
  * 位锚点由 .sidebar-overview-open-btn 提供）与移动端 MobileQuickNav 总览
- * 按钮共用；有信号才渲染，全安静零灯。 */
-.rail-overview-dot {
+ * 按钮共用；计数 = 同源 indicator.totalCount（有信号的树数，99+ 折叠），
+ * tone = 聚合灯色；有信号才渲染，全安静零徽标。 */
+.overview-count-badge {
   position: absolute;
-  top: 3px;
-  right: 3px;
-  width: 6px;
-  height: 6px;
+  top: -3px;
+  right: -3px;
+  min-width: 14px;
+  height: 14px;
+  padding: 0 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border-radius: 999px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  box-sizing: border-box;
   pointer-events: none;
 }
 
-.rail-overview-dot[data-tone='error'] { background: var(--err); }
-.rail-overview-dot[data-tone='blocked'] { background: var(--warn); }
-.rail-overview-dot[data-tone='running'] { background: var(--accent); }
-.rail-overview-dot[data-tone='done'] { background: var(--ok); }
+.overview-count-badge[data-tone='error'] { background: var(--err); }
+.overview-count-badge[data-tone='blocked'] { background: var(--warn); }
+.overview-count-badge[data-tone='running'] { background: var(--accent); }
+.overview-count-badge[data-tone='done'] { background: var(--ok); }

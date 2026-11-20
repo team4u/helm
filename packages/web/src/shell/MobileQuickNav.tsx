@@ -80,7 +80,11 @@ export function MobileQuickNav({ indicator, quickEntry, quickEntryBadge = null }
           onClick={() => openTarget({ kind: 'overview' })}
         >
           <HelmxIcon name="activity" size={15} />
-          {indicator.tone !== null && <span className="rail-overview-dot" data-tone={indicator.tone} />}
+          {indicator.totalCount > 0 && indicator.tone !== null && (
+            <span className="overview-count-badge" data-tone={indicator.tone}>
+              {sidebarBadgeCountLabel(indicator.totalCount)}
+            </span>
+          )}
         </button>
       )}
     </div>
