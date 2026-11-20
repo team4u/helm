@@ -40,10 +40,8 @@ import {
 import type { ConversationBackgroundActivity, ConversationBackgroundIndex } from './background-activity-model.js'
 import { AgentStandingsGroup } from './SidebarAgentStandings.js'
 import { ArchivedConversationsGroup } from './SidebarArchivedConversations.js'
-import { SidebarAttentionGroup } from './SidebarAttentionGroup.js'
 import { useGlobalAttention } from './use-attention-indicator.js'
 import { useSidebarBadges } from './use-sidebar-badges.js'
-import { composeAttentionSummary, type GlobalAttentionIndicator } from './attention-model.js'
 import {
   ConversationStatusDot,
   HoverIconButton,
@@ -332,7 +330,6 @@ function ActivityRail({
   onToggleSidebarCollapsed,
   space,
   onOpenSpace,
-  attentionIndicator,
   quickEntries,
   store,
   onNavigate,
@@ -344,7 +341,6 @@ function ActivityRail({
   onToggleSidebarCollapsed?: () => void
   space: SidebarSpace
   onOpenSpace: (space: SidebarSpace) => void
-  attentionIndicator: GlobalAttentionIndicator
   quickEntries: SidebarViewItem[]
   store: SidebarStoreView
   onNavigate?: () => void
@@ -368,10 +364,9 @@ function ActivityRail({
       : themePreference === 'light'
         ? t('shell.theme.light')
         : t('shell.theme.dark')
-  const attentionSummary = composeAttentionSummary(attentionIndicator, t)
-  const overviewTooltipLabel =
-    attentionSummary !== '' ? `${t('shell.overview.railTooltip')} · ${attentionSummary}` : t('shell.overview.railTooltip')
-  const overviewPresence = resolveSidebarTargetPresence(store, (target) => target.kind === 'overview')
+  // 主屏是否停在总览：空间按钮高亮的归属判定（总览无 Rail 入口，由侧栏
+  // 头部搜索钮旁的总览入口承载；主屏停总览时空间按钮一律不亮）。
+  const onOverviewPrimary = store.primaryTarget?.kind === 'overview'
 
   return (
     <nav className="activity-rail" aria-label={t('shell.sidebar.mainNavigation')}>
@@ -393,14 +388,17 @@ function ActivityRail({
       <div className="activity-rail-spaces">
         {(Object.keys(SPACE_LABEL_KEYS) as SidebarSpace[]).map((key) => {
           const spaceLabel = t(SPACE_LABEL_KEYS[key])
+          // 高亮只认主屏归属：主屏停在总览时空间按钮一律不亮（总览入口在
+          // 侧栏头部，Rail 不再有总览按钮，杜绝双入口双高亮）。
+          const spaceActive = space === key && !onOverviewPrimary
           return (
             <Tooltip content={spaceLabel} side="right" key={key}>
               <button
                 type="button"
-                className={`rail-btn rail-space-btn${space === key ? ' rail-btn-active' : ''}`}
+                className={`rail-btn rail-space-btn${spaceActive ? ' rail-btn-active' : ''}`}
                 title={spaceLabel}
                 aria-label={spaceLabel}
-                aria-current={space === key ? 'page' : undefined}
+                aria-current={spaceActive ? 'page' : undefined}
                 onClick={() => onOpenSpace(key)}
               >
                 <HelmxIcon name={SPACE_ICONS[key]} size={16} />
@@ -409,26 +407,6 @@ function ActivityRail({
           )
         })}
       </div>
-      {/* 宿主「会话总览」直达按钮（#/overview，对话空间）：紧邻态势微标，
-          桌面折叠 Rail 与移动抽屉同源一键直达；tone 灯点复用同源 indicator。 */}
-      <Tooltip content={overviewTooltipLabel} side="right">
-        <button
-          type="button"
-          className={`rail-btn rail-overview-btn${overviewPresence.active ? ' rail-btn-active' : ''}`}
-          title={overviewTooltipLabel}
-          aria-label={overviewTooltipLabel}
-          aria-current={overviewPresence.active ? 'page' : undefined}
-          onClick={() => {
-            store.openTarget({ kind: 'overview' })
-            onNavigate?.()
-          }}
-        >
-          <HelmxIcon name="activity" size={16} />
-          {attentionIndicator.tone !== null && (
-            <span className="rail-overview-dot" data-tone={attentionIndicator.tone} />
-          )}
-        </button>
-      </Tooltip>
       {quickEntries.length > 0 && (
         <div className="activity-rail-quick">
           {quickEntries.map((entry) => {
@@ -583,10 +561,10 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   // 该空间最近的主舞台目标，URL 即该空间真实锚点，刷新/前进/后退天然可还原。
   const space = spaceForTarget(primaryTarget)
 
-  // 全局并发态势（对话空间平铺条目 + Rail/移动端快捷导航的总览灯点 + 后台在途
+  // 全局并发态势（总览入口脉冲灯点 + Rail/移动端快捷导航的总览灯点 + 后台在途
   // 索引）：badge doc 的按需加载内聚在 Hook（ensurePluginDoc 幂等，移动端合着
   // 抽屉也不漏后台任务）。插件停用后其 UI 贡献与 doc 均从 store 消失，态势自然归零。
-  const { items: attentionItems, indicator: attentionIndicator, background } = useGlobalAttention()
+  const { indicator: attentionIndicator, background } = useGlobalAttention()
 
   // 插件全局快捷入口（sidebar.item quickEntry，最薄通用声明）：仅收当前启用
   // 插件确实注册了的 screen（插件停用后贡献即时消失，入口零残留）；点击走标准
@@ -634,7 +612,6 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
         onOpenSpace={(nextSpace) => {
           openSpace(nextSpace)
         }}
-        attentionIndicator={attentionIndicator}
         quickEntries={railQuickEntries}
         store={sidebarStore}
         onNavigate={onClose}
@@ -674,6 +651,25 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                 <HelmxIcon name="search" size={13} />
               </button>
             </Tooltip>
+            {space === 'conversations' && (
+              <Tooltip content={t('shell.overview.railTooltip')} side="bottom">
+                <button
+                  type="button"
+                  className="btn btn-sm btn-icon sidebar-overview-open-btn"
+                  title={t('shell.overview.railTooltip')}
+                  aria-label={t('shell.overview.railTooltip')}
+                  onClick={() => {
+                    openTarget({ kind: 'overview' })
+                    onClose?.()
+                  }}
+                >
+                  <HelmxIcon name="activity" size={13} />
+                  {attentionIndicator.tone !== null && (
+                    <span className="rail-overview-dot" data-tone={attentionIndicator.tone} />
+                  )}
+                </button>
+              </Tooltip>
+            )}
             <Tooltip content={collapseWithShortcut} side="bottom">
               <button
                 type="button"
@@ -702,12 +698,11 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
         </div>
 
         <div className="sidebar-scroll">
-          {/* 态势平铺区仅挂对话空间（会话界面的侧栏）；其他空间保持各自的
-              视图/设置列表，全局态势经总览入口的 tone 灯点感知。 */}
+          {/* 会话总览入口收敛为侧栏头部搜索钮旁的素图标钮（仅对话空间）；
+              逐树态势明细只在 #/overview 总览页呈现。 */}
           {space === 'conversations' ? (
             <>
               <PendingAsksPanel store={sidebarStore} />
-              <SidebarAttentionGroup items={attentionItems} store={sidebarStore} onNavigate={onClose} />
               <AgentStandingsGroup store={sidebarStore} background={background} onNavigate={onClose} />
               <SidebarSectionGroups store={sidebarStore} background={background} />
               <ArchivedConversationsGroup background={background} onNavigate={onClose} />

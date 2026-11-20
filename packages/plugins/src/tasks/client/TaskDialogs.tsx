@@ -12,7 +12,8 @@
  * - TaskMergeConfirmDialog: explicit consent before merge_and_close (the
  *   branch / worktree / changed-file facts, never a one-tap dispatch).
  * - TaskDetailDrawer: right-side 540px drawer (host .primary-drawer-* shell):
- *   MarkdownView brief, dependency chain, submission facts with clickable
+ *   MarkdownView brief / submission summary / verification / rework feedback,
+ *   dependency chain, submission facts with clickable
  *   artifact chips (ctx.openArtifact) and an expandable changed-file list,
  *   inline edit (title / brief / project), start / approve / rework / archive /
  *   delete with a two-step delete confirm.
@@ -129,6 +130,7 @@ import {
   TASK_SAVING,
   TASK_SECTION_BRIEF,
   TASK_SECTION_LAST_REWORK,
+  TASK_SUBMISSION_VERIFICATION,
   TASK_SECTION_SUBMISSION,
   TASK_SUBMISSION_ARTIFACTS,
   TASK_SUBMIT_REQUIRED,
@@ -965,12 +967,19 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                   <HelmxIcon name="git-branch" size={13} />
                   <span>{t(TASK_SECTION_SUBMISSION)}</span>
                 </h4>
-                <div className="task-card-submission">
-                  <div className="task-card-submission-summary">{submission.summary}</div>
+                <div className="task-card-submission task-detail-submission">
+                  <div className="task-detail-md">
+                    <MarkdownView text={submission.summary} />
+                  </div>
                   {submission.verification !== undefined ? (
-                    <div className="task-card-submission-facts">
-                      <HelmxIcon name="shield" size={11} />
-                      <span title={submission.verification}>{submission.verification}</span>
+                    <div className="task-detail-verification">
+                      <div className="task-detail-verification-label">
+                        <HelmxIcon name="shield" size={11} />
+                        <span>{t(TASK_SUBMISSION_VERIFICATION)}</span>
+                      </div>
+                      <div className="task-detail-md">
+                        <MarkdownView text={submission.verification} />
+                      </div>
                     </div>
                   ) : null}
                   <div className="task-card-submission-facts">
@@ -1004,7 +1013,9 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                   <HelmxIcon name="rotate-ccw" size={13} />
                   <span>{t(TASK_SECTION_LAST_REWORK)}</span>
                 </h4>
-                <div className="task-detail-brief">{task.lastReworkFeedback}</div>
+                <div className="task-detail-brief">
+                  <MarkdownView text={task.lastReworkFeedback} />
+                </div>
               </div>
             ) : null}
           </div>

@@ -234,6 +234,17 @@ test('resolveSpaceSwitch: same space no-op; valid memory first; stale memory cle
     { kind: 'already-in-space' },
   )
 
+  // 主屏停在总览：总览是带专属按钮的顶层目的地，不算「在对话空间里」——
+  // 点击「对话」空间按钮必须跳回记忆目标（或空间缺省），绝不 no-op。
+  assert.deepEqual(
+    resolveSpaceSwitch('conversations', { kind: 'overview' }, { conversations: { kind: 'conversation', conversationId: 1 } }, input),
+    { kind: 'navigate', target: { kind: 'conversation', conversationId: 1 }, clearStaleMemory: false },
+  )
+  assert.deepEqual(
+    resolveSpaceSwitch('conversations', { kind: 'overview' }, {}, input),
+    { kind: 'navigate', target: { kind: 'agent', profileId: 'assistant' }, clearStaleMemory: false },
+  )
+
   // a valid memory hits
   assert.deepEqual(
     resolveSpaceSwitch('conversations', { kind: 'profiles' }, { conversations: { kind: 'conversation', conversationId: 1 } }, input),

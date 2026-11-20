@@ -176,10 +176,7 @@ export const shellMessages = {
     'zh-CN': '{base} · 后台任务: {summary}',
   },
 
-  // Global cross-agent attention (sidebar flat group, mobile hamburger badge, collapsed rail)
-  'shell.attention.groupTitle': { en: 'Attention', 'zh-CN': '态势' },
-  'shell.attention.collapseGroup': { en: 'Collapse attention group', 'zh-CN': '收起态势分组' },
-  'shell.attention.expandGroup': { en: 'Expand attention group', 'zh-CN': '展开态势分组' },
+  // Global cross-agent attention (overview entry pulse dot, mobile hamburger badge, collapsed rail)
   'shell.attention.openConversation': { en: 'Open conversation {id}', 'zh-CN': '打开会话 {id}' },
   'shell.attention.descendantsActive': {
     en: '{count} sub-conversations active',
@@ -214,6 +211,10 @@ export const shellMessages = {
   'shell.overview.profileFilterLabel': { en: 'Filter by agent', 'zh-CN': '按角色筛选' },
   'shell.overview.nodeFilter': { en: 'All nodes', 'zh-CN': '全部节点' },
   'shell.overview.nodeFilterLabel': { en: 'Filter by node', 'zh-CN': '按节点筛选' },
+  'shell.overview.sourceFilter': { en: 'All sources', 'zh-CN': '全部来源' },
+  'shell.overview.sourceFilterLabel': { en: 'Filter by source', 'zh-CN': '按来源筛选' },
+  'shell.overview.sourceRegular': { en: 'Regular conversations', 'zh-CN': '常规对话' },
+  'shell.overview.sourceManaged': { en: 'Managed conversations', 'zh-CN': '托管会话' },
   'shell.overview.localNode': { en: 'Local', 'zh-CN': '本机' },
   'shell.overview.empty': {
     en: 'No conversations match the current filters',

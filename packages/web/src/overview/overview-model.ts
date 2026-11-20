@@ -7,6 +7,11 @@
  * 桶序（需关注 > 运行中 > 未读完成 > 安静）内按 root.createdAt 倒序
  * （同刻 id 倒序），绝不用 updatedAt 防流式跳卡。只读视图：本层不产生任何
  * 副作用与编造事实，摘要复用 composeHonestTreeSummary。
+ *
+ * 灯位口径（与侧栏会话行通用统一）：卡面灯 = 根会话自身状态 + 树级后台
+ * 在途聚合，经同一 resolveStatusLight 单灯裁决——representative 仅用于
+ * 诚实摘要与桶位推导，绝不充当卡面灯位（防「侧栏空心蓝、总览无灯」的
+ * 代表位/行语义分叉）。
  */
 
 import type { ConversationSummary, Profile } from '@helmx/protocol/browser'
@@ -17,12 +22,16 @@ import {
   composeHonestTreeSummary,
   type AttentionBucket,
 } from '../shell/attention-model.js'
+import { ARCHIVED_TAG } from '../shell/sidebar-model.js'
 
 /** 总览卡片桶：态势三桶 + 安静（无任何信号的树，仅出现在「全部」筛选）。 */
 export type OverviewCardBucket = AttentionBucket | 'quiet'
 
 /** 总览桶筛选值。 */
 export type OverviewBucketFilter = 'all' | AttentionBucket
+
+/** 总览来源筛选值：全部 / 常规对话 / 托管会话（托管 = 插件 sidebarSection 接管）。 */
+export type OverviewSourceFilter = 'all' | 'regular' | 'managed'
 
 const CARD_BUCKET_ORDER: Record<OverviewCardBucket, number> = {
   needs_attention: 0,
@@ -45,6 +54,10 @@ export interface OverviewCard {
   profileLabel: string
   /** 诚实摘要（真实 lastError / doing / 后台摘要 / 后代运行计数）。 */
   summaryText: string
+  /** 根会话已被插件 sidebarSection filterTag 接管（任务执行 / 后台 Worker 等）。 */
+  managed: boolean
+  /** 整棵子树成员 ID（含根；OVERVIEW_CARD_META_SLOT 插槽 props 输入）。 */
+  memberIds: number[]
   /** 卡内后代会话芯片（按关注优先 + createdAt 倒序截断；空树为空数组）。 */
   descendants: OverviewDescendant[]
   /** 被截断未展示的后代数。 */
@@ -64,6 +77,8 @@ export const OVERVIEW_DESCENDANT_LIMIT = 5
  * 构建总览卡片（全部根树，含安静树）：排序为桶序 + root.createdAt 倒序。
  * 后代芯片排序：有信号的（working/blocked/error/后台在途）优先，其后按
  * createdAt 倒序；截断后如实给出 hiddenDescendantCount。
+ * sectionTags（插件 sidebarSection filterTag 集合，与侧栏同源）存在时，
+ * 根会话带任一非归档命中标签的树归为 managed（托管会话）。
  */
 export function buildOverviewCards(input: {
   conversations: ReadonlyArray<ConversationSummary>
@@ -72,8 +87,11 @@ export function buildOverviewCards(input: {
   plugins: ReadonlyArray<{ id: string; enabled: boolean }>
   /** Locale translator（摘要与后代计数文案）；缺省英文桥接。 */
   t?: WebMessageTranslator
+  /** 插件 sidebarSection filterTag 集合（缺省时全部树视为常规会话）。 */
+  sectionTags?: ReadonlySet<string>
 }): OverviewCard[] {
   const t = input.t ?? englishWebTranslator
+  const sectionTags = input.sectionTags
   const profileNames = new Map(input.profiles.map((profile) => [profile.id, profile.name] as const))
   const cards: OverviewCard[] = []
   for (const aggregate of aggregateAttentionTrees(input)) {
@@ -109,6 +127,8 @@ export function buildOverviewCards(input: {
         activeDescendantCount: aggregate.activeDescendantCount,
         t,
       }),
+      managed: sectionTags !== undefined && aggregate.root.tags.some((tag) => tag !== ARCHIVED_TAG && sectionTags.has(tag)),
+      memberIds: aggregate.members.map((member) => member.id),
       descendants: visible.map((entry) => ({
         conv: entry.member,
         backgroundActive: input.background.get(entry.member.id)?.active === true,
@@ -130,6 +150,8 @@ export interface OverviewCardFilter {
   profileId: string
   /** 节点筛选值；'local' 聚合未标注 nodeId 的本机会话。 */
   nodeId: string
+  /** 来源筛选（缺省 'all' 不过滤；与桶/角色/节点 AND 组合）。 */
+  source?: OverviewSourceFilter
 }
 
 /** 会话的节点筛选键（缺省本机）。 */
@@ -138,8 +160,8 @@ export function overviewNodeKey(conv: Pick<ConversationSummary, 'nodeId'>): stri
 }
 
 /**
- * 筛选总览卡片：桶（quiet 仅在 all）、角色、节点三者 AND 组合；
- * 空串筛选值表示该维度不过滤。纯函数，供组件与测试共用。
+ * 筛选总览卡片：桶（quiet 仅在 all）、角色、节点、来源四者 AND 组合；
+ * 空串筛选值表示该维度不过滤，source 缺省 'all' 不过滤。纯函数，供组件与测试共用。
  */
 export function filterOverviewCards(
   cards: ReadonlyArray<OverviewCard>,
@@ -149,6 +171,8 @@ export function filterOverviewCards(
     if (filter.bucket !== 'all' && card.bucket !== filter.bucket) return false
     if (filter.profileId !== '' && card.root.profileId !== filter.profileId) return false
     if (filter.nodeId !== '' && overviewNodeKey(card.root) !== filter.nodeId) return false
+    if (filter.source === 'regular' && card.managed) return false
+    if (filter.source === 'managed' && !card.managed) return false
     return true
   })
 }

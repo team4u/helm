@@ -193,6 +193,7 @@ test('tasks-int1: default-enabled boot, zero residents, workflow-disable freedom
       .map((u) => `${u.surface}:${String((u.spec as { id?: string }).id)}`)
       .sort()
     assert.deepEqual(surfaces, [
+      'plugin.slot:overview-card-meta',
       'screen:board',
       'sidebar.item:task-board',
       'sidebar.section:task-conversations',
@@ -213,6 +214,16 @@ test('tasks-int1: default-enabled boot, zero residents, workflow-disable freedom
     assert.ok(taskSection, 'sidebar.section:task-conversations must exist')
     assert.equal((taskSection!.spec as { filterTag?: string }).filterTag, 'task')
     assert.equal((taskSection!.spec as { keptAliveTag?: string }).keptAliveTag, 'task-archived')
+
+    // Overview card meta slot contribution: read-only jump pill, scoped to task
+    // conversation tags (OR within the tags field) so non-task cards never mount it.
+    const slotContribution = kernel.plugins
+      .listUi()
+      .find((u) => u.pluginId === TASKS_PLUGIN_ID && u.surface === 'plugin.slot' && (u.spec as { id?: string }).id === 'overview-card-meta')
+    assert.ok(slotContribution, 'plugin.slot:overview-card-meta contribution must exist')
+    assert.equal((slotContribution.spec as { target?: unknown }).target, 'builtin:overview/card-meta')
+    assert.deepEqual((slotContribution.spec as { scope?: unknown }).scope, { tags: [TASK_ACTIVE_TAG, TASK_ARCHIVED_TAG] })
+    assert.deepEqual((slotContribution.spec as { client?: unknown }).client, { module: 'index.tsx', export: 'TaskOverviewCardMeta' })
 
     // End-to-end badge wiring: the live plugin's sidebar.item contribution carries
     // the declared badge verbatim — protocol SidebarItemBadgeSpec + kernel boundary
@@ -704,8 +715,15 @@ test('tasks-int6: disable hides tools/UI/skill immediately while execution conve
       false,
       'task_* tools must disappear immediately after disable',
     )
-    // UI contributions gone
+    // UI contributions gone (incl. the OVERVIEW_CARD_META_SLOT pill — disabling
+    // removes contributions immediately, no phantom pills on overview cards)
     assert.equal(kernel.plugins.listUi().some((u) => u.pluginId === TASKS_PLUGIN_ID), false)
+    assert.equal(
+      kernel.plugins
+        .listUi()
+        .some((u) => u.surface === 'plugin.slot' && (u.spec as { target?: string }).target === 'builtin:overview/card-meta'),
+      false,
+    )
     // Managed skill becomes unavailable (skill_not_available) after disable
     await assert.rejects(
       () => kernel.plugins.executeTool('load_skill', { skillId: TASKS_SKILL_ID }, { conversationId: convId }),

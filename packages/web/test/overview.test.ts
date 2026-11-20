@@ -38,6 +38,9 @@ GlobalRegistrator.register()
 ;(globalThis as Record<string, unknown>).IS_REACT_ACT_ENVIRONMENT = true
 
 const { ConversationOverview } = await import('../src/overview/ConversationOverview.js')
+const { HostStoreProviders } = await import('./helpers/host-store.js')
+const { seedPluginClientModule } = await import('../src/lib/plugin-client.js')
+const { OVERVIEW_CARD_META_SLOT } = await import('@helmx/protocol/browser')
 const { Sidebar } = await import('../src/shell/Sidebar.js')
 
 function conv(partial: Partial<ConversationSummary> & { id: number }): ConversationSummary {
@@ -63,13 +66,14 @@ function conv(partial: Partial<ConversationSummary> & { id: number }): Conversat
 function buildCards(
   conversations: ConversationSummary[],
   background: ConversationBackgroundIndex = new Map(),
-  overrides: { profiles?: Array<{ id: string; name?: string; managedByPlugin?: string }>; plugins?: Array<{ id: string; enabled: boolean }> } = {},
+  overrides: { profiles?: Array<{ id: string; name?: string; managedByPlugin?: string }>; plugins?: Array<{ id: string; enabled: boolean }>; sectionTags?: ReadonlySet<string> } = {},
 ) {
   return buildOverviewCards({
     conversations,
     background,
     profiles: overrides.profiles ?? [],
     plugins: overrides.plugins ?? [],
+    ...(overrides.sectionTags !== undefined ? { sectionTags: overrides.sectionTags } : {}),
   })
 }
 
@@ -174,6 +178,63 @@ test('filterOverviewCards: bucket/profile/node AND combos; quiet only in all; lo
 })
 
 // ---------------------------------------------------------------------------
+// 纯函数：来源筛选（managed 判定与 sidebarSection filterTag 同源）
+// ---------------------------------------------------------------------------
+
+test('buildOverviewCards: managed trees follow the sidebar sectionTags (non-archived tag hits); memberIds carry the whole tree', { timeout: 60_000 }, () => {
+  const sectionTags = new Set(['task', 'worker-archived'])
+  const cards = buildCards(
+    [
+      conv({ id: 1, tags: ['task'], status: 'working' }),
+      conv({ id: 11, parentConversationId: 1, status: 'idle' }),
+      conv({ id: 2, tags: ['worker-archived'], status: 'idle' }),
+      conv({ id: 3, tags: [ARCHIVED_TAG], status: 'idle' }),
+      conv({ id: 4, status: 'idle' }),
+    ],
+    new Map(),
+    { sectionTags },
+  )
+  const byId = new Map(cards.map((card) => [card.root.id, card]))
+  assert.equal(byId.get(1)!.managed, true, 'a section filterTag hit marks the tree managed')
+  assert.equal(byId.get(2)!.managed, true, 'any declared filterTag matches (e.g. worker-archived), zero plugin-id special casing')
+  assert.equal(byId.get(4)!.managed, false, 'untagged trees stay regular')
+  assert.deepEqual(byId.get(1)!.memberIds, [1, 11], 'memberIds carry the whole tree (root included) for the meta slot props')
+  assert.deepEqual(byId.get(4)!.memberIds, [4], 'a single-member tree lists just the root')
+  // 归档标签不参与 managed 判定（树本身也不进总览，这里验证无残留）。
+  assert.equal(byId.has(3), false, 'archived roots never enter the overview')
+  // 未传 sectionTags（无插件 section 贡献）时全部树视为常规会话。
+  const noTags = buildCards([conv({ id: 1, tags: ['task'], status: 'working' })])
+  assert.equal(noTags[0]!.managed, false, 'without section contributions every tree stays regular')
+})
+
+test('filterOverviewCards: source filter ANDs with the other dimensions; default all keeps everything', { timeout: 60_000 }, () => {
+  const cards = buildCards(
+    [
+      conv({ id: 1, tags: ['task'], status: 'blocked' }),
+      conv({ id: 2, status: 'working', profileId: 'coder' }),
+      conv({ id: 3, status: 'idle', profileId: 'coder' }),
+    ],
+    new Map(),
+    { sectionTags: new Set(['task']) },
+  )
+  const base = { bucket: 'all' as const, profileId: '', nodeId: '' }
+  assert.deepEqual(filterOverviewCards(cards, base).map((c) => c.root.id), [1, 2, 3], 'omitted source defaults to all')
+  assert.deepEqual(filterOverviewCards(cards, { ...base, source: 'all' }).map((c) => c.root.id), [1, 2, 3])
+  assert.deepEqual(filterOverviewCards(cards, { ...base, source: 'regular' }).map((c) => c.root.id), [2, 3], 'regular keeps only non-managed trees')
+  assert.deepEqual(filterOverviewCards(cards, { ...base, source: 'managed' }).map((c) => c.root.id), [1], 'managed keeps only section-tagged trees')
+  assert.deepEqual(
+    filterOverviewCards(cards, { bucket: 'running', profileId: 'coder', nodeId: '', source: 'regular' }).map((c) => c.root.id),
+    [2],
+    'source ANDs with bucket/profile/node',
+  )
+  assert.deepEqual(
+    filterOverviewCards(cards, { bucket: 'running', profileId: 'coder', nodeId: '', source: 'managed' }),
+    [],
+    'a running coder tree that is managed drops out of the regular+managed combo intersection',
+  )
+})
+
+// ---------------------------------------------------------------------------
 // URL：#/overview 解析与序列化
 // ---------------------------------------------------------------------------
 
@@ -212,6 +273,60 @@ function overviewScenarioStore(): HelmxExternalStore {
   })
 }
 
+test('ConversationOverview card light matches the sidebar row verdict: idle root with background in-flight renders the hollow ring', { timeout: 60_000 }, async () => {
+  // 通用统一口径回归：根 idle + 树内后台在途（workbench badge doc accent）→
+  // 卡面灯位渲染空心蓝环，与侧栏会话行完全一致；在跑的后台子代理（working
+  // 后代）不再以代表位身份抢占卡面灯——由芯片自带灯呈现。
+  const workflowPanel = {
+    pluginId: 'builtin:workflow',
+    surface: 'workbench.panel' as const,
+    spec: {
+      id: 'runs',
+      label: { en: 'Runs' },
+      badge: { doc: 'run-badges', byConversationField: 'byConversation' },
+    },
+  }
+  const store = overviewStore({
+    conversations: [
+      conv({ id: 5, title: '后台在跑', profileId: 'coder', status: 'idle', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 51, parentConversationId: 5, title: '后台子代理', status: 'working', createdAt: 9100, updatedAt: 9200 }),
+    ],
+    primaryTarget: { kind: 'overview' },
+    uiContributions: [workflowPanel],
+    pluginDocs: {
+      'builtin:workflow/run-badges': { byConversation: { '5': { count: 1, tone: 'accent', footerText: '1 Running' } } },
+    },
+  })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(HostStoreProviders, { value: store }, e(ConversationOverview)))
+    })
+    const card = container.querySelector<HTMLElement>('.overview-card')
+    assert.ok(card !== null, 'the tree card renders')
+    assert.ok(
+      card.querySelector('.overview-card-head .status-dot-background') !== null,
+      'idle root + tree background in-flight renders the hollow ring (row-consistent)',
+    )
+    assert.ok(
+      card.querySelector('.overview-card-head .status-dot-working') === null,
+      'the working background descendant no longer steals the card head light',
+    )
+    assert.ok(
+      card.querySelector('.overview-chip .status-dot-working') !== null,
+      'the background descendant chip carries its own working light',
+    )
+  } finally {
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
+  }
+})
+
 test('ConversationOverview renders the card grid with honest facts and reuses the conversation drawer on click', { timeout: 60_000 }, async () => {
   const store = overviewScenarioStore()
   const container = document.createElement('div')
@@ -220,13 +335,17 @@ test('ConversationOverview renders the card grid with honest facts and reuses th
   try {
     await act(async () => {
       root = createRoot(container)
-      root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(ConversationOverview)))
+      root.render(e(HostStoreProviders, { value: store }, e(ConversationOverview)))
     })
     const cards = container.querySelectorAll('.overview-card')
     assert.equal(cards.length, 3, 'attention trees first, quiet tree last (all filter)')
     assert.ok(cards[0]!.textContent?.includes('出错的重构'), 'the needs-attention tree leads')
-    assert.ok(cards[0]!.querySelector('.status-dot-blocked') !== null, 'the representative blocked light renders')
+    // 灯位口径与侧栏行统一（根锚定）：根 #1 为 idle，卡面灯位零灯（不编造）；
+    // blocked 的后代由芯片自带灯呈现，摘要如实说明等待事实。
+    assert.ok(cards[0]!.querySelector('.overview-card-head .status-dot') === null, 'the idle root keeps the card head light off (row-consistent)')
+    assert.ok(cards[0]!.querySelector('.overview-chip .status-dot-blocked') !== null, 'the blocked descendant chip carries its own light')
     assert.ok(cards[0]!.textContent?.includes('待审批子任务'), 'the waiting descendant renders as a chip')
+    assert.ok(cards[1]!.querySelector('.overview-card-head .status-dot-working') !== null, 'the working root lights the card head exactly like a sidebar row')
     assert.ok(cards[1]!.textContent?.includes('正在检索文档'), 'the running card states the real doing text')
     assert.ok(container.textContent?.includes('3 trees'), 'the stats line counts visible cards')
 
@@ -272,7 +391,7 @@ test('ConversationOverview hides the unread completion light as soon as the conv
   try {
     await act(async () => {
       root = createRoot(container)
-      root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(ConversationOverview)))
+      root.render(e(HostStoreProviders, { value: store }, e(ConversationOverview)))
     })
     const unreadCard = [...container.querySelectorAll<HTMLElement>('.overview-card')].find((card) => card.textContent?.includes('#8'))
     const readCard = [...container.querySelectorAll<HTMLElement>('.overview-card')].find((card) => card.textContent?.includes('#9'))
@@ -294,7 +413,7 @@ test('ConversationOverview bucket filter narrows the grid (segmented control)', 
   try {
     await act(async () => {
       root = createRoot(container)
-      root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(ConversationOverview)))
+      root.render(e(HostStoreProviders, { value: store }, e(ConversationOverview)))
     })
     assert.equal(container.querySelectorAll('.overview-card').length, 3)
     const runningTab = [...container.querySelectorAll('.segmented-control-btn')].find((btn) =>
@@ -315,7 +434,196 @@ test('ConversationOverview bucket filter narrows the grid (segmented control)', 
   }
 })
 
-test('Sidebar rail: the overview button opens #/overview and carries the same-source tone dot', { timeout: 60_000 }, async () => {
+test('ConversationOverview source filter: appears only with managed trees, narrows the grid per source', { timeout: 60_000 }, async () => {
+  const taskSection = {
+    pluginId: 'builtin:tasks',
+    surface: 'sidebar.section' as const,
+    spec: { id: 'task-runs', label: { en: 'Task runs' }, icon: 'check-square', filterTag: 'task' },
+  }
+  // 无托管树：来源筛选不渲染（零无效控件噪音）。
+  const regularOnly = overviewStore({
+    conversations: [
+      conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
+      conv({ id: 3, title: '安静会话', profileId: 'coder', status: 'idle', createdAt: 7000, updatedAt: 7000 }),
+    ],
+    primaryTarget: { kind: 'overview' },
+  })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(HostStoreProviders, { value: regularOnly }, e(ConversationOverview)))
+    })
+    assert.ok(container.querySelector('[aria-label="Filter by source"]') === null, 'no managed trees: the source select stays hidden')
+
+    // 有托管树：来源筛选渲染，切换 managed 只留任务树、regular 只留常规树。
+    const mixed = overviewStore({
+      conversations: [
+        conv({ id: 1, title: '任务执行', profileId: 'assistant', tags: ['task'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
+        conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
+      ],
+      primaryTarget: { kind: 'overview' },
+      uiContributions: [taskSection],
+    })
+    await act(async () => {
+      root!.render(e(HostStoreProviders, { value: mixed }, e(ConversationOverview)))
+    })
+    assert.equal(container.querySelectorAll('.overview-card').length, 2, 'both trees render under the all filter')
+    const sourceSelect = container.querySelector<HTMLElement>('[aria-label="Filter by source"]')
+    assert.ok(sourceSelect !== null, 'with a managed tree present the source select renders')
+
+    await act(async () => {
+      sourceSelect.click()
+    })
+    const managedOption = [...document.body.querySelectorAll('[role="option"]')].find((el) =>
+      el.textContent?.includes('Managed conversations'),
+    ) as HTMLElement | undefined
+    assert.ok(managedOption !== undefined, 'the managed option lists in the open listbox')
+    await act(async () => {
+      managedOption.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    })
+    let cards = container.querySelectorAll('.overview-card')
+    assert.equal(cards.length, 1, 'only the managed tree stays visible')
+    assert.ok(cards[0]!.textContent?.includes('任务执行'))
+
+    // 插件 section 贡献消失（停用）但筛选仍停在 managed：筛选器保持可见防困住，
+    // 卡片如实归零（绝不伪报常规树为托管）。
+    const disabled = overviewStore({
+      conversations: [
+        conv({ id: 1, title: '任务执行', profileId: 'assistant', tags: ['task'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
+        conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
+      ],
+      primaryTarget: { kind: 'overview' },
+    })
+    await act(async () => {
+      root!.render(e(HostStoreProviders, { value: disabled }, e(ConversationOverview)))
+    })
+    assert.equal(container.querySelectorAll('.overview-card').length, 0, 'with the managed filter held, no managed tree stays visible')
+    assert.ok(container.querySelector('[aria-label="Filter by source"]') !== null, 'the source select stays visible (never traps the user on a stale value)')
+  } finally {
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
+  }
+  // 全新挂载（筛选值回到默认 all）：无 section 贡献时一切归常规，筛选器隐藏。
+  {
+    const fresh = overviewStore({
+      conversations: [
+        conv({ id: 1, title: '任务执行', profileId: 'assistant', tags: ['task'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
+        conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
+      ],
+      primaryTarget: { kind: 'overview' },
+    })
+    const container2 = document.createElement('div')
+    document.body.appendChild(container2)
+    let root2: Root | undefined
+    try {
+      await act(async () => {
+        root2 = createRoot(container2)
+        root2.render(e(HostStoreProviders, { value: fresh }, e(ConversationOverview)))
+      })
+      const cards = container2.querySelectorAll('.overview-card')
+      assert.equal(cards.length, 2, 'no section contributions: every tree is regular again and stays visible')
+      assert.ok(container2.querySelector('[aria-label="Filter by source"]') === null, 'a fresh mount without managed trees hides the source select')
+    } finally {
+      await act(async () => {
+        root2?.unmount()
+      })
+      container2.remove()
+    }
+  }
+})
+
+test('ConversationOverview card meta slot: contributions render with tree props; no contribution leaves zero residue', { timeout: 60_000 }, async () => {
+  const received: Array<Record<string, unknown>> = []
+  seedPluginClientModule('builtin:tasks', 'overview-meta.tsx', {
+    TaskOverviewCardMeta: (props: Record<string, unknown>) => {
+      received.push(props)
+      const root = props['rootConversation'] as { id: number }
+      return e(
+        'button',
+        {
+          type: 'button',
+          className: 'task-overview-pill-stub',
+          onClick: (event: React.SyntheticEvent) => {
+            event.stopPropagation()
+          },
+        },
+        `T-1 @${root.id}`,
+      )
+    },
+  })
+  const slotContribution = {
+    pluginId: 'builtin:tasks',
+    surface: 'plugin.slot' as const,
+    spec: {
+      id: 'overview-card-meta',
+      target: OVERVIEW_CARD_META_SLOT,
+      scope: { tags: ['task'] },
+      client: { module: 'overview-meta.tsx', export: 'TaskOverviewCardMeta' },
+    },
+  }
+  const store = overviewStore({
+    conversations: [
+      conv({ id: 1, title: '任务执行', profileId: 'assistant', tags: ['task'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 11, parentConversationId: 1, title: '子代理', status: 'idle', createdAt: 9100, updatedAt: 9100 }),
+      conv({ id: 2, title: '常规会话', profileId: 'coder', status: 'idle', createdAt: 8000, updatedAt: 8000 }),
+    ],
+    // clientHashes 对齐 seedPluginClientModule 的 contentHash（'seeded'）：
+    // PluginUiView 走内存缓存快路径，零网络请求（about:blank 下相对 URL fetch 必炸）。
+    plugins: [{ id: 'builtin:tasks', name: 'Tasks', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [], clientHashes: { 'overview-meta.tsx': 'seeded' } }],
+    primaryTarget: { kind: 'overview' },
+    uiContributions: [slotContribution],
+  })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(HostStoreProviders, { value: store }, e(ConversationOverview)))
+    })
+    // 先验证无贡献路径：scope 不命中的常规树零渲染。
+    const regularCard = [...container.querySelectorAll<HTMLElement>('.overview-card')].find((card) =>
+      card.textContent?.includes('常规会话'),
+    )
+    assert.ok(regularCard?.querySelector('.overview-card-meta-slot') === null, 'an out-of-scope card mounts no slot residue')
+
+    const taskCard = [...container.querySelectorAll<HTMLElement>('.overview-card')].find((card) =>
+      card.textContent?.includes('任务执行'),
+    )
+    const slotHost = taskCard?.querySelector<HTMLElement>('.overview-card-meta-slot') ?? null
+    assert.ok(slotHost !== null, 'the meta slot mounts inside the matching card')
+    const pill = slotHost.querySelector<HTMLElement>('.task-overview-pill-stub')
+    assert.ok(pill !== null, 'the contribution component renders inside the slot')
+    assert.ok(pill.textContent?.includes('T-1 @1'))
+    const last = received.at(-1)!
+    assert.equal((last['rootConversation'] as { id: number }).id, 1, 'slotProps carry the root conversation summary')
+    assert.deepEqual(last['memberIds'], [1, 11], 'slotProps carry the whole-tree member ids')
+
+    // 胶囊自身 stopPropagation：点击不误开卡片会话抽屉（外层不拦截冒泡，由贡献元素自理）。
+    await act(async () => {
+      pill.click()
+    })
+    assert.equal(store.getNavSlice().activeModal, null, 'clicking the pill does not trigger the card drawer')
+
+    // 贡献消失（插件停用）：插槽零残留。
+    await act(async () => {
+      store.updateLive((state) => ({ ...state, uiContributions: [] }))
+    })
+    assert.ok(taskCard?.querySelector('.overview-card-meta-slot') === null, 'a disabled plugin leaves no slot residue')
+  } finally {
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
+  }
+})
+
+test('Sidebar overview entry: the rail button is gone; the header button opens #/overview with the same-source tone dot', { timeout: 60_000 }, async () => {
   const store = overviewStore({
     conversations: [
       conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
@@ -331,8 +639,10 @@ test('Sidebar rail: the overview button opens #/overview and carries the same-so
       root = createRoot(container)
       root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
     })
-    const overviewBtn = container.querySelector<HTMLButtonElement>('.rail-overview-btn')
-    assert.ok(overviewBtn !== null, 'the host overview entry renders in the rail')
+    // Rail 总览按钮整特性删除：入口唯一收敛到侧栏头部（对话空间）。
+    assert.ok(container.querySelector('.rail-overview-btn') === null, 'the rail overview button is gone for good')
+    const overviewBtn = container.querySelector<HTMLButtonElement>('.sidebar-overview-open-btn')
+    assert.ok(overviewBtn !== null, 'the host overview entry renders in the sidebar header')
     assert.ok(
       overviewBtn.getAttribute('aria-label')?.includes('Conversation overview'),
       'the tooltip label states the overview',
@@ -344,20 +654,48 @@ test('Sidebar rail: the overview button opens #/overview and carries the same-so
     const primary = store.getPrimaryTarget()
     assert.ok(primary.kind === 'overview', 'clicking navigates to the overview stage')
 
-    // 无信号时灯点不渲染（诚实：无信号不装忙）
-    const quiet = overviewStore({
-      conversations: [conv({ id: 50, title: '安静', profileId: 'coder' })],
-      primaryTarget: { kind: 'conversation', conversationId: 50 },
+    // 主屏停总览时空间按钮一律不亮（Rail 已无总览按钮，双高亮无从谈起）。
+    const spaceBtns = [...container.querySelectorAll<HTMLButtonElement>('.rail-space-btn')]
+    assert.ok(spaceBtns.length === 3, 'three space buttons render')
+    for (const btn of spaceBtns) {
+      assert.ok(
+        !btn.classList.contains('rail-btn-active'),
+        `space button stays unlit on the overview stage (got: ${btn.getAttribute('aria-label')})`,
+      )
+    }
+
+    // 总览不占对话空间记忆位：从总览点「对话」空间按钮跳回记忆的会话目标，
+    // 绝不 no-op、绝不被总览劫持。
+    await act(async () => {
+      store.openTarget({ kind: 'conversation', conversationId: 50 })
     })
-    const html = renderToString(e(HelmxExternalStoreContext.Provider, { value: quiet }, e(Sidebar)))
-    assert.ok(html.includes('rail-overview-btn'), 'the overview button always renders')
-    assert.ok(!html.includes('rail-overview-dot'), 'no tone dot without any signal')
+    await act(async () => {
+      store.openTarget({ kind: 'overview' })
+    })
+    await act(async () => {
+      store.openSpace('conversations')
+    })
+    const jumped = store.getPrimaryTarget()
+    assert.ok(
+      jumped.kind === 'conversation' && jumped.conversationId === 50,
+      'the conversations space button jumps back to the remembered conversation target',
+    )
   } finally {
     await act(async () => {
       root?.unmount()
     })
     container.remove()
   }
+
+  // 无信号时灯点不渲染（诚实：无信号不装忙）
+  const quiet = overviewStore({
+    conversations: [conv({ id: 50, title: '安静', profileId: 'coder' })],
+    primaryTarget: { kind: 'conversation', conversationId: 50 },
+  })
+  const html = renderToString(e(HelmxExternalStoreContext.Provider, { value: quiet }, e(Sidebar)))
+  assert.ok(!html.includes('rail-overview-btn'), 'the rail overview button never renders')
+  assert.ok(html.includes('sidebar-overview-open-btn'), 'the header entry always renders in the conversations space')
+  assert.ok(!html.includes('rail-overview-dot'), 'no tone dot without any signal')
 })
 
 // ---------------------------------------------------------------------------
@@ -551,7 +889,7 @@ test('ConversationOverview data-ready gate: loading state before the first snaps
     })
     await act(async () => {
       root = createRoot(container)
-      root.render(e(HelmxExternalStoreContext.Provider, { value: loading }, e(ConversationOverview)))
+      root.render(e(HostStoreProviders, { value: loading }, e(ConversationOverview)))
     })
     assert.ok(container.textContent?.includes('Loading conversations'), 'pre-snapshot renders the loading state')
     assert.ok(!container.textContent?.includes('No conversations match'), 'never misreports unloaded as empty')
@@ -562,7 +900,7 @@ test('ConversationOverview data-ready gate: loading state before the first snaps
       primaryTarget: { kind: 'overview' },
     })
     await act(async () => {
-      root!.render(e(HelmxExternalStoreContext.Provider, { value: empty }, e(ConversationOverview)))
+      root!.render(e(HostStoreProviders, { value: empty }, e(ConversationOverview)))
     })
     assert.ok(container.textContent?.includes('No conversations match'), 'a genuinely empty synced workspace shows the honest empty state')
     assert.ok(!container.textContent?.includes('Loading conversations'), 'loading never sticks once data is ready')
@@ -570,7 +908,7 @@ test('ConversationOverview data-ready gate: loading state before the first snaps
     // 有会话即卡片（即使 SSE 瞬时断连也保留快照，不闪加载）。
     const stale = overviewScenarioStore()
     await act(async () => {
-      root!.render(e(HelmxExternalStoreContext.Provider, { value: stale }, e(ConversationOverview)))
+      root!.render(e(HostStoreProviders, { value: stale }, e(ConversationOverview)))
     })
     assert.ok(container.querySelectorAll('.overview-card').length > 0, 'cards render from the kept snapshot')
   } finally {

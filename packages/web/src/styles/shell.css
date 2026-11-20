@@ -556,12 +556,9 @@
 }
 
 
-/* 宿主「会话总览」直达按钮（#/overview）：与态势微标同源 tone 灯点，
- * 桌面折叠 Rail / 移动抽屉一键直达只读总览。 */
-.rail-overview-btn {
-  position: relative;
-}
-
+/* 总览同源 tone 灯点（6px 圆点）：宿主侧栏头部总览入口（搜索钮旁，相对定
+ * 位锚点由 .sidebar-overview-open-btn 提供）与移动端 MobileQuickNav 总览
+ * 按钮共用；有信号才渲染，全安静零灯。 */
 .rail-overview-dot {
   position: absolute;
   top: 3px;

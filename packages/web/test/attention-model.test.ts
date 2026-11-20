@@ -1,16 +1,16 @@
 /**
  * 全局并发态势（attention）测试：
- * - 纯函数契约：buildAttentionItems（根树聚合、三桶归属、代表位、诚实摘要、
- *   暴露边界——已归档根树/停用插件托管 Profile 不进态势、sidebarSection 接管的
- *   会话仍纳入；桶内 createdAt 倒序、updatedAt 翻动不引起跳位）、
- *   collectViewedAttentionRootIds / resolveGlobalAttentionIndicator（排除正在
+ * - 纯函数契约：aggregateAttentionTrees（根树聚合、三桶归属、代表位与直达
+ *   目标、暴露边界——已归档根树/停用插件托管 Profile 不进态势、sidebarSection
+ *   接管的会话仍纳入）、buildAttentionModel（indicator 成员级排除）、
+ *   collectViewedConversationIds / resolveGlobalAttentionIndicator（排除正在
  *   查看的根树、tone 优先级 error > blocked > running > done）、
- *   composeAttentionSummary（只列非零桶）；
+ *   composeHonestTreeSummary / composeAttentionSummary（只列非零桶）；
  * - 命令面板态势优先排序：selectRecentConversationsForPalette 可选 background
  *   索引（需处理 > 运行中 > 未读完成 > 其余按 updatedAt 倒序）；
- * - Sidebar 渲染与交互：态势平铺分组挂在待审批下方、空时零占位、行内代表位
- *   单灯、点击直达树内最新 blocked 会话、折叠头部收起行、Rail「对话空间」按钮
- *   同源态势微标与 aria 摘要；
+ * - Sidebar 渲染与交互：会话总览脉冲入口挂在待审批下方、智能体站位上方，
+ *   同源 tone 灯点与真实摘要副文、全安静时零灯零副文、点击直达 #/overview、
+ *   分屏按钮钉右分屏、Rail「会话总览」按钮同源态势微标与 aria 摘要；
  * - 挂载路径：useGlobalAttention 自洽发现并按需加载 workbench badge doc
  *   （移动端合着抽屉也不漏后台任务）；
  * - 命令面板渲染：会话行（最近 + 匹配）行首灯槽对齐展示 ConversationStatusDot。
@@ -25,12 +25,13 @@ import type { ConversationSummary, PluginUiContribution, ScreenSpec, SidebarItem
 import { ARCHIVED_TAG, type SidebarViewItem } from '../src/shell/sidebar-model.js'
 import type { ConversationBackgroundIndex } from '../src/shell/background-activity-model.js'
 import {
-  buildAttentionItems,
+  aggregateAttentionTrees,
   buildAttentionModel,
   collectViewedConversationIds,
   composeAttentionSummary,
+  composeHonestTreeSummary,
   resolveGlobalAttentionIndicator,
-  type AttentionTreeItem,
+  type GlobalAttentionIndicator,
 } from '../src/shell/attention-model.js'
 import { selectRecentConversationsForPalette } from '../src/shell/shortcuts-model.js'
 import { makeTestStore, HelmxExternalStoreContext, type TestStoreOverrides } from './helpers/store.js'
@@ -66,31 +67,29 @@ function conv(partial: Partial<ConversationSummary> & { id: number }): Conversat
   }
 }
 
-/** 无翻译器调用（英文桥接）时的构建捷径。 */
-function buildItems(
+/** 无翻译器调用（英文桥接）时的根树聚合捷径。 */
+function aggregate(
   conversations: ConversationSummary[],
   background: ConversationBackgroundIndex = new Map(),
   overrides: {
     profiles?: Array<{ id: string; name?: string; managedByPlugin?: string }>
     plugins?: Array<{ id: string; enabled: boolean }>
-    viewedConversationIds?: ReadonlySet<number>
   } = {},
-): AttentionTreeItem[] {
-  return buildAttentionItems({
+) {
+  return aggregateAttentionTrees({
     conversations,
     background,
     profiles: overrides.profiles ?? [],
     plugins: overrides.plugins ?? [],
-    ...(overrides.viewedConversationIds !== undefined ? { viewedConversationIds: overrides.viewedConversationIds } : {}),
   })
 }
 
-/** 无翻译器调用（英文桥接）时的成对模型构建捷径。 */
-function buildModel(
+/** 无翻译器调用（英文桥接）时的微标构建捷径（成员级排除语义）。 */
+function buildIndicator(
   conversations: ConversationSummary[],
   viewedConversationIds: ReadonlySet<number>,
   background: ConversationBackgroundIndex = new Map(),
-) {
+): GlobalAttentionIndicator {
   return buildAttentionModel({
     conversations,
     background,
@@ -104,60 +103,38 @@ function buildModel(
 // 纯函数：三桶归属与根树聚合
 // ---------------------------------------------------------------------------
 
-test('bucket assignment: blocked/pendingAsk/error trees need attention; working/background trees run; done+unread root is unread_done; silent trees are absent', { timeout: 60_000 }, () => {
-  const items = buildItems([
-    conv({ id: 1, status: 'blocked' }),
-    conv({ id: 2, status: 'error', lastError: 'model_error: boom' }),
-    conv({ id: 3, status: 'working' }),
-    conv({ id: 4, status: 'done', unread: true }),
-    conv({ id: 5, status: 'idle' }),
-    conv({ id: 6, status: 'done', unread: false }),
-  ])
-  assert.deepEqual(
-    items.map((item) => [item.root.id, item.bucket]),
-    [
-      [2, 'needs_attention'],
-      [1, 'needs_attention'],
-      [3, 'running'],
-      [4, 'unread_done'],
-    ],
-    'bucket order needs_attention > running > unread_done; idle and read-done trees never appear',
-  )
-  assert.deepEqual(
-    items.map((item) => item.tone),
-    ['error', 'blocked', 'running', 'done'],
-    'tone maps the bucket with error outranking blocked inside needs_attention',
-  )
-})
-
 test('tree aggregation: descendants roll up to the root tree; pendingAskCount counts as waiting; working child outranks the unread-done root', { timeout: 60_000 }, () => {
-  const items = buildItems([
+  const trees = aggregate([
     conv({ id: 1, status: 'done', unread: true, createdAt: 9000, updatedAt: 9000 }),
     conv({ id: 11, parentConversationId: 1, status: 'blocked', updatedAt: 9100 }),
     conv({ id: 12, parentConversationId: 11, status: 'idle' }),
     conv({ id: 2, status: 'idle', createdAt: 8000 }),
     conv({ id: 21, parentConversationId: 2, pendingAskCount: 1, status: 'idle' }),
   ])
-  assert.equal(items.length, 2, 'both roots keep exactly one aggregated item each')
-  const first = items[0]!
+  assert.equal(trees.length, 2, 'both roots keep exactly one aggregated tree each (grandchildren roll up too)')
+  const first = trees[0]!
   assert.equal(first.root.id, 1)
+  assert.equal(first.hasError, false)
   assert.equal(first.bucket, 'needs_attention', 'a blocked descendant needs attention even under an unread-done root')
   assert.equal(first.representative.id, 11, 'the representative is the highest-priority member (blocked outranks done)')
   assert.equal(first.targetConversationId, 11, 'click jumps straight to the blocked descendant (the approval spot)')
   assert.equal(first.activeDescendantCount, 1, 'the blocked descendant counts; idle ones do not')
-  const second = items[1]!
+  const second = trees[1]!
   assert.equal(second.bucket, 'needs_attention', 'pendingAskCount > 0 counts as waiting for human')
   assert.equal(second.targetConversationId, 21, 'the pending-ask member is the direct target')
+  // 安静树（bucket === null）也产出：总览「全部」视图需要，绝不失明。
+  const quiet = aggregate([conv({ id: 3, status: 'idle' }), conv({ id: 4, status: 'done', unread: false })])
+  assert.deepEqual(quiet.map((tree) => tree.bucket), [null, null], 'silent trees surface with a null bucket for the overview')
 })
 
 test('exposure boundaries: archived roots and disabled-plugin-managed profiles stay out; sidebarSection-tagged active conversations stay in', { timeout: 60_000 }, () => {
-  const archived = buildItems([
+  const archived = aggregate([
     conv({ id: 1, tags: [ARCHIVED_TAG], status: 'working' }),
     conv({ id: 11, parentConversationId: 1, status: 'blocked' }),
   ])
   assert.equal(archived.length, 0, 'an archived root tree never enters attention even with active descendants')
 
-  const hiddenByPlugin = buildItems(
+  const hiddenByPlugin = aggregate(
     [conv({ id: 2, status: 'working' })],
     new Map(),
     {
@@ -167,7 +144,7 @@ test('exposure boundaries: archived roots and disabled-plugin-managed profiles s
   )
   assert.equal(hiddenByPlugin.length, 0, 'a profile hidden behind a disabled plugin hides its tree')
 
-  const shownByPlugin = buildItems(
+  const shownByPlugin = aggregate(
     [conv({ id: 3, status: 'working' })],
     new Map(),
     {
@@ -175,62 +152,61 @@ test('exposure boundaries: archived roots and disabled-plugin-managed profiles s
       plugins: [{ id: 'builtin:on', enabled: true }],
     },
   )
-  assert.equal(shownByPlugin[0]?.profileLabel, '个人助理', 'an enabled managed profile keeps its tree with the profile display name')
+  assert.equal(shownByPlugin.length, 1, 'an enabled managed profile keeps its tree visible')
 
-  const sectionTagged = buildItems([conv({ id: 4, tags: ['task'], status: 'working' })])
+  const sectionTagged = aggregate([conv({ id: 4, tags: ['task'], status: 'working' })])
   assert.equal(sectionTagged.length, 1, 'conversations taken over by sidebar sections still surface in attention')
-
-  const orphanProfile = buildItems([conv({ id: 5, status: 'working', profileId: 'ghost' })], new Map(), {
-    profiles: [{ id: 'assistant', name: '个人助理' }],
-  })
-  assert.equal(orphanProfile[0]?.profileLabel, 'ghost', 'an unknown profile falls back to the raw profileId, never fabricated')
-})
-
-test('ordering: buckets first, then root.createdAt descending; updatedAt churn never reorders rows', { timeout: 60_000 }, () => {
-  const base = [
-    conv({ id: 1, status: 'working', createdAt: 1000, updatedAt: 1000 }),
-    conv({ id: 2, status: 'working', createdAt: 2000, updatedAt: 2000 }),
-    conv({ id: 3, status: 'blocked', createdAt: 3000, updatedAt: 3000 }),
-  ]
-  const before = buildItems(base).map((item) => item.root.id)
-  const churned = buildItems(base.map((c) => (c.id === 1 ? { ...c, updatedAt: 99999 } : c))).map((item) => item.root.id)
-  assert.deepEqual(before, [3, 2, 1], 'needs_attention bucket precedes running; within a bucket createdAt descending')
-  assert.deepEqual(churned, before, 'updatedAt churn (streaming output) must never jump rows')
 })
 
 test('honest summaries: lastError / doing / background summary / descendant count, in that priority; nothing is fabricated', { timeout: 60_000 }, () => {
-  const errorTree = buildItems([conv({ id: 1, status: 'error', lastError: 'model_error: boom' })])
-  assert.equal(errorTree[0]?.summaryText, 'model_error: boom')
+  const summarize = (partial: Partial<ConversationSummary> & { id: number }): string =>
+    composeHonestTreeSummary({
+      representative: conv(partial),
+      backgroundActive: false,
+      backgroundSummary: '',
+      activeDescendantCount: 0,
+    })
+  assert.equal(summarize({ id: 1, status: 'error', lastError: 'model_error: boom' }), 'model_error: boom')
+  assert.equal(summarize({ id: 2, status: 'working', doing: '正在重构解析器' }), '正在重构解析器')
+  assert.equal(summarize({ id: 5, status: 'done', unread: true }), '', 'an unread completion fabricates no progress text')
 
-  const workingTree = buildItems([conv({ id: 2, status: 'working', doing: '正在重构解析器' })])
-  assert.equal(workingTree[0]?.summaryText, '正在重构解析器')
-
+  // 后台摘要：代表位安静且后台在途时如实呈现 badge footer。
+  assert.equal(
+    composeHonestTreeSummary({
+      representative: conv({ id: 3, status: 'idle' }),
+      backgroundActive: true,
+      backgroundSummary: '2 Running',
+      activeDescendantCount: 0,
+    }),
+    '2 Running',
+  )
+  // 后代运行计数：无 doing 文本的工作后代回退到真实计数（英文桥接文案）。
+  assert.equal(
+    composeHonestTreeSummary({
+      representative: conv({ id: 4, status: 'idle' }),
+      backgroundActive: false,
+      backgroundSummary: '',
+      activeDescendantCount: 2,
+    }),
+    '2 sub-conversations active',
+  )
+  // 聚合链路：idle 根 + 后台在途后代 → bucket=running 且摘要取后台事实。
   const background = new Map([[3, { active: true, summary: '2 Running' }]] as const)
-  const backgroundTree = buildItems([conv({ id: 3, status: 'idle' })], background)
-  assert.equal(backgroundTree[0]?.bucket, 'running')
-  assert.equal(backgroundTree[0]?.backgroundActive, true)
-  assert.equal(backgroundTree[0]?.backgroundSummary, '2 Running')
-  assert.equal(backgroundTree[0]?.summaryText, '2 Running', 'an idle tree with background work honestly surfaces the badge footer')
-
-  const silentActiveTree = buildItems([
-    conv({ id: 4, status: 'idle', createdAt: 9000 }),
-    conv({ id: 41, parentConversationId: 4, status: 'working', createdAt: 9100, updatedAt: 9100 }),
-  ])
-  assert.equal(silentActiveTree[0]?.summaryText, '1 sub-conversations active', 'a working descendant with no doing text falls back to the honest descendant count')
-
-  const unreadTree = buildItems([conv({ id: 5, status: 'done', unread: true })])
-  assert.equal(unreadTree[0]?.summaryText, '', 'an unread completion fabricates no progress text')
+  const backgroundTree = aggregate([conv({ id: 3, status: 'idle' })], background)[0]!
+  assert.equal(backgroundTree.bucket, 'running')
+  assert.equal(backgroundTree.backgroundActive, true)
+  assert.equal(backgroundTree.backgroundSummary, '2 Running')
 })
 
 test('representative and target selection are deterministic on recency ties', { timeout: 60_000 }, () => {
-  const items = buildItems([
+  const trees = aggregate([
     conv({ id: 1, status: 'idle', createdAt: 9000, updatedAt: 9000 }),
     conv({ id: 11, parentConversationId: 1, status: 'blocked', createdAt: 9100, updatedAt: 9500 }),
     conv({ id: 12, parentConversationId: 1, status: 'blocked', createdAt: 9200, updatedAt: 9500 }),
   ])
-  const item = items[0]!
-  assert.equal(item.representative.id, 12, 'equal updatedAt keeps the higher id (deterministic)')
-  assert.equal(item.targetConversationId, 12, 'the most recently updated blocked conversation is the direct jump target')
+  const tree = trees[0]!
+  assert.equal(tree.representative.id, 12, 'equal updatedAt keeps the higher id (deterministic)')
+  assert.equal(tree.targetConversationId, 12, 'the most recently updated blocked conversation is the direct jump target')
 })
 
 // ---------------------------------------------------------------------------
@@ -251,13 +227,13 @@ test('collectViewedConversationIds: exact main/split conversation ids (member-le
 })
 
 test('resolveGlobalAttentionIndicator: aggregate-all counting with tone priority error > blocked > running > done', { timeout: 60_000 }, () => {
-  const items = buildItems([
-    conv({ id: 1, status: 'error' }),
-    conv({ id: 2, status: 'blocked' }),
-    conv({ id: 3, status: 'working' }),
-    conv({ id: 4, status: 'done', unread: true }),
-  ])
-  const full = resolveGlobalAttentionIndicator(items)
+  const entries = [
+    { bucket: 'needs_attention' as const, tone: 'error' as const },
+    { bucket: 'needs_attention' as const, tone: 'blocked' as const },
+    { bucket: 'running' as const, tone: 'running' as const },
+    { bucket: 'unread_done' as const, tone: 'done' as const },
+  ]
+  const full = resolveGlobalAttentionIndicator(entries)
   assert.deepEqual(
     [full.needsAttentionCount, full.runningCount, full.unreadDoneCount, full.totalCount, full.tone],
     [2, 1, 1, 4, 'error'],
@@ -273,27 +249,28 @@ test('member-level exclusion: viewing one descendant never erases a sibling ask 
     conv({ id: 12, parentConversationId: 1, status: 'blocked', createdAt: 9200, updatedAt: 9200 }),
   ]
   // Viewing descendant 11 (main) while sibling 12 still waits: the badge must keep alerting.
-  const siblingWaiting = buildModel(conversations, new Set([11]))
-  assert.equal(siblingWaiting.items.length, 1, 'the flat item still renders (display is never excluded)')
-  assert.equal(siblingWaiting.indicator.needsAttentionCount, 1, 'the sibling blocked ask keeps the badge counting')
-  assert.equal(siblingWaiting.indicator.tone, 'blocked')
+  const siblingWaiting = buildIndicator(conversations, new Set([11]))
+  assert.equal(siblingWaiting.needsAttentionCount, 1, 'the sibling blocked ask keeps the badge counting')
+  assert.equal(siblingWaiting.tone, 'blocked')
   // Viewing the only waiting member: the tree's whole signal sits on the viewed conversation -> silent.
-  const allViewed = buildModel(conversations, new Set([11, 12]))
-  assert.equal(allViewed.indicator.totalCount, 0, 'no self-alerting when every signal is on the viewed conversation')
-  assert.equal(allViewed.indicator.tone, null)
+  const allViewed = buildIndicator(conversations, new Set([11, 12]))
+  assert.equal(allViewed.totalCount, 0, 'no self-alerting when every signal is on the viewed conversation')
+  assert.equal(allViewed.tone, null)
   // Viewed root with an un-viewed working child: the running fact still counts.
-  const rootViewed = buildModel(
+  const rootViewed = buildIndicator(
     [
       conv({ id: 2, status: 'idle', createdAt: 8000, updatedAt: 8000 }),
       conv({ id: 21, parentConversationId: 2, status: 'working', createdAt: 8100, updatedAt: 8100 }),
     ],
     new Set([2]),
   )
-  assert.equal(rootViewed.indicator.runningCount, 1, 'viewing the root does not erase the running descendant')
+  assert.equal(rootViewed.runningCount, 1, 'viewing the root does not erase the running descendant')
   // Viewed unread-done root: read-on-view honestly silences only that tree.
-  const unreadRoot = buildModel([conv({ id: 3, status: 'done', unread: true })], new Set([3]))
-  assert.equal(unreadRoot.indicator.totalCount, 0, 'viewing the unread completion drops it from the badge')
-  assert.equal(unreadRoot.items.length, 1, 'but the flat item still renders until marked read')
+  const unreadRoot = buildIndicator([conv({ id: 3, status: 'done', unread: true })], new Set([3]))
+  assert.equal(unreadRoot.totalCount, 0, 'viewing the unread completion drops it from the badge')
+  // error 树在 waiting 树之上有最高 tone 优先级（error > blocked）。
+  const errorTree = buildIndicator([conv({ id: 4, status: 'error', lastError: 'boom' }), conv({ id: 5, status: 'blocked' })], new Set())
+  assert.equal(errorTree.tone, 'error', 'an error tree outranks blocked trees in the aggregate tone')
 })
 
 test('composeAttentionSummary lists only non-zero buckets', { timeout: 60_000 }, () => {
@@ -337,7 +314,7 @@ test('selectRecentConversationsForPalette: attention tiers first (error/blocked 
 })
 
 // ---------------------------------------------------------------------------
-// Sidebar 渲染：态势平铺分组与 Rail 微标
+// Sidebar 渲染：会话总览脉冲入口与 Rail 微标
 // ---------------------------------------------------------------------------
 
 const BASE_PROFILES = [
@@ -366,27 +343,25 @@ function attentionScenarioStore(): HelmxExternalStore {
   })
 }
 
-test('Sidebar renders the attention group between the pending asks panel and agent standings, with honest rows', { timeout: 60_000 }, () => {
+test('Sidebar header keeps the overview icon button next to the command palette search, with the same-source tone dot', { timeout: 60_000 }, () => {
   const html = renderSidebar(attentionScenarioStore())
-  const groupIdx = html.indexOf('sidebar-attention-group')
-  const asksIdx = html.indexOf('pending-asks-group')
-  const standingsIdx = html.indexOf('agent-standing-group')
-  assert.ok(groupIdx > 0, 'the attention group renders')
-  assert.ok(asksIdx === -1 || asksIdx < groupIdx, 'attention mounts below the pending asks panel (which is absent when empty)')
-  assert.ok(standingsIdx > groupIdx, 'attention mounts above the agent standings group')
-
-  assert.ok(html.includes('>Attention</span>'), 'the bilingual group title renders (en default)')
-  const rows = html.match(/class="nav-item nav-item-sub attention-row/g) ?? []
-  assert.equal(rows.length, 2, 'one row per root tree: the error tree and the running tree')
-  assert.ok(html.includes('class="status-dot status-dot-error"'), 'the error tree row carries the representative error light')
-  assert.ok(html.includes('class="status-dot status-dot-working"'), 'the running tree row carries the working light')
-  assert.ok(html.includes('个人助理 · model_error: boom'), 'the sub-line states the profile label plus the real lastError, never fabricated progress')
-  assert.ok(html.includes('编码专员 · 正在检索文档'), 'the running row sub-line states the real doing text')
-  assert.ok(html.includes('title="Open conversation 12"'), 'the error tree row jumps straight to the newest blocked descendant (the approval spot)')
-})
-
-test('Sidebar renders no attention group when nothing needs attention', { timeout: 60_000 }, () => {
-  const html = renderSidebar(
+  const btnIdx = html.indexOf('sidebar-overview-open-btn')
+  const headerIdx = html.indexOf('sidebar-header')
+  const scrollIdx = html.indexOf('sidebar-scroll')
+  const searchIdx = html.indexOf('aria-label="Open Cmd K global search')
+  assert.ok(searchIdx > 0, 'the command palette search button renders')
+  assert.ok(btnIdx > 0, 'the overview header button renders')
+  assert.ok(headerIdx > 0 && btnIdx > headerIdx && (scrollIdx < 0 || btnIdx < scrollIdx), 'the button lives in the sidebar header, not the list body')
+  assert.ok(btnIdx > searchIdx && btnIdx - searchIdx < 900, 'the button sits right after the command palette search button')
+  const btn = html.match(/<button[^>]*class="[^"]*sidebar-overview-open-btn[^"]*"[^>]*>/)?.[0] ?? ''
+  assert.ok(btn !== '', 'the button carries its stable class hook')
+  // 同源 tone 灯点：有信号时随钮渲染（rail-overview-dot 同一词汇与事实源）；
+  // 全安静时零灯（不装忙）。
+  const btnEnd = html.indexOf('</button>', btnIdx)
+  const btnInner = html.slice(btnIdx, btnEnd < 0 ? undefined : btnEnd)
+  assert.ok(btnInner.includes('rail-overview-dot'), 'the same-source tone dot rides the header button when a tree has a signal')
+  assert.ok(btnInner.includes('data-tone="error"'), 'the dot states the honest top tone (error leads the scenario)')
+  const quietHtml = renderSidebar(
     sidebarStore({
       conversations: [
         conv({ id: 50, title: '当前查看', profileId: 'coder', status: 'idle' }),
@@ -395,10 +370,16 @@ test('Sidebar renders no attention group when nothing needs attention', { timeou
       primaryTarget: { kind: 'conversation', conversationId: 50 },
     }),
   )
-  assert.ok(!html.includes('sidebar-attention-group'), 'zero visual residue when no tree qualifies')
+  const quietBtnStart = quietHtml.indexOf('sidebar-overview-open-btn')
+  const quietBtnEnd = quietHtml.indexOf('</button>', quietBtnStart)
+  const quietInner = quietHtml.slice(quietBtnStart, quietBtnEnd < 0 ? undefined : quietBtnEnd)
+  assert.ok(quietBtnStart > 0 && !quietInner.includes('rail-overview-dot'), 'no dot without any signal (honest quiet)')
+  assert.ok(!html.includes('sidebar-overview-entry'), 'the pulse entry row is gone for good')
+  assert.ok(!html.includes('sidebar-attention-group'), 'the legacy flat attention group is gone for good')
+  assert.ok(!html.includes('attention-row'), 'no legacy attention row residue')
 })
 
-test('interaction: clicking an attention row opens the direct target; the header collapses the rows', { timeout: 60_000 }, async () => {
+test('interaction: clicking the header overview button opens #/overview', { timeout: 60_000 }, async () => {
   const store = attentionScenarioStore()
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -408,24 +389,13 @@ test('interaction: clicking an attention row opens the direct target; the header
       root = createRoot(container)
       root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
     })
-    const row = container.querySelectorAll('.attention-row')[0]
-    assert.ok(row !== undefined, 'two rows render')
+    const btn = container.querySelector<HTMLButtonElement>('.sidebar-overview-open-btn')
+    assert.ok(btn !== null, 'the header overview button renders')
     await act(async () => {
-      row.querySelector<HTMLButtonElement>('.nav-item-main')?.click()
+      btn.click()
     })
     const primary = store.getPrimaryTarget()
-    assert.ok(
-      primary.kind === 'conversation' && primary.conversationId === 12,
-      'clicking the error tree jumps straight to the newest blocked descendant (the approval spot)',
-    )
-    const header = container.querySelector<HTMLButtonElement>('.sidebar-attention-group .sidebar-group-header-toggle')
-    assert.ok(header !== null, 'the collapsible header renders')
-    assert.ok(header.getAttribute('aria-expanded') === 'true', 'expanded by default')
-    await act(async () => {
-      header.click()
-    })
-    assert.equal(container.querySelectorAll('.attention-row').length, 0, 'collapsing hides the rows')
-    assert.ok(header.getAttribute('aria-expanded') === 'false', 'aria-expanded flips honestly')
+    assert.ok(primary.kind === 'overview', 'clicking the header button navigates to the overview stage')
   } finally {
     await act(async () => {
       root?.unmount()
@@ -626,7 +596,7 @@ test('Sidebar renders rail quick entries and disables with the plugin contributi
 })
 
 // ---------------------------------------------------------------------------
-// 移动端抽屉：任何空间都能看到态势平铺区（拉开汉堡即可一键行动）
+// 移动端抽屉：对话空间顶部保留总览脉冲入口（拉开汉堡即可一键行动）
 // ---------------------------------------------------------------------------
 
 function stubMobileMatchMedia(): () => void {
@@ -648,7 +618,7 @@ function stubMobileMatchMedia(): () => void {
   }
 }
 
-test('the attention flat group mounts only in the conversations space (mobile drawer included)', { timeout: 60_000 }, () => {
+test('the overview entry mounts only in the conversations space (mobile drawer included)', { timeout: 60_000 }, () => {
   const htmlInViewsSpace = (mobile: boolean): string => {
     const restore = mobile ? stubMobileMatchMedia() : undefined
     try {
@@ -665,8 +635,8 @@ test('the attention flat group mounts only in the conversations space (mobile dr
       restore?.()
     }
   }
-  assert.ok(!htmlInViewsSpace(true).includes('sidebar-attention-group'), 'mobile: the views space keeps its own list without the attention flat group')
-  assert.ok(!htmlInViewsSpace(false).includes('sidebar-attention-group'), 'desktop: the views space stays clean')
+  assert.ok(!htmlInViewsSpace(true).includes('sidebar-overview-open-btn'), 'mobile: the views space keeps its own header without the overview button')
+  assert.ok(!htmlInViewsSpace(false).includes('sidebar-overview-open-btn'), 'desktop: the views space stays clean')
   const restoreMobile = stubMobileMatchMedia()
   try {
     const html = renderSidebar(
@@ -675,7 +645,7 @@ test('the attention flat group mounts only in the conversations space (mobile dr
         primaryTarget: { kind: 'conversation', conversationId: 2 },
       }),
     )
-    assert.ok(html.includes('sidebar-attention-group'), 'the conversations space (mobile drawer included) still shows the attention flat group')
+    assert.ok(html.includes('sidebar-overview-open-btn'), 'the conversations space (mobile drawer included) still shows the overview header button')
   } finally {
     restoreMobile()
   }
