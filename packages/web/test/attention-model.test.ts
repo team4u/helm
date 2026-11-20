@@ -343,7 +343,7 @@ function attentionScenarioStore(): HelmxExternalStore {
   })
 }
 
-test('Sidebar header keeps a plain overview icon button next to the command palette search (conversations space)', { timeout: 60_000 }, () => {
+test('Sidebar header keeps the overview icon button next to the command palette search, with the same-source tone dot', { timeout: 60_000 }, () => {
   const html = renderSidebar(attentionScenarioStore())
   const btnIdx = html.indexOf('sidebar-overview-open-btn')
   const headerIdx = html.indexOf('sidebar-header')
@@ -353,10 +353,27 @@ test('Sidebar header keeps a plain overview icon button next to the command pale
   assert.ok(btnIdx > 0, 'the overview header button renders')
   assert.ok(headerIdx > 0 && btnIdx > headerIdx && (scrollIdx < 0 || btnIdx < scrollIdx), 'the button lives in the sidebar header, not the list body')
   assert.ok(btnIdx > searchIdx && btnIdx - searchIdx < 900, 'the button sits right after the command palette search button')
-  // 入口收敛为素图标钮：无灯点、无态势摘要（逐树明细只在总览页呈现，不装忙）。
   const btn = html.match(/<button[^>]*class="[^"]*sidebar-overview-open-btn[^"]*"[^>]*>/)?.[0] ?? ''
   assert.ok(btn !== '', 'the button carries its stable class hook')
-  assert.ok(!btn.includes('status-dot'), 'the plain entry button carries no indicator light')
+  // 同源 tone 灯点：有信号时随钮渲染（rail-overview-dot 同一词汇与事实源）；
+  // 全安静时零灯（不装忙）。
+  const btnEnd = html.indexOf('</button>', btnIdx)
+  const btnInner = html.slice(btnIdx, btnEnd < 0 ? undefined : btnEnd)
+  assert.ok(btnInner.includes('rail-overview-dot'), 'the same-source tone dot rides the header button when a tree has a signal')
+  assert.ok(btnInner.includes('data-tone="error"'), 'the dot states the honest top tone (error leads the scenario)')
+  const quietHtml = renderSidebar(
+    sidebarStore({
+      conversations: [
+        conv({ id: 50, title: '当前查看', profileId: 'coder', status: 'idle' }),
+        conv({ id: 51, title: '安静', profileId: 'coder', status: 'done', unread: false }),
+      ],
+      primaryTarget: { kind: 'conversation', conversationId: 50 },
+    }),
+  )
+  const quietBtnStart = quietHtml.indexOf('sidebar-overview-open-btn')
+  const quietBtnEnd = quietHtml.indexOf('</button>', quietBtnStart)
+  const quietInner = quietHtml.slice(quietBtnStart, quietBtnEnd < 0 ? undefined : quietBtnEnd)
+  assert.ok(quietBtnStart > 0 && !quietInner.includes('rail-overview-dot'), 'no dot without any signal (honest quiet)')
   assert.ok(!html.includes('sidebar-overview-entry'), 'the pulse entry row is gone for good')
   assert.ok(!html.includes('sidebar-attention-group'), 'the legacy flat attention group is gone for good')
   assert.ok(!html.includes('attention-row'), 'no legacy attention row residue')
