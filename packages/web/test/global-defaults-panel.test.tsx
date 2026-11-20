@@ -196,23 +196,19 @@ test('GlobalDefaultsPanel: partially filled per-model rows block saving with a l
     await click(addBtn)
     assert.ok(panel.container.querySelector('#model-defaults-permodel-0'), 'added row renders a picker')
 
-    // Open the picker popover (portalled to document.body); staging a model does not commit,
-    // applying with the default level leaves the row partial (model without a level).
+    // Open the picker popover (portalled to document.body); clicking a row body
+    // commits the model without a level, leaving the row partial (a per-model
+    // default row requires an explicit level chip).
     const rowBtn = panel.container.querySelector('#model-defaults-permodel-0') as HTMLButtonElement
     await click(rowBtn)
     const popover = document.body.querySelector('.composer-model-popover')
     assert.ok(popover, 'the model picker popover opens')
-    const pickBtn = Array.from(popover.querySelectorAll('button.popover-item')).find(
-      (btn) => (btn.textContent ?? '').includes('claude-3-7-sonnet'),
+    const pickBtn = Array.from(popover.querySelectorAll('button.composer-model-row-main')).find(
+      (btn) => btn.textContent?.includes('claude-3-7-sonnet'),
     )
     assert.ok(pickBtn, 'model option must appear in the picker popover')
     await click(pickBtn!)
-    assert.match(rowBtn.textContent ?? '', /Select a model/, 'staging alone does not commit the row')
-    const defaultLevelBtn = Array.from(popover.querySelectorAll('button.composer-model-default-btn')).find(
-      (btn) => (btn.textContent ?? '').includes('Use default level'),
-    )
-    assert.ok(defaultLevelBtn, 'the apply bar offers the default-level action')
-    await click(defaultLevelBtn!)
+    assert.match(rowBtn.textContent ?? '', /claude-3-7-sonnet/, 'the row body click commits the model with an empty level')
 
     const saveBtn = Array.from(panel.container.querySelectorAll('button')).find(
       (btn) => (btn.textContent ?? '').includes('Save global defaults'),
