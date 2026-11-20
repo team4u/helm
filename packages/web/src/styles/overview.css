@@ -2,21 +2,24 @@
  * 卡片 = 一棵根会话树的真实事实聚合（复用态势模型口径）；后代会话以状态
  * 芯片直达（复用既有会话抽屉）；移动端筛选折行、网格单列化。 */
 
+/* 工具栏统一 10px 单一间距节奏（组间=组内）；筛选下拉用默认档（27px 高、
+ * 12.5px 字、7px 圆角）与分段器（28px）同量级，宽度由内容决定（104px
+ * 下限兜住占位文案 + chevron），不再用 132px 死宽度撑出空白带。 */
 .overview-toolbar {
   flex-wrap: wrap;
-  gap: 10px 14px;
+  gap: 10px;
 }
 
 .overview-filter-selects {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
   flex-wrap: wrap;
 }
 
 .overview-filter-select {
-  min-width: 132px;
+  min-width: 104px;
 }
 
 .overview-grid {
@@ -271,7 +274,7 @@
 
   .overview-filter-select {
     flex: 1;
-    min-width: 118px;
+    min-width: 104px;
   }
 
   .overview-batch-bar {
