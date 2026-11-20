@@ -12,6 +12,13 @@ const DEFAULT_TIMEOUT_MS = 30_000
 
 const normalizeUrl = (url: string): string => url.trim().replace(/\/+$/, '')
 
+/** Error with AbortError semantics thrown by the stream abort race (classified as code 'aborted' by callers). */
+function streamAbortError(): Error {
+  const err = new Error('stream cancelled')
+  err.name = 'AbortError'
+  return err
+}
+
 export interface HubEndpoint {
   baseUrl: string
   token?: string
@@ -228,6 +235,48 @@ export class HubClient {
   }
 
   /**
+   * Race one chunk read against the caller's abort signal. Why: on long-lived undici SSE
+   * connections a pending read() does not reliably reject when the fetch AbortSignal fires,
+   * so consumer-loop exit must never depend on that side effect alone. The losing read()
+   * promise keeps a no-op catch so its eventual rejection can never surface as
+   * unhandledRejection after the race has already settled.
+   */
+  private readChunkWithAbort(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+    signal?: AbortSignal,
+  ): Promise<ReadableStreamReadResult<Uint8Array>> {
+    if (signal?.aborted) throw streamAbortError()
+    if (!signal) return reader.read()
+    const read = reader.read()
+    read.catch(() => {})
+    const abort = new Promise<never>((_, reject) => {
+      const onAbort = (): void => reject(streamAbortError())
+      const stopTracking = (): void => signal.removeEventListener('abort', onAbort)
+      signal.addEventListener('abort', onAbort, { once: true })
+      // read settled first: drop the listener so per-chunk abort handlers never accumulate.
+      read.then(stopTracking, stopTracking)
+    })
+    return Promise.race([read, abort])
+  }
+
+  /**
+   * Bounded reader teardown: reader.cancel() itself can hang on a wedged stream, so race it
+   * against a short unref'd timer and always release the lock — cleanup must never trade one
+   * unbounded wait for another.
+   */
+  private async cancelReaderBounded(reader: ReadableStreamDefaultReader<Uint8Array>, timeoutMs = 500): Promise<void> {
+    const bounded = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, timeoutMs)
+      timer.unref?.()
+    })
+    try {
+      await Promise.race([reader.cancel().catch(() => {}), bounded])
+    } finally {
+      reader.releaseLock()
+    }
+  }
+
+  /**
    * NDJSON streaming POST: consumes response.body chunk by chunk (never buffers the full response),
    * parsing each complete line as JSON and passing it to onLine; the trailing line may omit a newline.
    * Parse and consumer errors propagate directly; cancellation closes the reader so the Hub stops the command.
@@ -285,7 +334,7 @@ export class HubClient {
     try {
       for (;;) {
         opts.signal?.throwIfAborted()
-        const { done, value } = await reader.read()
+        const { done, value } = await this.readChunkWithAbort(reader, opts.signal)
         if (done) break
         buffer += decoder.decode(value, { stream: true })
         let newline = buffer.indexOf('\n')
@@ -307,8 +356,7 @@ export class HubClient {
       }
       throw err
     } finally {
-      await reader.cancel().catch(() => {})
-      reader.releaseLock()
+      await this.cancelReaderBounded(reader)
     }
   }
 
@@ -316,6 +364,10 @@ export class HubClient {
    * Subscribe to any GET SSE endpoint (shares framing parser with /api/events): handles both \n\n and \r\n\r\n,
    * forwarding event name and data payload to onFrame. Connection/HTTP errors use the unified envelope
    * (404 etc. throw structured CliError so callers can decide whether to stop retrying).
+   * The timeout applies only to establishing the connection; once open, consumption exits on caller
+   * abort via an explicit race (a pending read() on an aborted long-lived undici stream may never
+   * reject), never on read() rejection alone. onFrame commonly aborts synchronously (watch settle):
+   * the parse loop checks right after each frame and stops before issuing another read().
    */
   async streamSse(
     path: string,
@@ -336,7 +388,6 @@ export class HubClient {
         redirect: 'error',
       })
     } catch (err) {
-      clearTimeout(connectTimer)
       if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
         if (callerAborted()) throw new CliError('cancelled', 'aborted')
         throw new CliError(`connection timed out (${this.timeoutMs}ms): GET ${path}`, 'timeout')
@@ -345,8 +396,9 @@ export class HubClient {
         `cannot connect to Hub (${this.endpoint.baseUrl}): ${err instanceof Error ? err.message : String(err)}`,
         'hub_unreachable',
       )
+    } finally {
+      clearTimeout(connectTimer)
     }
-    clearTimeout(connectTimer)
     if (callerAborted()) throw new CliError('cancelled', 'aborted')
     if (!response.ok || !response.body) throw await this.toCliError(response, `GET ${path}`)
     const reader = (response.body as ReadableStream<Uint8Array>).getReader()
@@ -354,7 +406,7 @@ export class HubClient {
     let buffer = ''
     try {
       for (;;) {
-        const { done, value } = await reader.read()
+        const { done, value } = await this.readChunkWithAbort(reader, listeners.signal)
         if (done) break
         buffer = (buffer + decoder.decode(value, { stream: true })).replaceAll('\r\n', '\n')
         let boundary = buffer.indexOf('\n\n')
@@ -370,6 +422,7 @@ export class HubClient {
           }
           if (dataLines.length === 0) continue // comment or keepalive frame
           listeners.onFrame({ event, data: dataLines.join('\n') })
+          if (callerAborted()) throw new CliError('cancelled', 'aborted')
         }
       }
     } catch (err) {
@@ -379,15 +432,14 @@ export class HubClient {
       }
       throw err
     } finally {
-      reader.releaseLock()
-      await (response.body as ReadableStream<Uint8Array>).cancel().catch(() => {})
+      await this.cancelReaderBounded(reader)
     }
   }
 
   /**
-   * Subscribe to `GET /api/events` via SSE. The timeout applies only to establishing the connection;
-   * once open, the stream is controlled solely by the caller's AbortSignal.
-   * Supports both \n\n and \r\n\r\n frame delimiters, forwarding event and data to onFrame.
+   * Subscribe to `GET /api/events` via SSE: a plain delegation to streamSse (identical contract;
+   * the former duplicated copy is collapsed here). The timeout applies only to establishing the
+   * connection; once open, the stream is controlled solely by the caller's AbortSignal.
    */
   async streamEvents(
     listeners: {
@@ -395,64 +447,6 @@ export class HubClient {
       signal?: AbortSignal
     },
   ): Promise<void> {
-    const path = '/api/events'
-    const connectController = new AbortController()
-    const connectTimer = setTimeout(() => connectController.abort(), this.timeoutMs)
-    connectTimer.unref?.()
-    const callerAborted = (): boolean => listeners.signal?.aborted === true
-    let response: Response
-    try {
-      response = await this.io.fetchImpl(`${this.endpoint.baseUrl}${path}`, {
-        headers: this.authHeaders({ accept: 'text/event-stream' }),
-        signal: AbortSignal.any([connectController.signal, ...(listeners.signal ? [listeners.signal] : [])]),
-        redirect: 'error',
-      })
-    } catch (err) {
-      clearTimeout(connectTimer)
-      if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
-        if (callerAborted()) throw new CliError('cancelled', 'aborted')
-        throw new CliError(`connection timed out (${this.timeoutMs}ms): GET ${path}`, 'timeout')
-      }
-      throw new CliError(
-        `cannot connect to Hub (${this.endpoint.baseUrl}): ${err instanceof Error ? err.message : String(err)}`,
-        'hub_unreachable',
-      )
-    }
-    clearTimeout(connectTimer)
-    if (callerAborted()) throw new CliError('cancelled', 'aborted')
-    if (!response.ok || !response.body) throw await this.toCliError(response, `GET ${path}`)
-    const reader = (response.body as ReadableStream<Uint8Array>).getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-    try {
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buffer = (buffer + decoder.decode(value, { stream: true })).replaceAll('\r\n', '\n')
-        let boundary = buffer.indexOf('\n\n')
-        while (boundary !== -1) {
-          const block = buffer.slice(0, boundary)
-          buffer = buffer.slice(boundary + 2)
-          boundary = buffer.indexOf('\n\n')
-          let event = 'message'
-          const dataLines: string[] = []
-          for (const line of block.split('\n')) {
-            if (line.startsWith('event:')) event = line.slice(6).trim()
-            else if (line.startsWith('data:')) dataLines.push(line.slice(5).trimStart())
-          }
-          if (dataLines.length === 0) continue // comment or keepalive frame
-          listeners.onFrame({ event, data: dataLines.join('\n') })
-        }
-      }
-    } catch (err) {
-      if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) {
-        if (callerAborted()) throw new CliError('cancelled', 'aborted')
-        throw new CliError(`stream interrupted: GET ${path}`, 'aborted')
-      }
-      throw err
-    } finally {
-      reader.releaseLock()
-      await (response.body as ReadableStream<Uint8Array>).cancel().catch(() => {})
-    }
+    await this.streamSse('/api/events', listeners)
   }
 }
