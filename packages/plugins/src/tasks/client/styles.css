@@ -1103,3 +1103,56 @@
 .task-trace-review {
   flex-shrink: 0;
 }
+
+/* ---- Conversation overview card meta pill (OVERVIEW_CARD_META_SLOT contribution) ---- */
+
+.task-overview-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  max-width: 100%;
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 18px;
+  cursor: pointer;
+}
+
+.task-overview-pill:hover {
+  border-color: var(--accent);
+  color: var(--fg);
+}
+
+.task-overview-pill-id {
+  font-family: var(--font-mono, monospace);
+  flex-shrink: 0;
+}
+
+/* Column label keeps the board's semantic tone vocabulary (warn = awaiting
+   review, accent = running, ok = done; backlog stays neutral). */
+.task-overview-pill[data-column='in_review'] .task-overview-pill-column {
+  color: var(--warn);
+}
+
+.task-overview-pill[data-column='in_progress'] .task-overview-pill-column {
+  color: var(--accent);
+}
+
+.task-overview-pill[data-column='done'] .task-overview-pill-column {
+  color: var(--ok);
+}
+
+.task-overview-pill-project {
+  min-width: 0;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  border-left: 1px solid var(--border);
+  padding-left: 5px;
+}
