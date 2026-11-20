@@ -158,8 +158,9 @@ button, a, input, select, textarea { touch-action: manipulation; }
     background: var(--bg-hover);
   }
   /* 移动端全局快捷导航簇（根挂载，与汉堡同层）：首个 quickEntry 插件视图 +
-     会话总览一键直达；态势微标独立可按（tone 灯色 + 紧凑计数挂在总览按钮上）。
-     抽屉拉开时隐藏（抽屉内 Rail 已有同源按钮）。 */
+     会话总览一键直达；总览按钮挂与折叠 Rail 同款的 tone 灯点（复用
+     .rail-overview-dot，无计数徽标）。主屏已停在入口目标时对应按钮由组件
+     就地隐藏；抽屉拉开时隐藏（抽屉内 Rail 已有同源按钮）。 */
   .mobile-quick-nav {
     display: flex;
     align-items: center;
@@ -187,29 +188,6 @@ button, a, input, select, textarea { touch-action: manipulation; }
   .mobile-quick-btn:active {
     background: var(--bg-hover);
   }
-  .mobile-quick-badge {
-    position: absolute;
-    top: -2px;
-    right: -3px;
-    min-width: 14px;
-    height: 14px;
-    padding: 0 3px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: 999px;
-    font-size: 9px;
-    font-weight: 600;
-    line-height: 1;
-    font-variant-numeric: tabular-nums;
-    color: #fff;
-    box-sizing: border-box;
-    pointer-events: none;
-  }
-  .mobile-quick-badge[data-tone='error'] { background: var(--err); }
-  .mobile-quick-badge[data-tone='blocked'] { background: var(--warn); }
-  .mobile-quick-badge[data-tone='running'] { background: var(--accent); }
-  .mobile-quick-badge[data-tone='done'] { background: var(--ok); }
   .sidebar-open .mobile-nav-toggle,
   .sidebar-open .mobile-quick-nav { display: none; }
   .mobile-sidebar-close {

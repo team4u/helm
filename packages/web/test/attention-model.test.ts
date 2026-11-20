@@ -383,19 +383,9 @@ test('Sidebar renders the attention group between the pending asks panel and age
   assert.ok(html.includes('个人助理 · model_error: boom'), 'the sub-line states the profile label plus the real lastError, never fabricated progress')
   assert.ok(html.includes('编码专员 · 正在检索文档'), 'the running row sub-line states the real doing text')
   assert.ok(html.includes('title="Open conversation 12"'), 'the error tree row jumps straight to the newest blocked descendant (the approval spot)')
-
-  // Rail badge：与移动端汉堡同源 indicator（排除正在查看的 50 号树——本就无信号）。
-  assert.ok(
-    html.includes('class="rail-attention-badge" data-tone="error"') || html.includes('rail-attention-badge'),
-    'the conversations-space rail button carries the same-source attention badge',
-  )
-  assert.ok(
-    html.includes('aria-label="Conversations space · 1 need attention · 1 running"'),
-    'the rail button aria-label appends the honest attention summary',
-  )
 })
 
-test('Sidebar renders no attention group and no badge when nothing needs attention', { timeout: 60_000 }, () => {
+test('Sidebar renders no attention group when nothing needs attention', { timeout: 60_000 }, () => {
   const html = renderSidebar(
     sidebarStore({
       conversations: [
@@ -406,7 +396,6 @@ test('Sidebar renders no attention group and no badge when nothing needs attenti
     }),
   )
   assert.ok(!html.includes('sidebar-attention-group'), 'zero visual residue when no tree qualifies')
-  assert.ok(!html.includes('rail-attention-badge'), 'no badge when the indicator is silent')
 })
 
 test('interaction: clicking an attention row opens the direct target; the header collapses the rows', { timeout: 60_000 }, async () => {
@@ -659,8 +648,8 @@ function stubMobileMatchMedia(): () => void {
   }
 }
 
-test('mobile drawer shows the attention group in every space; desktop non-conversation spaces stay clean', { timeout: 60_000 }, () => {
-  const htmlByViewport = (mobile: boolean): string => {
+test('the attention flat group mounts only in the conversations space (mobile drawer included)', { timeout: 60_000 }, () => {
+  const htmlInViewsSpace = (mobile: boolean): string => {
     const restore = mobile ? stubMobileMatchMedia() : undefined
     try {
       return renderSidebar(
@@ -676,8 +665,20 @@ test('mobile drawer shows the attention group in every space; desktop non-conver
       restore?.()
     }
   }
-  assert.ok(htmlByViewport(true).includes('sidebar-attention-group'), 'mobile: pulling the drawer open in the views space still shows the attention group')
-  assert.ok(!htmlByViewport(false).includes('sidebar-attention-group'), 'desktop: the views space stays clean (rail badge carries the signal)')
+  assert.ok(!htmlInViewsSpace(true).includes('sidebar-attention-group'), 'mobile: the views space keeps its own list without the attention flat group')
+  assert.ok(!htmlInViewsSpace(false).includes('sidebar-attention-group'), 'desktop: the views space stays clean')
+  const restoreMobile = stubMobileMatchMedia()
+  try {
+    const html = renderSidebar(
+      sidebarStore({
+        conversations: [conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 })],
+        primaryTarget: { kind: 'conversation', conversationId: 2 },
+      }),
+    )
+    assert.ok(html.includes('sidebar-attention-group'), 'the conversations space (mobile drawer included) still shows the attention flat group')
+  } finally {
+    restoreMobile()
+  }
 })
 
 // ---------------------------------------------------------------------------

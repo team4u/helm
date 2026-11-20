@@ -357,7 +357,7 @@ function stubMatchMedia(matches: boolean): () => void {
   }
 }
 
-test('MobileQuickNav: quick entry + overview one-tap direct navigation with the independent attention badge', { timeout: 60_000 }, async () => {
+test('MobileQuickNav: one-tap direct navigation with the shared tone dot; entries hide when their view is already on stage', { timeout: 60_000 }, async () => {
   const restoreMobile = stubMatchMedia(true)
   const store = overviewStore({
     conversations: [
@@ -401,9 +401,9 @@ test('MobileQuickNav: quick entry + overview one-tap direct navigation with the 
     )
     assert.ok(
       overviewBtn.getAttribute('aria-label')?.includes('1 running'),
-      'the attention summary rides the independently pressable badge button',
+      'the attention summary rides the overview button aria for screen readers',
     )
-    assert.ok(overviewBtn.querySelector('.mobile-quick-badge[data-tone="running"]') !== null, 'tone dot + count badge render')
+    assert.ok(overviewBtn.querySelector('.rail-overview-dot[data-tone="running"]') !== null, 'the tone dot rides the overview button (same as the PC rail, no count badge)')
 
     const quickBtn = buttons[0] as HTMLElement
     await act(async () => {
@@ -418,7 +418,7 @@ test('MobileQuickNav: quick entry + overview one-tap direct navigation with the 
     primary = store.getPrimaryTarget()
     assert.ok(primary.kind === 'overview', 'one tap on the badge button opens the conversation overview')
 
-    // 无 quickEntry 时只渲染总览按钮；无信号时徽标不渲染（诚实）。
+    // 无 quickEntry 时只渲染总览按钮；无信号时灯点不渲染（诚实）。
     const quiet = overviewStore({
       conversations: [conv({ id: 50, title: '安静', profileId: 'coder' })],
       primaryTarget: { kind: 'conversation', conversationId: 50 },
@@ -436,7 +436,50 @@ test('MobileQuickNav: quick entry + overview one-tap direct navigation with the 
       )
     })
     assert.equal(container.querySelectorAll('.mobile-quick-btn').length, 1, 'overview-only cluster without any quickEntry')
-    assert.ok(container.querySelector('.mobile-quick-badge') === null, 'no badge without any signal')
+    assert.ok(container.querySelector('.rail-overview-dot') === null, 'no tone dot without any signal')
+
+    // 主屏已停在入口目标时对应按钮就地隐藏：总览页只留 quickEntry，
+    // quickEntry 视图只留总览；两钮皆隐时整簇不渲染（零占位残留）。
+    const renderNav = (store: ReturnType<typeof overviewStore>, entry: typeof quickEntry | null): void => {
+      root!.render(
+        e(
+          HelmxExternalStoreContext.Provider,
+          { value: store },
+          e(MobileQuickNav, {
+            indicator: { needsAttentionCount: 0, runningCount: 1, unreadDoneCount: 0, totalCount: 1, tone: 'running' },
+            quickEntry: entry,
+          }),
+        ),
+      )
+    }
+    await act(async () => {
+      renderNav(
+        overviewStore({
+          conversations: [conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 })],
+          primaryTarget: { kind: 'overview' },
+        }),
+        quickEntry,
+      )
+    })
+    assert.equal(container.querySelectorAll('.mobile-quick-btn').length, 1, 'on the overview screen only the quick entry remains')
+    assert.ok(container.querySelector('.mobile-quick-overview-btn') === null, 'the overview button hides when the overview is already on stage')
+
+    await act(async () => {
+      renderNav(
+        overviewStore({
+          conversations: [conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 })],
+          primaryTarget: { kind: 'screen', pluginId: 'builtin:tasks', screenId: 'board' },
+        }),
+        quickEntry,
+      )
+    })
+    assert.equal(container.querySelectorAll('.mobile-quick-btn').length, 1, 'on the quick-entry view only the overview button remains')
+    assert.ok(container.querySelector('.mobile-quick-btn')?.getAttribute('aria-label')?.includes('Conversation overview') === true, 'the remaining button is the overview entry')
+
+    await act(async () => {
+      renderNav(overviewStore({ primaryTarget: { kind: 'overview' } }), null)
+    })
+    assert.ok(container.querySelector('.mobile-quick-nav') === null, 'no quickEntry and already on the overview: the whole cluster unmounts')
   } finally {
     await act(async () => {
       root?.unmount()

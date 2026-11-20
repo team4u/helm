@@ -91,37 +91,6 @@
   box-shadow: var(--seg-edge);
 }
 
-/* 全局态势微标（Rail 空间按钮 / 移动端汉堡同源）：紧凑计数 + 灯色，
- * 只呈现真实聚合事实（需处理/运行中/未读完成），无信号时不渲染。 */
-.rail-space-btn {
-  position: relative;
-}
-
-.rail-attention-badge {
-  position: absolute;
-  top: 0;
-  right: 0;
-  min-width: 13px;
-  height: 13px;
-  padding: 0 3px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  font-size: 9px;
-  font-weight: 600;
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-  color: #fff;
-  box-sizing: border-box;
-  pointer-events: none;
-}
-
-.rail-attention-badge[data-tone='error'] { background: var(--err); }
-.rail-attention-badge[data-tone='blocked'] { background: var(--warn); }
-.rail-attention-badge[data-tone='running'] { background: var(--accent); }
-.rail-attention-badge[data-tone='done'] { background: var(--ok); }
-
 /* 插件全局快捷入口（sidebar.item quickEntry）：紧随空间按钮，细分隔线隔离；
  * 按钮复用 rail-btn 形态（含激活态），插件停用后贡献消失即零残留。 */
 .activity-rail-quick {
