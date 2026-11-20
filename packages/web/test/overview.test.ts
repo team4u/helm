@@ -485,9 +485,12 @@ test('ConversationOverview renders the card grid with honest facts and directly 
     assert.ok(cards[0]!.querySelector('.overview-card-head .status-dot') === null, 'the idle root keeps the card head light off (row-consistent)')
     assert.ok(cards[0]!.querySelector('.overview-chip .status-dot-blocked') !== null, 'the blocked descendant chip carries its own light')
     assert.ok(cards[0]!.textContent?.includes('待审批子任务'), 'the waiting descendant renders as a chip')
+    const attentionReason = cards[0]!.querySelector('.overview-card-attention')
+    assert.equal(attentionReason?.textContent, 'Waiting for you')
+    assert.equal(cards[0]!.querySelector('.overview-card-open')?.getAttribute('aria-describedby'), attentionReason?.id)
     assert.ok(cards[1]!.querySelector('.overview-card-head .status-dot-working') !== null, 'the working root lights the card head exactly like a sidebar row')
     assert.ok(cards[1]!.textContent?.includes('正在检索文档'), 'the running card states the real doing text')
-    assert.ok(container.textContent?.includes('3 trees'), 'the stats line counts visible cards')
+    assert.ok(container.textContent?.includes('3 conversation groups'), 'the stats line counts visible cards')
 
     // 直进语义：点卡片直达 targetConversationId（树内有等待人类的后代时直达
     // 审批现场 #11），不弹抽屉、与会话列表点击完全一致。
@@ -666,7 +669,7 @@ test('ConversationOverview restores filter state from a deep-linked #/overview?s
   try {
     const cards = mount.container.querySelectorAll('.overview-card')
     assert.equal(cards.length, 2, 'the deep-linked profile filter restores without flashing the unfiltered grid')
-    assert.ok(mount.container.textContent?.includes('2 of 3 trees'), 'the stats line states the filtered count over the total')
+    assert.ok(mount.container.textContent?.includes('2 of 3 conversation groups'), 'the stats line states the filtered count over the total')
     // 未知参数键一次自愈删除（replace 修正地址栏，不产生额外历史项）。
     await act(async () => {
       store.applyExternalLocation(parseLocationHash('#/overview?sp.bucket=bogus&sp.q=%E8%B0%83%E7%A0%94'))
@@ -1599,7 +1602,7 @@ test('ConversationOverview search box narrows by title/summary and rides the q r
       { kind: 'overview', params: { q: '调研' } },
       'the query persists into the q route param',
     )
-    assert.ok(mount.container.textContent?.includes('1 of 3 trees'), 'the stats line states visible over total')
+    assert.ok(mount.container.textContent?.includes('1 of 3 conversation groups'), 'the stats line states visible over total')
     const clear = mount.container.querySelector<HTMLButtonElement>('.overview-search-clear')
     assert.ok(clear !== null, 'a non-empty query renders the clear button')
     await act(async () => {
@@ -1739,12 +1742,20 @@ test('ConversationOverview batch boundary: selection stays within the visible se
     })
     assert.ok(mount.container.textContent?.includes('2 selected'), 'both visible human roots are selected')
 
+    const deleteBtn = [...mount.container.querySelectorAll<HTMLButtonElement>('.overview-batch-bar button')]
+      .find((btn) => btn.textContent === 'Delete (2)')
+    assert.ok(deleteBtn)
+    await act(async () => deleteBtn.click())
+    assert.ok(document.querySelector('[role="alertdialog"]'))
+
     // 收窄筛选：常规根 A 出局（assistant），选择集合立即收敛到可见项。
     await act(async () => {
       store.setScreenParams({ profile: 'coder' }, {})
     })
     await overviewSettle()
     assert.ok(mount.container.textContent?.includes('1 selected'), 'hidden selections drop out immediately')
+    assert.ok(document.querySelector('[role="alertdialog"]') === null, 'the old confirmation closes when its scope changes')
+    assert.deepEqual(stub.deletes, [])
     assert.equal(cardById(mount.container, 2)?.classList.contains('is-selected'), true, 'the still-visible selection survives')
     const archiveBtn = [...mount.container.querySelectorAll<HTMLButtonElement>('.overview-batch-bar button')]
       .find((btn) => btn.textContent?.startsWith('Archive'))
