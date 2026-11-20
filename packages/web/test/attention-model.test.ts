@@ -343,41 +343,26 @@ function attentionScenarioStore(): HelmxExternalStore {
   })
 }
 
-test('Sidebar renders the overview entry between the pending asks panel and agent standings, with the honest pulse', { timeout: 60_000 }, () => {
+test('Sidebar header keeps a plain overview icon button next to the command palette search (conversations space)', { timeout: 60_000 }, () => {
   const html = renderSidebar(attentionScenarioStore())
-  const entryIdx = html.indexOf('sidebar-overview-entry')
-  const asksIdx = html.indexOf('pending-asks-group')
-  const standingsIdx = html.indexOf('agent-standing-group')
-  assert.ok(entryIdx > 0, 'the overview entry renders')
-  assert.ok(asksIdx === -1 || asksIdx < entryIdx, 'the overview entry mounts below the pending asks panel (which is absent when empty)')
-  assert.ok(standingsIdx > entryIdx, 'the overview entry mounts above the agent standings group')
-
-  assert.ok(html.includes('>Conversation overview</span>'), 'the entry title renders (en default)')
-  const entry = html.match(/<div[^>]*class="nav-item sidebar-overview-entry[^"]*"/)?.[0] ?? ''
-  assert.ok(entry !== '', 'the entry row carries its stable class hook')
-  assert.ok(html.includes('class="status-dot status-dot-error"'), 'the same-source attention tone light rides the entry light slot')
-  assert.ok(html.includes('1 need attention · 1 running'), 'the entry sub-line states the honest bucket summary, never fabricated progress')
+  const btnIdx = html.indexOf('sidebar-overview-open-btn')
+  const headerIdx = html.indexOf('sidebar-header')
+  const scrollIdx = html.indexOf('sidebar-scroll')
+  const searchIdx = html.indexOf('aria-label="Open Cmd K global search')
+  assert.ok(searchIdx > 0, 'the command palette search button renders')
+  assert.ok(btnIdx > 0, 'the overview header button renders')
+  assert.ok(headerIdx > 0 && btnIdx > headerIdx && (scrollIdx < 0 || btnIdx < scrollIdx), 'the button lives in the sidebar header, not the list body')
+  assert.ok(btnIdx > searchIdx && btnIdx - searchIdx < 900, 'the button sits right after the command palette search button')
+  // 入口收敛为素图标钮：无灯点、无态势摘要（逐树明细只在总览页呈现，不装忙）。
+  const btn = html.match(/<button[^>]*class="[^"]*sidebar-overview-open-btn[^"]*"[^>]*>/)?.[0] ?? ''
+  assert.ok(btn !== '', 'the button carries its stable class hook')
+  assert.ok(!btn.includes('status-dot'), 'the plain entry button carries no indicator light')
+  assert.ok(!html.includes('sidebar-overview-entry'), 'the pulse entry row is gone for good')
   assert.ok(!html.includes('sidebar-attention-group'), 'the legacy flat attention group is gone for good')
   assert.ok(!html.includes('attention-row'), 'no legacy attention row residue')
 })
 
-test('Sidebar keeps the overview entry silent when nothing needs attention (zero light, zero sub-line)', { timeout: 60_000 }, () => {
-  const html = renderSidebar(
-    sidebarStore({
-      conversations: [
-        conv({ id: 50, title: '当前查看', profileId: 'coder', status: 'idle' }),
-        conv({ id: 51, title: '安静', profileId: 'coder', status: 'done', unread: false }),
-      ],
-      primaryTarget: { kind: 'conversation', conversationId: 50 },
-    }),
-  )
-  assert.ok(html.includes('sidebar-overview-entry'), 'the entry itself always renders')
-  assert.ok(!html.includes('sidebar-overview-entry-sub'), 'no sub-line without any signal')
-  const entryMain = html.match(/<button[^>]*class="nav-item-main nav-open"[^>]*title="Conversation overview"/)?.[0] ?? ''
-  assert.ok(entryMain !== '', 'the quiet tooltip states just the overview (no fabricated summary)')
-})
-
-test('interaction: clicking the overview entry opens #/overview; the hover split button pins the right split', { timeout: 60_000 }, async () => {
+test('interaction: clicking the header overview button opens #/overview', { timeout: 60_000 }, async () => {
   const store = attentionScenarioStore()
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -387,50 +372,18 @@ test('interaction: clicking the overview entry opens #/overview; the hover split
       root = createRoot(container)
       root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
     })
-    const entry = container.querySelector<HTMLElement>('.sidebar-overview-entry')
-    assert.ok(entry !== null, 'the entry row renders')
+    const btn = container.querySelector<HTMLButtonElement>('.sidebar-overview-open-btn')
+    assert.ok(btn !== null, 'the header overview button renders')
     await act(async () => {
-      entry.querySelector<HTMLButtonElement>('.nav-item-main')?.click()
+      btn.click()
     })
     const primary = store.getPrimaryTarget()
-    assert.ok(primary.kind === 'overview', 'clicking the main area navigates to the overview stage')
+    assert.ok(primary.kind === 'overview', 'clicking the header button navigates to the overview stage')
   } finally {
     await act(async () => {
       root?.unmount()
     })
     container.remove()
-  }
-  // 分屏路径：悬停分屏按钮直接把总览钉在右分屏，主屏会话不动。
-  {
-    const store2 = attentionScenarioStore()
-    const container2 = document.createElement('div')
-    document.body.appendChild(container2)
-    let root2: Root | undefined
-    try {
-      await act(async () => {
-        root2 = createRoot(container2)
-        root2.render(e(HelmxExternalStoreContext.Provider, { value: store2 }, e(Sidebar)))
-      })
-      const entry = container2.querySelector<HTMLElement>('.sidebar-overview-entry')
-      assert.ok(entry !== null, 'the entry row renders')
-      const splitBtn = entry.querySelector<HTMLButtonElement>('.sidebar-split-btn')
-      assert.ok(splitBtn !== null, 'the hover split button renders in the entry meta area')
-      await act(async () => {
-        splitBtn.click()
-      })
-      const primary2 = store2.getPrimaryTarget()
-      const split = store2.getNavSlice().splitTarget
-      assert.ok(
-        primary2.kind === 'conversation' && primary2.conversationId === 50,
-        'the split pin keeps the primary target in place',
-      )
-      assert.deepEqual(split, { kind: 'overview' }, 'the split button pins the overview on the right split pane')
-    } finally {
-      await act(async () => {
-        root2?.unmount()
-      })
-      container2.remove()
-    }
   }
 })
 
@@ -665,8 +618,8 @@ test('the overview entry mounts only in the conversations space (mobile drawer i
       restore?.()
     }
   }
-  assert.ok(!htmlInViewsSpace(true).includes('sidebar-overview-entry'), 'mobile: the views space keeps its own list without the overview entry')
-  assert.ok(!htmlInViewsSpace(false).includes('sidebar-overview-entry'), 'desktop: the views space stays clean')
+  assert.ok(!htmlInViewsSpace(true).includes('sidebar-overview-open-btn'), 'mobile: the views space keeps its own header without the overview button')
+  assert.ok(!htmlInViewsSpace(false).includes('sidebar-overview-open-btn'), 'desktop: the views space stays clean')
   const restoreMobile = stubMobileMatchMedia()
   try {
     const html = renderSidebar(
@@ -675,7 +628,7 @@ test('the overview entry mounts only in the conversations space (mobile drawer i
         primaryTarget: { kind: 'conversation', conversationId: 2 },
       }),
     )
-    assert.ok(html.includes('sidebar-overview-entry'), 'the conversations space (mobile drawer included) still shows the overview entry')
+    assert.ok(html.includes('sidebar-overview-open-btn'), 'the conversations space (mobile drawer included) still shows the overview header button')
   } finally {
     restoreMobile()
   }
