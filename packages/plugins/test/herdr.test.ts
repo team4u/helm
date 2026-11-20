@@ -616,7 +616,8 @@ test('超时（TimeoutError）保留 pane：working 时 resume 显式拒绝不�
 
     // 释放 fake agent.wait 后底层转 idle：权威确认通过，复用同一 pane 续接。
     waitBreak.abort()
-    await waitFor(() => env.transport.waitBreaks === 1)
+    // 高并发全量档下真实进程信号传播抖动，按本文件既有先例放宽预算（阻塞耗时远小于阈值）。
+    await waitFor(() => env.transport.waitBreaks === 1, 15_000)
     env.transport.advancePane(pane.paneId, 'idle')
     scriptSuccess(env, 'resumed-after-timeout')
     const tabsBefore = env.transport.calls.filter((c) => c.method === 'tab.create').length
