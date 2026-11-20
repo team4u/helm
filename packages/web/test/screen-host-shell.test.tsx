@@ -290,10 +290,10 @@ test('AuthGate / ToastOverlay / Sidebar 原语与折叠按钮及零 Emoji / 零�
         id: 'n-view',
         type: 'notification',
         level: 'info',
-        title: '任务 T-1 已提交验收',
+        title: '应用 demo-1 已就绪',
         body: 'x'.repeat(200),
         createdAt: 3000,
-        view: 'screen:builtin:tasks/board?task=T-1',
+        view: 'screen:builtin:apps/catalog?app=demo-1',
       },
       { id: 'n-conv', type: 'notification', level: 'info', title: 'legacy', createdAt: 3100, conversationId: 42 },
       { id: 'n-bad', type: 'notification', level: 'info', title: 'broken target', createdAt: 3200, view: 'not-a-target' },
@@ -323,9 +323,9 @@ test('AuthGate / ToastOverlay / Sidebar 原语与折叠按钮及零 Emoji / 零�
   assert.equal(openedTargets.length, 1)
   assert.deepEqual(openedTargets[0], {
     kind: 'screen',
-    pluginId: 'builtin:tasks',
-    screenId: 'board',
-    params: { task: 'T-1' },
+    pluginId: 'builtin:apps',
+    screenId: 'catalog',
+    params: { app: 'demo-1' },
   })
   assert.equal(dismissedIds[0], 'n-view', '点击查看后应关闭对应气泡')
 

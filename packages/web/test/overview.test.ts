@@ -484,10 +484,10 @@ test('ConversationOverview bucket filter narrows the grid (segmented control)', 
 })
 
 test('ConversationOverview source filter: appears only with managed trees, narrows the grid per source', { timeout: 60_000 }, async () => {
-  const taskSection = {
-    pluginId: 'builtin:tasks',
+  const appSection = {
+    pluginId: 'builtin:apps',
     surface: 'sidebar.section' as const,
-    spec: { id: 'task-runs', label: { en: 'Task runs' }, icon: 'check-square', filterTag: 'task' },
+    spec: { id: 'app-runs', label: { en: 'App runs' }, icon: 'check-square', filterTag: 'app' },
   }
   // 无托管树：来源筛选不渲染（零无效控件噪音）。
   const regularOnly = overviewStore({
@@ -510,11 +510,11 @@ test('ConversationOverview source filter: appears only with managed trees, narro
     // 有托管树：来源筛选渲染，切换 managed 只留任务树、regular 只留常规树。
     const mixed = overviewStore({
       conversations: [
-        conv({ id: 1, title: '任务执行', profileId: 'assistant', tags: ['task'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
+        conv({ id: 1, title: '应用会话', profileId: 'assistant', tags: ['app'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
         conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
       ],
       primaryTarget: { kind: 'overview' },
-      uiContributions: [taskSection],
+      uiContributions: [appSection],
     })
     await act(async () => {
       root!.render(e(HostStoreProviders, { value: mixed }, e(ConversationOverview)))
@@ -535,13 +535,13 @@ test('ConversationOverview source filter: appears only with managed trees, narro
     })
     let cards = container.querySelectorAll('.overview-card')
     assert.equal(cards.length, 1, 'only the managed tree stays visible')
-    assert.ok(cards[0]!.textContent?.includes('任务执行'))
+    assert.ok(cards[0]!.textContent?.includes('应用会话'))
 
     // 插件 section 贡献消失（停用）但筛选仍停在 managed：筛选器保持可见防困住，
     // 卡片如实归零（绝不伪报常规树为托管）。
     const disabled = overviewStore({
       conversations: [
-        conv({ id: 1, title: '任务执行', profileId: 'assistant', tags: ['task'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
+        conv({ id: 1, title: '应用会话', profileId: 'assistant', tags: ['app'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
         conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
       ],
       primaryTarget: { kind: 'overview' },
@@ -561,7 +561,7 @@ test('ConversationOverview source filter: appears only with managed trees, narro
   {
     const fresh = overviewStore({
       conversations: [
-        conv({ id: 1, title: '任务执行', profileId: 'assistant', tags: ['task'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
+        conv({ id: 1, title: '应用会话', profileId: 'assistant', tags: ['app'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
         conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
       ],
       primaryTarget: { kind: 'overview' },
@@ -588,42 +588,42 @@ test('ConversationOverview source filter: appears only with managed trees, narro
 
 test('ConversationOverview card meta slot: contributions render with tree props; no contribution leaves zero residue', { timeout: 60_000 }, async () => {
   const received: Array<Record<string, unknown>> = []
-  seedPluginClientModule('builtin:tasks', 'overview-meta.tsx', {
-    TaskOverviewCardMeta: (props: Record<string, unknown>) => {
+  seedPluginClientModule('builtin:apps', 'overview-meta.tsx', {
+    AppOverviewCardMeta: (props: Record<string, unknown>) => {
       received.push(props)
       const root = props['rootConversation'] as { id: number }
       return e(
         'button',
         {
           type: 'button',
-          className: 'task-overview-pill-stub',
+          className: 'app-overview-pill-stub',
           onClick: (event: React.SyntheticEvent) => {
             event.stopPropagation()
           },
         },
-        `T-1 @${root.id}`,
+        `A-1 @${root.id}`,
       )
     },
   })
   const slotContribution = {
-    pluginId: 'builtin:tasks',
+    pluginId: 'builtin:apps',
     surface: 'plugin.slot' as const,
     spec: {
       id: 'overview-card-meta',
       target: OVERVIEW_CARD_META_SLOT,
-      scope: { tags: ['task'] },
-      client: { module: 'overview-meta.tsx', export: 'TaskOverviewCardMeta' },
+      scope: { tags: ['app'] },
+      client: { module: 'overview-meta.tsx', export: 'AppOverviewCardMeta' },
     },
   }
   const store = overviewStore({
     conversations: [
-      conv({ id: 1, title: '任务执行', profileId: 'assistant', tags: ['task'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 1, title: '应用会话', profileId: 'assistant', tags: ['app'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 11, parentConversationId: 1, title: '子代理', status: 'idle', createdAt: 9100, updatedAt: 9100 }),
       conv({ id: 2, title: '常规会话', profileId: 'coder', status: 'idle', createdAt: 8000, updatedAt: 8000 }),
     ],
     // clientHashes 对齐 seedPluginClientModule 的 contentHash（'seeded'）：
     // PluginUiView 走内存缓存快路径，零网络请求（about:blank 下相对 URL fetch 必炸）。
-    plugins: [{ id: 'builtin:tasks', name: 'Tasks', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [], clientHashes: { 'overview-meta.tsx': 'seeded' } }],
+    plugins: [{ id: 'builtin:apps', name: 'Apps', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [], clientHashes: { 'overview-meta.tsx': 'seeded' } }],
     primaryTarget: { kind: 'overview' },
     uiContributions: [slotContribution],
   })
@@ -641,14 +641,14 @@ test('ConversationOverview card meta slot: contributions render with tree props;
     )
     assert.ok(regularCard?.querySelector('.overview-card-meta-slot') === null, 'an out-of-scope card mounts no slot residue')
 
-    const taskCard = [...container.querySelectorAll<HTMLElement>('.overview-card')].find((card) =>
-      card.textContent?.includes('任务执行'),
+    const appCard = [...container.querySelectorAll<HTMLElement>('.overview-card')].find((card) =>
+      card.textContent?.includes('应用会话'),
     )
-    const slotHost = taskCard?.querySelector<HTMLElement>('.overview-card-meta-slot') ?? null
+    const slotHost = appCard?.querySelector<HTMLElement>('.overview-card-meta-slot') ?? null
     assert.ok(slotHost !== null, 'the meta slot mounts inside the matching card')
-    const pill = slotHost.querySelector<HTMLElement>('.task-overview-pill-stub')
+    const pill = slotHost.querySelector<HTMLElement>('.app-overview-pill-stub')
     assert.ok(pill !== null, 'the contribution component renders inside the slot')
-    assert.ok(pill.textContent?.includes('T-1 @1'))
+    assert.ok(pill.textContent?.includes('A-1 @1'))
     const last = received.at(-1)!
     assert.equal((last['rootConversation'] as { id: number }).id, 1, 'slotProps carry the root conversation summary')
     assert.deepEqual(last['memberIds'], [1, 11], 'slotProps carry the whole-tree member ids')
@@ -663,7 +663,7 @@ test('ConversationOverview card meta slot: contributions render with tree props;
     await act(async () => {
       store.updateLive((state) => ({ ...state, uiContributions: [] }))
     })
-    assert.ok(taskCard?.querySelector('.overview-card-meta-slot') === null, 'a disabled plugin leaves no slot residue')
+    assert.ok(appCard?.querySelector('.overview-card-meta-slot') === null, 'a disabled plugin leaves no slot residue')
   } finally {
     await act(async () => {
       root?.unmount()
@@ -783,12 +783,12 @@ test('MobileQuickNav: one-tap direct navigation with the shared count badge; ent
     primaryTarget: { kind: 'conversation', conversationId: 2 },
   })
   const quickEntry = {
-    key: 'builtin:tasks/task-board',
-    pluginId: 'builtin:tasks',
-    label: 'Task Board',
+    key: 'builtin:apps/app-center',
+    pluginId: 'builtin:apps',
+    label: 'App Center',
     icon: 'check-square',
     order: 5,
-    target: { kind: 'screen', pluginId: 'builtin:tasks', screenId: 'board' } as const,
+    target: { kind: 'screen', pluginId: 'builtin:apps', screenId: 'app-center' } as const,
   }
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -809,7 +809,7 @@ test('MobileQuickNav: one-tap direct navigation with the shared count badge; ent
     })
     const buttons = container.querySelectorAll('.mobile-quick-btn')
     assert.equal(buttons.length, 2, 'quick entry + overview render side by side without opening the drawer')
-    assert.ok(buttons[0]!.getAttribute('aria-label') === 'Task Board', 'the quick entry keeps the plugin-provided label')
+    assert.ok(buttons[0]!.getAttribute('aria-label') === 'App Center', 'the quick entry keeps the plugin-provided label')
     const overviewBtn = container.querySelector<HTMLButtonElement>('.mobile-quick-overview-btn')
     assert.ok(overviewBtn !== null)
     assert.ok(
@@ -829,7 +829,7 @@ test('MobileQuickNav: one-tap direct navigation with the shared count badge; ent
       quickBtn.click()
     })
     let primary = store.getPrimaryTarget()
-    assert.ok(primary.kind === 'screen' && primary.screenId === 'board', 'one tap enters the first quickEntry view')
+    assert.ok(primary.kind === 'screen' && primary.screenId === 'app-center', 'one tap enters the first quickEntry view')
 
     await act(async () => {
       overviewBtn.click()
@@ -887,7 +887,7 @@ test('MobileQuickNav: one-tap direct navigation with the shared count badge; ent
       renderNav(
         overviewStore({
           conversations: [conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 })],
-          primaryTarget: { kind: 'screen', pluginId: 'builtin:tasks', screenId: 'board' },
+          primaryTarget: { kind: 'screen', pluginId: 'builtin:apps', screenId: 'app-center' },
         }),
         quickEntry,
       )
@@ -978,12 +978,12 @@ test('ConversationOverview data-ready gate: loading state before the first snaps
 
 function quickNavItem(badge?: SidebarViewItem['badge']): SidebarViewItem {
   return {
-    key: 'builtin:tasks/task-board',
-    pluginId: 'builtin:tasks',
-    label: 'Task Board',
+    key: 'builtin:apps/app-center',
+    pluginId: 'builtin:apps',
+    label: 'App Center',
     icon: 'check-square',
     order: 5,
-    target: { kind: 'screen', pluginId: 'builtin:tasks', screenId: 'board' },
+    target: { kind: 'screen', pluginId: 'builtin:apps', screenId: 'app-center' },
     badge,
   }
 }
@@ -1039,7 +1039,7 @@ test('MobileQuickNav: numeric badge, quiet dot, summary aria-label and zero nois
     mounts.push(numeric)
     const numericBtn = numeric.container.querySelector<HTMLButtonElement>('.mobile-quick-btn')
     assert.ok(numericBtn !== null, 'the mobile quick entry button renders')
-    assert.equal(numericBtn.getAttribute('aria-label'), 'Task Board · 2 awaiting review · 2 blocked', 'the badge summary is appended to the accessible label')
+    assert.equal(numericBtn.getAttribute('aria-label'), 'App Center · 2 awaiting review · 2 blocked', 'the badge summary is appended to the accessible label')
     const badgeEl = numeric.container.querySelector<HTMLElement>('.mobile-quick-badge')
     assert.ok(badgeEl !== null, 'the numeric badge renders')
     assert.equal(badgeEl.getAttribute('data-tone'), 'error')
@@ -1057,13 +1057,13 @@ test('MobileQuickNav: numeric badge, quiet dot, summary aria-label and zero nois
     assert.ok(dotted.container.querySelector('.mobile-quick-dot') !== null, 'the quiet dot renders')
     assert.equal(dotted.container.querySelector('.mobile-quick-dot')?.getAttribute('data-tone'), 'accent')
     assert.ok(dotted.container.querySelector('.mobile-quick-badge') === null, 'no count badge in dot mode')
-    assert.equal(dotted.container.querySelector<HTMLButtonElement>('.mobile-quick-btn')?.getAttribute('aria-label'), 'Task Board · 2 running quietly')
+    assert.equal(dotted.container.querySelector<HTMLButtonElement>('.mobile-quick-btn')?.getAttribute('aria-label'), 'App Center · 2 running quietly')
 
     // 无信号（null）：零徽标残留，label 原样
     const silent = await mountQuickNav(quickNavItem(), null)
     mounts.push(silent)
     assert.ok(silent.container.querySelector('.mobile-quick-badge') === null && silent.container.querySelector('.mobile-quick-dot') === null, 'zero badge residue when the badge is silent')
-    assert.equal(silent.container.querySelector<HTMLButtonElement>('.mobile-quick-btn')?.getAttribute('aria-label'), 'Task Board')
+    assert.equal(silent.container.querySelector<HTMLButtonElement>('.mobile-quick-btn')?.getAttribute('aria-label'), 'App Center')
   } finally {
     for (const mount of mounts.reverse()) await mount.unmount()
     restore()
@@ -1138,15 +1138,15 @@ function batchScenarioStore(): HelmxExternalStore {
     conversations: [
       conv({ id: 1, title: '常规根 A', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
       conv({ id: 2, title: '常规根 B', profileId: 'coder', createdAt: 8000, updatedAt: 8000 }),
-      conv({ id: 3, title: '托管任务根', tags: ['task'], createdAt: 7000, updatedAt: 7000 }),
+      conv({ id: 3, title: '托管应用根', tags: ['app'], createdAt: 7000, updatedAt: 7000 }),
       conv({ id: 4, title: 'bot 会话根', ownedBy: 'bot', createdAt: 6000, updatedAt: 6000 }),
     ],
     primaryTarget: { kind: 'overview' },
     uiContributions: [
       {
-        pluginId: 'builtin:tasks',
+        pluginId: 'builtin:apps',
         surface: 'sidebar.section' as const,
-        spec: { id: 'task-conversations', label: { en: 'Tasks' }, filterTag: 'task' },
+        spec: { id: 'app-conversations', label: { en: 'Apps' }, filterTag: 'app' },
       },
     ],
   })
@@ -1486,19 +1486,19 @@ test('ConversationOverview new topic: no creatable agent renders no button', { t
 // ---------------------------------------------------------------------------
 
 test('ConversationOverview managed card keeps the view-only menu actions (peek + right split)', { timeout: 60_000 }, async () => {
-  const taskSection = {
-    pluginId: 'builtin:tasks',
+  const appSection = {
+    pluginId: 'builtin:apps',
     surface: 'sidebar.section' as const,
-    spec: { id: 'task-runs', label: { en: 'Task runs' }, icon: 'check-square', filterTag: 'task' },
+    spec: { id: 'app-runs', label: { en: 'App runs' }, icon: 'check-square', filterTag: 'app' },
   }
   // bot 归属的托管根：宿主归档/删除均不参与——菜单只剩两个只读视图动作
   // （prepend-only 分支：无分隔线、无后续宿主动作）。
   const store = overviewStore({
     conversations: [
-      conv({ id: 7, title: '任务执行', profileId: 'assistant', ownedBy: 'bot', tags: ['task'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 7, title: '应用会话', profileId: 'assistant', ownedBy: 'bot', tags: ['app'], status: 'working', createdAt: 9000, updatedAt: 9000 }),
     ],
     primaryTarget: { kind: 'overview' },
-    uiContributions: [taskSection],
+    uiContributions: [appSection],
   })
   const container = document.createElement('div')
   document.body.appendChild(container)

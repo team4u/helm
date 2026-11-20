@@ -221,7 +221,7 @@ function HelmxShellInner() {
   const groupedUi = useGroupedUi()
   const conversations = useConversations()
   // 首个插件全局快捷入口（sidebar.item quickEntry，仅认当前启用插件真实存在
-  // 的 screen）：移动端免开汉堡一键直达（如任务看板）。
+  // 的 screen）：移动端免开汉堡一键直达。
   const firstQuickEntry = useMemo(
     () => extractRailQuickEntries(groupedUi.sidebarItems, groupedUi.screens, conversations, locale)[0] ?? null,
     [groupedUi.sidebarItems, groupedUi.screens, conversations, locale],
