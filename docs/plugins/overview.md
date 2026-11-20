@@ -12,7 +12,7 @@
 | `builtin:workflow` | 工作流与子代理编排 | `subagent` / `SubagentWorkflow` 工具、DSL 引擎与账本恢复 | 启用 | 否 |
 | `builtin:worktree` | 受管工作树 | 受管 Git Worktree 分配、持久租约与持有锁、`cleanup_worktree` 工具与 `worktrees` CLI | 启用 | 否 |
 | `builtin:swarm` | Swarm 对等协同看板 | 扁平对等序号黑板、正交唤醒、`turn_settled` 纯事件防掉棒自愈与自适应协同看板 | 启用 | 否 |
-| `builtin:memory` | 长期记忆 | 按 Profile 管理 MEMORY.md 注入与启停，提供 `update_memory` 工具 | 启用 | 否 |
+| `builtin:memory` | 长期记忆 | 按 Profile 管理 MEMORY.md 注入与启停，提供 `update_memory` 工具与每日 Dream 自动整理（`dream` / `dream_status` / `dream_configure`） | 启用 | 否 |
 | `builtin:json-render` | JSON 卡片渲染 | 接管 ```ui 代码围栏渲染声明式 JSON Spec 卡片，自举 `generative-ui` 技能 | 启用 | 否 |
 | `builtin:mermaid` | Mermaid 图表 | 接管 ```mermaid 围栏，把 Mermaid 文本渲染为矢量图表 | 启用 | 否 |
 | `builtin:apps` | 应用中心 | 全栈微应用目录与 `validate/publish/list/update_meta/remove` 动作 | 启用 | 否 |

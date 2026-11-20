@@ -8,6 +8,7 @@
  *   concurrent calls cannot each "pre-read the old value + pass the check" and stack past the cap;
  *   over the limit it throws HelmxError('memory_limit_exceeded', 400) explicitly, never writing half a file.
  */
+import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { HelmxError, type HelmxHostApi } from '@helmx/protocol'
@@ -23,6 +24,11 @@ async function readMemoryFile(path: string): Promise<string> {
     }
     throw error
   }
+}
+
+/** Content hash for the dream CAS (hex sha256 over utf-8; purely internal comparison key). */
+function hashOf(content: string): string {
+  return createHash('sha256').update(content, 'utf8').digest('hex')
 }
 
 /** The builtin:memory plugin ID. */
@@ -81,6 +87,12 @@ export class MemoryStore {
     return readMemoryFile(await this.memoryPath(profileId))
   }
 
+  /** Read the full text together with its content hash (the CAS baseline for the dream write-back). */
+  async readMemoryWithHash(profileId: string): Promise<{ content: string; hash: string }> {
+    const content = await readMemoryFile(await this.memoryPath(profileId))
+    return { content, hash: hashOf(content) }
+  }
+
   /**
    * Atomically update MEMORY.md: replace swaps the whole content; append appends (keeping the trailing newline).
    * The append read-modify-write is serialized by an in-process shared lock on the file's real path.
@@ -112,6 +124,45 @@ export class MemoryStore {
       }
       await this.host.atomicWriteFile(path, next)
       return next
+    })
+  }
+
+  /**
+   * Dream CAS write-back: re-read + hash + cap check + atomic write all inside the SAME file lock
+   * (never "check outside, write inside"). The current content is re-read inside the closure and
+   * must hash exactly to expectedHash (captured when the dream started); a mismatch or a vanished
+   * file resolves { applied: false } without writing — the caller keeps candidates and diagnostics
+   * and never clobbers a concurrent human edit. The 64k cap is re-enforced on the final text here
+   * as the last authoritative gate before the atomic write.
+   *
+   * `opts.guard` (policy from the dream engine, evaluated by the mechanism here): re-checked inside
+   * the lock AFTER the hash re-validation and immediately before the write — a per-Profile memory
+   * switch flipped while this call was waiting for the lock still resolves { applied: false,
+   * guarded: true } without writing (distinct from a hash conflict).
+   */
+  async commitDreamMemory(
+    profileId: string,
+    expectedHash: string,
+    next: string,
+    opts?: { guard?: () => boolean },
+  ): Promise<{ applied: boolean; guarded?: boolean }> {
+    if (typeof next !== 'string') throw new Error('memory text must be a string')
+    const path = await this.memoryPath(profileId)
+    return this.host.withFileLock(path, async () => {
+      let current: string
+      try {
+        current = await readMemoryFile(path)
+      } catch (err) {
+        if (err instanceof HelmxError && err.code === 'not_found') return { applied: false }
+        throw err
+      }
+      if (hashOf(current) !== expectedHash) return { applied: false }
+      if (opts?.guard !== undefined && !opts.guard()) return { applied: false, guarded: true }
+      if (next.length > MAX_MEMORY_CHARS) {
+        throw memoryLimitError(profileId, next.length, 'replace', next.length)
+      }
+      await this.host.atomicWriteFile(path, next)
+      return { applied: true }
     })
   }
 }

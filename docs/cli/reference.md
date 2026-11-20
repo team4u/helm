@@ -224,6 +224,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | `helmx swarm board-post / board-read / board-status` | builtin:swarm | 发看板消息、分页读消息、查看组和成员状态。发消息时用 `to` 指定收件人，用 `wake` 决定是否唤醒。 |
 | `helmx swarm abort-worker / switch-model / inspect-worker / archive-worker / close-group` | builtin:swarm | 中止成员当前回合、给闲置成员换模型、查看或归档成员、结单。用 `--keep-worktree` 保留有改动或未合入的工作树。 |
 | `helmx memory get / set / configure` | builtin:memory | 长期记忆管理；均以 `--profile-id <id>` 或 `--current` 选目标，皆缺 `400 validation_error`；`set --text <str> [--mode replace\|append]`；`configure --enabled <bool> [--text <str>]` |
+| `helmx memory dream / dream_status / dream_configure` | builtin:memory | 每日 Dream 记忆整理：`dream` 立即整理（`--profile-id`/`--current`，无候选或无模型会话合法跳过并返回 reason，在途关闭如实 `memory_disabled` 不写回）；`dream_status` 查看调度/候选/上次整理（`--profile-id`/`--current` 聚焦只读目标，候选文件异常显式报错）；`dream_configure --enabled <bool> --hour <0-23> --timezone <IANA>` 配置（至少一项，暂停即清除 nextRunAt，首启排下一低峰点、过期仅补跑一次） |
 | `helmx apps validate / publish / list / update_meta / remove` | builtin:apps | 全栈微应用生命周期（见[应用中心](../plugins/apps.md)） |
 | `helmx profile list_mentionable` | builtin:profile | 列出可 `@` 点名协作的 Profile 候选（`--current` / `--conversation-id` / `--profile-id` 选上下文） |
 | `helmx cron list / create / delete / trigger` | builtin:triggers | cron 任务管理；create 必填 `--id --schedule --text`（标准五字段，timezone 默认 UTC），支持 `--target-conversation-id` / `--target-profile-id` / `--thread-key` 定向 |
