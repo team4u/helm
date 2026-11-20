@@ -850,7 +850,9 @@ test('renderServiceSpec applies serviceHome override across platforms and reject
   const opts = { cliEntryPath: '/opt/cli.js', dataDir: '/opt/data', serviceHome: '/srv/fake-home' } as const;
   assert.equal(renderServiceSpec({ ...opts, platform: 'darwin' }).targetPath, '/srv/fake-home/Library/LaunchAgents/ai.helmx.node.plist');
   assert.equal(renderServiceSpec({ ...opts, platform: 'linux' }).targetPath, '/srv/fake-home/.config/systemd/user/helmx-node.service');
-  assert.equal(renderServiceSpec({ ...opts, platform: 'win32' }).targetPath, '/srv/fake-home/HelmxNode.xml');
+  // Win32 rendering normalizes separators to the TARGET platform (`\`), mirroring how linux/darwin
+  // specs always render POSIX paths regardless of the host running the renderer.
+  assert.equal(renderServiceSpec({ ...opts, platform: 'win32' }).targetPath, '\\srv\\fake-home\\HelmxNode.xml');
   assert.throws(() => renderServiceSpec({ ...opts, platform: 'sunos' }), /unsupported platform/);
 });
 

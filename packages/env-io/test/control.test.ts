@@ -13,8 +13,15 @@ import {
 test('controlEndpoint namespaces products and hashes dataDir+instanceId deterministically', { timeout: 60_000 }, () => {
   const hub = controlEndpoint('/data', 'abc', 'helmx-hub')
   const node = controlEndpoint('/data', 'abc', 'helmx-node')
-  assert.match(hub, /^\/tmp\/helmx-hub-[0-9a-f]{16}\.sock$/)
-  assert.match(node, /^\/tmp\/helmx-node-[0-9a-f]{16}\.sock$/)
+  // The endpoint form follows the HOST platform: Windows named pipe vs Unix domain socket.
+  const hubPattern = process.platform === 'win32'
+    ? /^\\\\\.\\pipe\\helmx-hub-[0-9a-f]{16}$/
+    : /^\/tmp\/helmx-hub-[0-9a-f]{16}\.sock$/
+  const nodePattern = process.platform === 'win32'
+    ? /^\\\\\.\\pipe\\helmx-node-[0-9a-f]{16}$/
+    : /^\/tmp\/helmx-node-[0-9a-f]{16}\.sock$/
+  assert.match(hub, hubPattern)
+  assert.match(node, nodePattern)
   assert.notEqual(hub, node)
   assert.equal(hub, controlEndpoint('/data', 'abc', 'helmx-hub'), 'endpoint derivation is deterministic')
   assert.notEqual(hub, controlEndpoint('/other', 'abc', 'helmx-hub'))

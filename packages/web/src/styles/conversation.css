@@ -318,10 +318,10 @@
   word-break: break-word;
 }
 
-/* 胶囊内 Markdown 正文：对齐胶囊前景色与字号（queued/external 变体按原胶囊覆盖顺序），
+/* 胶囊内 Markdown 正文：对齐 AI 正文 Soft Ink 墨阶（白底 + 最深墨是刺眼主因之一），
    压缩块级间距使短消息与纯文本时代的胶囊高度一致 */
 .msg-human-pill .msg-ai-body {
-  color: var(--fg);
+  color: var(--prose-fg);
   font-size: 15px;
   line-height: 1.55;
 }
