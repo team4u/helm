@@ -8,21 +8,32 @@
 
 ```bash
 npm install -g @helmx/cli
-helmx update --watch
+helmx start
 ```
 
-首次运行会下载并校验 `@helmx/hub`。启动后访问 <http://127.0.0.1:3202>，根据页面提示设置管理员密码。然后在「模型与凭证中心」添加供应商凭据、选择默认模型，就能开始对话。`--watch` 在前台运行，按 `Ctrl+C` 会停止它启动的 Hub。安装完成后，`--watch` 可以离线启动已有版本。
+首次运行会下载并校验 `@helmx/hub`。启动后访问 <http://127.0.0.1:3202>，根据页面提示设置管理员密码。然后在「模型与凭证中心」添加供应商凭据、选择默认模型，就能开始对话。`helmx start` 在前台运行，按 `Ctrl+C` 会停止它启动的 Hub；安装完成后也可以离线启动已有版本。
 
-### 更新和查看状态
+### 生命周期与更新
+
+生命周期动词和 `helmx-node` 对齐，更新是显式的主动动作（`claude update` 语义）：
 
 | 命令 | 用法 |
 | --- | --- |
-| `helmx update` | 安装并启动本机 Hub，或更新现有安装。 |
-| `helmx update --check --json` | 查询可用的更新。 |
-| `helmx update --status --json` | 查看已安装的版本、运行状态和上一次更新失败的信息。 |
-| `helmx update --stop` | 在 Linux 上验证进程身份后停止 Hub。macOS 和 Windows 上用 `--watch` 所在终端停止。 |
+| `helmx start` | 安装（如需）并前台启动本机 Hub；`-d` 后台常驻（关终端不停）。 |
+| `helmx stop` | 优雅停止 Hub：优先走 Hub 自己的控制通道（Linux/macOS/Windows 行为一致），验证不了进程身份时退回 pid 记录身份证明并显式报错。 |
+| `helmx restart` | 优雅停止后按粘性启动配置后台重启。 |
+| `helmx service install` | 注册开机自启的系统服务（launchd / systemd --user / schtasks），以前台 `helmx start` 运行、由 OS 监督器负责重启。 |
+| `helmx update` | 主动更新：检查 → 校验暂存 → 空闲时切换重启（未安装时先安装）。 |
+| `helmx update --check --json` | 只读查询可用的更新。 |
+| `helmx status` | 登录态 + 本机 Hub 进程/版本/健康快照（本机未安装时只报登录态）。 |
 
-`--watch` 默认每 15 分钟检查 `latest`。`--channel beta` 选择预发布通道，`--interval-ms` 调整检查间隔。遇到在跑的会话、工具、上下文压缩或排队任务，候选版本会等到下一次检查确认空闲再切换。无法确认活动状态时也会等。`--force` 可以跳过这项检查。切换会短暂停机，新版启动失败时会尝试恢复上一版。空闲检查结束后刚接入的回合，仍可能在重启后恢复执行。
+#### 后台静默备包与一键切换
+
+npm 管理的 Hub 进程内建更新检查器（默认每 15 分钟，`HELMX_HUB_UPDATE_INTERVAL_MS` 调整，`0` 关闭；`HELMX_HUB_UPDATE_TAG` 选通道）：发现新版本后**静默下载校验并暂存**（不打扰运行中的会话），然后在总览页顶部出现「Hub 更新已就绪」卡片——点「立即切换」经控制通道优雅停机、秒级切换到新版本；Hub 正在忙（会话、工具、压缩、排队输入）时会如实展示计数并要求确认。`helmx update` 随时手动触发同样的切换。切换会短暂停机，新版启动失败时 handoff 会恢复上一版并记录 blocked 冷却。
+
+Docker / 源码运行的 Hub 没有安装根，更新检查器如实回报「非托管」，更新方式与部署方式一致（重建镜像 / 重新构建）。
+
+遇到在跑的会话、工具、上下文压缩或排队任务，`helmx update` 会推迟切换：候选版本先暂存，等下一次确认空闲再切（`--force` 可跳过）。无法确认活动状态时也会等。切换会短暂停机，新版启动失败时会尝试恢复上一版。空闲检查结束后刚接入的回合，仍可能在重启后恢复执行。
 
 `helmx update` 管的是 Hub。升级 `helmx` 命令本身时，重新执行 `npm install -g @helmx/cli`。全局 CLI 的 `helmx plugins build` 使用本机 Hub 发行包里的编译器，需要先安装 Hub。
 
@@ -96,7 +107,7 @@ Web 开发服务器在 <http://127.0.0.1:3201>，把 `/api` 和 `/ws` 代理到 
 
 ## 目录与环境变量
 
-Hub 运行文件默认放在 `~/.helmx-hub`，会话、凭据和插件数据默认放在 `~/.helmx`。修改目录时，请让这两个位置各自独立。启动配置优先使用命令行参数，其次是环境变量和上一次保存的配置。用 `helmx update --help` 查看启动选项。
+Hub 运行文件默认放在 `~/.helmx-hub`，会话、凭据和插件数据默认放在 `~/.helmx`。修改目录时，请让这两个位置各自独立。启动配置优先使用命令行参数，其次是环境变量和上一次保存的配置。用 `helmx start --help` 查看启动选项。
 
 | 变量 | 用途 |
 | --- | --- |
@@ -110,6 +121,8 @@ Hub 运行文件默认放在 `~/.helmx-hub`，会话、凭据和插件数据默�
 | `HELMX_CWD` | Hub 的默认工作目录。受管执行中表示会话的工作目录。 |
 | `HELMX_MODEL` | 覆盖 Hub 启动时的默认模型。 |
 | `HELMX_NODE_JOIN_GRACE_MS` | Hub 重启时为「恢复所依赖且已注册的远端节点」等待回连的上限毫秒数，默认 10000；`0` 关闭等待。超时后照常启动，绑定该节点的工作按真实在线状态显式失败。 |
+| `HELMX_HUB_UPDATE_INTERVAL_MS` | Hub 进程内更新检查器的检查间隔毫秒数，默认 900000（15 分钟）；`0` 关闭后台静默备包。 |
+| `HELMX_HUB_UPDATE_TAG` | Hub 进程内更新检查器跟随的 npm dist-tag，默认 `latest`，预发布通道 `beta`。 |
 | `VITE_HOST` | Web 开发服务器的监听地址，默认 `0.0.0.0`。 |
 | `HERDR_SOCKET_PATH` | 覆盖 Herdr 的本机 socket 或命名管道路径。 |
 
