@@ -7,6 +7,8 @@ import { resolveWebDistOption } from './web-dist.js';
 import { hubPackageVersion, startHubControlServer, readHubControlRecord, type HubControlHandle } from './control.js';
 import { startHubUpdater } from './updater.js';
 import { createHubUpdateRoutes } from './updater-routes.js';
+import { loadHubChangelog } from './changelog.js';
+import { recordRunVersion } from './run-version.js';
 
 const launchId = process.env.HELMX_HUB_ACTIVITY_LAUNCH_ID;
 delete process.env.HELMX_HUB_ACTIVITY_LAUNCH_ID;
@@ -35,6 +37,11 @@ try {
   // switching is always an explicit act (`helmx update` or the Web UI apply). Inactive unless the
   // launcher marked this Hub as payload-managed via `HELMX_HUB_INSTALL_ROOT` (docker/dev hubs
   // report `active: false` and apply explains how to update them instead).
+  // Installed-version changelog (shipped CHANGELOG.md, offline) + last-run version tracking:
+  // the Web "what changed" notice reads `upgradedFrom` from the status route below.
+  const hubVersion = hubPackageVersion();
+  const changelog = await loadHubChangelog(process.env, dirname(fileURLToPath(import.meta.url)));
+  const { upgradedFrom } = await recordRunVersion(app.kernel.dataDir, hubVersion);
   const updater = startHubUpdater({
     root: process.env.HELMX_HUB_INSTALL_ROOT && process.env.HELMX_HUB_INSTALL_ROOT !== '' ? process.env.HELMX_HUB_INSTALL_ROOT : undefined,
     pkgName: process.env.HELMX_PAYLOAD_PACKAGE ?? '@helmx/hub',
@@ -48,6 +55,8 @@ try {
     ...(webDistDir !== undefined ? { webDistDir } : {}),
     productRoutes: createHubUpdateRoutes({
       updater,
+      changelog: { ...changelog, version: hubVersion },
+      upgrade: { upgradedFrom },
       kernel: { activitySnapshot: () => app.kernel.activitySnapshot(), dataDir: app.kernel.dataDir },
       root: updater !== null ? process.env.HELMX_HUB_INSTALL_ROOT! : null,
     }),

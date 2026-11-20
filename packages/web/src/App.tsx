@@ -166,6 +166,10 @@ const CommandPaletteModal = lazyWithRetry(
   () => lazy(() => import('./modals/CommandPaletteModal.js').then((m) => ({ default: m.CommandPaletteModal }))),
   { overlay: true },
 )
+const HubChangelogModal = lazyWithRetry(
+  () => lazy(() => import('./modals/HubChangelogModal.js').then((m) => ({ default: m.HubChangelogModal }))),
+  { overlay: true },
+)
 const ArtifactPreviewModal = lazyWithRetry(
   () => lazy(() => import('./conversation/ArtifactPreviewModal.js').then((m) => ({ default: m.ArtifactPreviewModal }))),
   { overlay: true },
@@ -484,6 +488,11 @@ function HelmxShellInner() {
         {activeModal?.kind === 'command-palette' && (
           <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('conv.shell.loadingCommandPalette')}</div>}>
             <CommandPaletteModal onClose={closeModal} />
+          </Suspense>
+        )}
+        {activeModal?.kind === 'hub-changelog' && (
+          <Suspense fallback={<div className="screen-loading screen-loading-overlay" role="status">{t('shell.hubChangelog.loading')}</div>}>
+            <HubChangelogModal from={activeModal.from} onClose={closeModal} />
           </Suspense>
         )}
         {activeModal?.kind === 'artifact-preview' && (

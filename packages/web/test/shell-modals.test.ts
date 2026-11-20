@@ -1232,8 +1232,9 @@ test('Sidebar 双层导航：Activity Rail 空间切换与系统中心直达（S
   assert.ok(!html.includes('sidebar-search-input'), '默认收起筛选栏，不常驻渲染搜索输入框')
   assert.ok(html.includes('title="Open Cmd K global search and command palette"'), 'Cmd-K 按钮保留')
 
-  // 底栏已移除：系统中心入口收敛到设置空间
-  assert.ok(!html.includes('sidebar-footer'), '底栏容器已移除')
+  // 底栏仅保留「版本与更新」常驻入口：系统中心入口收敛到设置空间，不在底栏复现
+  assert.ok(html.includes('sidebar-footer'), '底栏容器渲染版本与更新入口')
+  assert.ok(html.includes('sidebar-footer-item'), '底栏入口存在')
 })
 
 test('Sidebar 设置空间：系统中心纵向列表与激活高亮（SSR）', { timeout: 60_000 }, () => {

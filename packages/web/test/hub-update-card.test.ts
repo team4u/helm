@@ -107,3 +107,135 @@ test('apply posts to /api/hub-update/apply and hub_busy surfaces counts with a f
     globalThis.fetch = originalFetch
   }
 })
+
+test('HubUpgradedNotice appears once per version and opens the sliced changelog', { timeout: 60_000 }, async (t) => {
+  const { HubUpgradedNotice } = await import('../src/overview/HubUpgradedNotice.js'
+  ) as typeof import('../src/overview/HubUpgradedNotice.js')
+  const { act } = await import('react') as typeof import('react')
+  const { mountDomRoot } = await import('./helpers/dom-harness.js')
+  const { makeTestStore, HelmxExternalStoreContext } = await import('./helpers/store.js')
+
+  let statusBody: Record<string, unknown> = {
+    currentVersion: '0.1.2',
+    upgradedFrom: '0.1.1',
+    changelogAvailable: true,
+  }
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    if (String(input) === '/api/hub-update/status') return Response.json(statusBody)
+    return Response.json({})
+  }) as typeof fetch
+  const storage = globalThis.localStorage
+  t.after(() => {
+    globalThis.fetch = originalFetch
+    storage?.removeItem('helmx:hub-changelog-seen')
+  })
+  const store = makeTestStore()
+  const element = (): React.ReactElement =>
+    React.createElement(
+      HelmxExternalStoreContext.Provider,
+      { value: store },
+      React.createElement(HubUpgradedNotice, { pollMs: 80 }),
+    )
+  const mounted = await mountDomRoot(element())
+  t.after(mounted.unmount)
+
+  const notice = mounted.host.querySelector('.hub-upgraded-notice') as HTMLElement | null
+  assert.ok(notice !== null, 'notice renders when an upgrade is pending')
+  assert.match(notice.textContent ?? '', /v0\.1\.1 更新到 v0\.1\.2|v0\.1\.1 to v0\.1\.2/)
+  const actions = [...notice.querySelectorAll('button')] as HTMLButtonElement[]
+  const view = actions.find((button) => /查看更新内容|What's changed/.test(button.textContent ?? ''))
+  assert.ok(view !== undefined, 'view-changes action present when the changelog is available')
+
+  await act(async () => {
+    view!.click()
+  })
+  assert.equal(storage?.getItem('helmx:hub-changelog-seen') ?? null, '0.1.2', 'opening the changelog marks the version as seen')
+
+  await mounted.rerender(element())
+  assert.ok(mounted.host.querySelector('.hub-upgraded-notice') === null, 'notice stays dismissed for the same version')
+
+  statusBody = { currentVersion: '0.1.3', upgradedFrom: '0.1.2', changelogAvailable: false }
+  await new Promise((resolve) => setTimeout(resolve, 250))
+  await mounted.rerender(element())
+  const next = mounted.host.querySelector('.hub-upgraded-notice') as HTMLElement | null
+  assert.ok(next !== null, 'a newer upgrade shows the notice again')
+  assert.equal(next.querySelectorAll('button').length, 1, 'without a changelog only the dismiss action remains')
+})
+
+test('HubChangelogModal renders sliced sections and honest absent states', { timeout: 60_000 }, async (t) => {
+  const { HubChangelogModal } = await import('../src/modals/HubChangelogModal.js')
+  const { mountDomRoot } = await import('./helpers/dom-harness.js')
+  const { HelmxExternalStoreContext } = await import('./helpers/store.js')
+  const calls: string[] = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const path = String(input)
+    calls.push(path)
+    if (path.startsWith('/api/hub-update/changelog')) {
+      return Response.json({
+        available: true,
+        version: '0.1.2',
+        from: '0.1.1',
+        fromMatched: true,
+        sections: [
+          { version: '0.1.2', date: '2026-11-22', markdown: '- feat(web): changelog 界面' },
+          { version: '0.1.1', date: '2026-11-19', markdown: '- ci(release): Trusted Publishing' },
+        ],
+      })
+    }
+    return Response.json({})
+  }) as typeof fetch
+  t.after(() => {
+    globalThis.fetch = originalFetch
+  })
+
+  const store = (await import('./helpers/store.js')).makeTestStore()
+  const mounted = await mountDomRoot(
+    React.createElement(
+      HelmxExternalStoreContext.Provider,
+      { value: store },
+      React.createElement(HubChangelogModal, { from: '0.1.1', onClose: () => {}, inline: true }),
+    ) satisfies React.ReactElement as React.ReactElement,
+  )
+  t.after(mounted.unmount)
+  assert.deepEqual(calls, ['/api/hub-update/changelog?from=0.1.1'])
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  const host = mounted.host
+  assert.ok(host.querySelector('.hub-changelog-modal') !== null)
+  const versions = [...host.querySelectorAll('.hub-changelog-version')].map((el) => el.textContent)
+  assert.deepEqual(versions, ['v0.1.2', 'v0.1.1'])
+  assert.match(host.textContent ?? '', /0\.1\.1 以来 · 2 个版本|2 versions/)
+  assert.match(host.textContent ?? '', /changelog 界面/)
+
+  // Absent changelog: honest callout, no fabricated sections.
+  globalThis.fetch = (async () => Response.json({ available: false, version: '0.1.2' })) as typeof fetch
+  const absentMounted = await mountDomRoot(
+    React.createElement(
+      HelmxExternalStoreContext.Provider,
+      { value: store },
+      React.createElement(HubChangelogModal, { onClose: () => {}, inline: true }),
+    ) satisfies React.ReactElement as React.ReactElement,
+  )
+  t.after(absentMounted.unmount)
+  await new Promise((resolve) => setTimeout(resolve, 100))
+  assert.match(absentMounted.host.textContent ?? '', /未随附变更日志|did not ship a changelog/)
+})
+
+test('sidebar footer carries the changelog entry', { timeout: 60_000 }, async (t) => {
+  const { Sidebar } = await import('../src/shell/Sidebar.js')
+  const { mountDomRoot } = await import('./helpers/dom-harness.js')
+  const { makeTestStore, HelmxExternalStoreContext } = await import('./helpers/store.js')
+  const store = makeTestStore()
+  const mounted = await mountDomRoot(
+    React.createElement(
+      HelmxExternalStoreContext.Provider,
+      { value: store },
+      React.createElement(Sidebar),
+    ) satisfies React.ReactElement as React.ReactElement,
+  )
+  t.after(mounted.unmount)
+  const footerItem = mounted.host.querySelector('.sidebar-footer-item') as HTMLElement | null
+  assert.ok(footerItem !== null, 'sidebar footer entry exists')
+  assert.match(footerItem.textContent ?? '', /版本与更新|Version & updates/)
+})

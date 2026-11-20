@@ -193,7 +193,7 @@ const distPackageJson = {
   repository: { type: 'git', url: 'git+https://github.com/team4u/helmx.git', directory: 'packages/payload' },
   publishConfig: { access: 'public' },
   engines: { node: rootPkg.engines?.node ?? '>=24.12.0' },
-  files: ['hub.tgz', 'kernel.tgz', 'plugins.tgz', 'plugin-build.tgz', 'env-io.tgz', 'protocol.tgz', 'cli', 'web', 'start.mjs', 'update-handoff.mjs', 'manifest.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md'],
+  files: ['hub.tgz', 'kernel.tgz', 'plugins.tgz', 'plugin-build.tgz', 'env-io.tgz', 'protocol.tgz', 'cli', 'web', 'start.mjs', 'update-handoff.mjs', 'CHANGELOG.md', 'manifest.json', 'LICENSE', 'THIRD_PARTY_NOTICES.md'],
   dependencies: Object.fromEntries(Object.keys(rootDependencies).sort().map((k) => [k, rootDependencies[k]])),
   ...(peerOverrides.size > 0
     ? { overrides: Object.fromEntries([...peerOverrides.entries()].sort(([a], [b]) => a.localeCompare(b))) }
@@ -239,6 +239,7 @@ copyFileSync(cliArtifact.bundleFile, path.join(stagingDir, 'cli', 'dist', 'index
 cpSync(path.join(repoRoot, 'packages/web/dist'), path.join(stagingDir, 'web/dist'), { recursive: true });
 cpSync(path.join(payloadPkgRoot, 'src/start.mjs'), path.join(stagingDir, 'start.mjs'));
 cpSync(path.join(payloadPkgRoot, 'src/update-handoff.mjs'), path.join(stagingDir, 'update-handoff.mjs'));
+cpSync(path.join(repoRoot, 'CHANGELOG.md'), path.join(stagingDir, 'CHANGELOG.md'));
 cpSync(path.join(repoRoot, 'LICENSE'), path.join(stagingDir, 'LICENSE'));
 cpSync(path.join(repoRoot, 'THIRD_PARTY_NOTICES.md'), path.join(stagingDir, 'THIRD_PARTY_NOTICES.md'));
 // Report the payload publish version at runtime so Hub / CLI don't keep reporting the old workspace
@@ -325,6 +326,7 @@ if (stale.length > 0) {
 const entries = {
   launcher: 'start.mjs',
   updateHandoff: 'update-handoff.mjs',
+  changelog: 'CHANGELOG.md',
   rootPackageJson: 'package.json',
   hub: 'node_modules/@helmx/hub/dist/main.js',
   hubPackageJson: 'node_modules/@helmx/hub/package.json',

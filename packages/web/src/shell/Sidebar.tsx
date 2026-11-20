@@ -713,6 +713,21 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
             <SettingsNavGroup store={sidebarStore} onNavigate={onClose} />
           )}
         </div>
+
+        {/* 侧栏底部常驻入口：已安装版本 changelog（随包分发的 CHANGELOG.md，离线可读） */}
+        <div className="sidebar-footer">
+          <button
+            type="button"
+            className="sidebar-footer-item"
+            onClick={() => {
+              setActiveModal({ kind: 'hub-changelog' })
+              onClose?.()
+            }}
+          >
+            <HelmxIcon name="file-text" size={13} />
+            <span>{t('shell.hubChangelog.entry')}</span>
+          </button>
+        </div>
       </div>
     </aside>
   )
