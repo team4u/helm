@@ -380,7 +380,7 @@ test('Sidebar header keeps the overview icon button next to the command palette 
   assert.ok(!html.includes('attention-row'), 'no legacy attention row residue')
 })
 
-test('interaction: clicking the header overview button opens #/overview', { timeout: 60_000 }, async () => {
+test('interaction: clicking the header overview button opens #/overview and lights the button active', { timeout: 60_000 }, async () => {
   const store = attentionScenarioStore()
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -392,11 +392,20 @@ test('interaction: clicking the header overview button opens #/overview', { time
     })
     const btn = container.querySelector<HTMLButtonElement>('.sidebar-overview-open-btn')
     assert.ok(btn !== null, 'the header overview button renders')
+    // 主屏不在总览：无激活态（不点亮、无 aria-current）。
+    assert.ok(btn.classList.contains('is-active') === false, 'the button stays inert outside the overview stage')
+    assert.ok(btn.getAttribute('aria-current') === null, 'no aria-current outside the overview stage')
     await act(async () => {
       btn.click()
     })
     const primary = store.getPrimaryTarget()
     assert.ok(primary.kind === 'overview', 'clicking the header button navigates to the overview stage')
+    // 主屏停在总览：入口点亮（is-active + aria-current="page"），用户在大堂时
+    // 一眼知道自己在大堂。
+    const btnAfter = container.querySelector<HTMLButtonElement>('.sidebar-overview-open-btn')
+    assert.ok(btnAfter !== null)
+    assert.ok(btnAfter.classList.contains('is-active') === true, 'the button lights up while the overview is the primary stage')
+    assert.ok(btnAfter.getAttribute('aria-current') === 'page', 'the active button carries aria-current="page"')
   } finally {
     await act(async () => {
       root?.unmount()

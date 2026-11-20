@@ -711,9 +711,16 @@
 }
 
 /* 侧栏头部总览入口（命令面板搜索钮旁）：挂 overview-count-badge 同源计数
- * 徽标（绝对定位锚点需要 relative 宿主），与移动端总览按钮同一事实源。 */
+ * 徽标（绝对定位锚点需要 relative 宿主），与移动端总览按钮同一事实源；
+ * 主屏停在 #/overview 时点亮激活态（accent 词汇，aria-current 同步）——
+ * 用户在大堂时一眼知道自己在大堂。 */
 .sidebar-overview-open-btn {
   position: relative;
+}
+
+.sidebar-overview-open-btn.is-active {
+  color: var(--accent);
+  background: var(--accent-bg);
 }
 
 /* 话题切换已回归左栏手风琴（仅展开当前智能体），顶栏恢复单行标题。 */

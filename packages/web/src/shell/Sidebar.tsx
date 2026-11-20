@@ -677,9 +677,10 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
               <Tooltip content={t('shell.overview.railTooltip')} side="bottom">
                 <button
                   type="button"
-                  className="btn btn-sm btn-icon sidebar-overview-open-btn"
+                  className={`btn btn-sm btn-icon sidebar-overview-open-btn${primaryTarget.kind === 'overview' ? ' is-active' : ''}`}
                   title={t('shell.overview.railTooltip')}
                   aria-label={t('shell.overview.railTooltip')}
+                  aria-current={primaryTarget.kind === 'overview' ? 'page' : undefined}
                   onClick={() => {
                     openTarget({ kind: 'overview' })
                     onClose?.()

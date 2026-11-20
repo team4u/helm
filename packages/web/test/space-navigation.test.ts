@@ -8,6 +8,7 @@ import { ARCHIVED_TAG } from '../src/conversation/archive-model.js'
 import {
   applyScreenParamsPatch,
   defaultSpaceTarget,
+  hasVisibleConversationRoots,
   standbyFallbackTarget,
   isSpaceTargetAvailable,
   partitionScreenParamsPatch,
@@ -273,6 +274,58 @@ test('resolveSpaceSwitch: same space no-op; valid memory first; stale memory cle
 // ---------------------------------------------------------------------------
 // space-navigation: standbyFallbackTarget & screen params patch
 // ---------------------------------------------------------------------------
+
+test('hasVisibleConversationRoots: the honest "not a fresh system" verdict for the overview home landing', { timeout: 60_000 }, () => {
+  const base = {
+    profiles: [makeProfile('assistant'), makeProfile('bot-x', { managedByPlugin: 'plugin:off' })],
+    plugins: [{ id: 'plugin:off', enabled: false }],
+  }
+  // 全新系统 / 全部归档：无可见根树，回退待命页落地。
+  assert.equal(hasVisibleConversationRoots({ ...base, conversations: [] }), false, 'a fresh system has no visible roots')
+  assert.equal(
+    hasVisibleConversationRoots({
+      ...base,
+      conversations: [makeConversation({ id: 1, profileId: 'assistant', tags: [ARCHIVED_TAG] })],
+    }),
+    false,
+    'an archived root is invisible everywhere',
+  )
+  // 停用插件托管的 Profile 根同样不可见；子会话不算根。
+  assert.equal(
+    hasVisibleConversationRoots({
+      ...base,
+      conversations: [makeConversation({ id: 2, profileId: 'bot-x' })],
+    }),
+    false,
+    'a root whose profile is hidden by a disabled plugin is invisible',
+  )
+  assert.equal(
+    hasVisibleConversationRoots({
+      ...base,
+      conversations: [makeConversation({ id: 3, profileId: 'assistant', parentConversationId: 99 })],
+    }),
+    false,
+    'child conversations never count as roots',
+  )
+  // 健康根：可见（含孤儿 Profile 根——profile 未找到按可见处理，与侧栏孤儿
+  // 站位兜底同口径）。
+  assert.equal(
+    hasVisibleConversationRoots({
+      ...base,
+      conversations: [makeConversation({ id: 4, profileId: 'assistant' })],
+    }),
+    true,
+    'a healthy root tree is visible',
+  )
+  assert.equal(
+    hasVisibleConversationRoots({
+      ...base,
+      conversations: [makeConversation({ id: 5, profileId: 'ghost' })],
+    }),
+    true,
+    'an orphan-profile root still counts as visible',
+  )
+})
 
 test('standbyFallbackTarget: no summary falls to the profile center; remote coordinates kept, local/empty omitted', { timeout: 60_000 }, () => {
   assert.deepEqual(standbyFallbackTarget(undefined), { kind: 'profiles' })

@@ -387,19 +387,31 @@ test('抽屉会话顶栏工作台按钮打开绑定抽屉会话的完整工作�
   assert.doesNotMatch(window.location.hash, /wb=/, '地址栏应收起工作台参数')
 })
 
-test('工作台打开时经总览卡片打开会话抽屉：旧工作台自动收起，抽屉内可重新打开', { timeout: 60_000 }, async () => {
+test('工作台打开时经总览卡「抽屉速览」打开会话抽屉：旧工作台自动收起，抽屉内可重新打开', { timeout: 60_000 }, async () => {
   await mountReal('#/overview?wb=artifacts', {
-    list: [summary(1), { ...summary(11, 1), tags: ['drawer-tagged'] }],
+    // #11 置为等待人类（blocked）：抽屉速览与卡面直达同目标语义——树内有
+    // 等待人类的会话时直达该后代（#11 命中 scoped 面板，抽屉顶栏工作台按钮可见）。
+    list: [summary(1), { ...summary(11, 1), tags: ['drawer-tagged'], status: 'blocked' as const }],
     ui: [DRAWER_ONLY_PANEL],
   })
   assert.ok(document.querySelector('.helmx-workbench'), '初始工作台应打开')
 
-  // 点根会话卡的后代芯片 #11 打开抽屉（#11 命中 scoped 面板，抽屉顶栏工作台按钮可见）
-  const chip = document.querySelector<HTMLButtonElement>('.overview-card .overview-chip')
-  assert.ok(chip, '总览卡片应渲染后代会话芯片')
-  await act(async () => { chip!.click() })
+  // 直进语义下芯片点击导航主屏；抽屉速览收进卡片 `...` 菜单——经菜单打开
+  // 会话抽屉（#11 命中 scoped 面板，抽屉顶栏工作台按钮可见）。
+  const card = document.querySelector<HTMLElement>('.overview-card')
+  assert.ok(card, '总览应渲染会话树卡片')
+  const menuTrigger = card.querySelector<HTMLButtonElement>('.overview-card-actions button')
+  assert.ok(menuTrigger, '卡片应有 `...` 菜单')
+  await act(async () => {
+    menuTrigger!.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+  })
+  const peekItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].find((el) =>
+    el.textContent?.includes('Peek in drawer'),
+  )
+  assert.ok(peekItem, '菜单应提供「抽屉速览」')
+  await act(async () => { peekItem!.click() })
   await settle()
-  assert.ok(document.querySelector('.conversation-drawer'), '点击芯片应打开会话抽屉')
+  assert.ok(document.querySelector('.conversation-drawer'), '抽屉速览应打开会话抽屉')
   assert.ok(document.querySelector('.helmx-workbench') === null, '打开抽屉应收起旧工作台（离开抬升态）')
 
   const workbenchBtn = document.querySelector<HTMLButtonElement>(
