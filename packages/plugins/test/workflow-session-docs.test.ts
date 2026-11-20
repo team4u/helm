@@ -331,7 +331,7 @@ test('sessionDoc 声明与 docs 命名空间隔离：runs 与 run-badges 为瞬�
 })
 
 // ---------------------------------------------------------------------------
-// 祖先聚合：分片含自身 + 后代发起的 runs（原始归属保留），角标同步聚合
+// 祖先聚合：分片含自身 + 后代发起的 runs（原始归属保留）；角标一级口径
 // ---------------------------------------------------------------------------
 
 /** 事件回调经 PluginHost 任务包装异步执行：等一个微任务 + timer 刻。 */
@@ -364,9 +364,10 @@ test('祖先聚合：后代发起的 run 进入祖先分片且保留原始归属
   // 无关会话不串台。
   assert.equal(readShard(host, 2).runs.length, 0, '无关会话分片不含该子树 run')
 
-  // 角标同步祖先聚合：根会话计数含后代 run（按 run.id 去重后即 2）。
+  // 角标一级口径：每个会话只统计自己直接发起的 run——根会话不含后代 run，
+  // 后代 run 归其发起会话（#11）自己的角标（父 run 存活期覆盖后代在途期）。
   const badges = readBadges(host)
-  assert.equal(badges.byConversation['1']?.['count'], 2, `根会话角标聚合后代 run（实际 ${JSON.stringify(badges)}）`)
+  assert.equal(badges.byConversation['1']?.['count'], 1, `根会话角标只计直接发起的 run（实际 ${JSON.stringify(badges)}）`)
   assert.equal(badges.byConversation['11']?.['count'], 1, '子会话角标只计自己')
   assert.equal(badges.byConversation['2'], undefined, '无关会话无角标')
   await host.dispose()

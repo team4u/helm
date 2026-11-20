@@ -51,7 +51,7 @@
 | `records` | 私有 `ctx.doc` | run 索引 + 每 run 完整记录（引擎唯一持久层，重启恢复同一命名空间） |
 | `subagent-conversations` | 私有 `ctx.doc` | 受管子代理登记表（`depth` / `parentConversationId` / 子树上限），深度契约唯一事实来源 |
 | `runs` | 公开 `ctx.sessionDoc`（`durable: false`） | 纯内存瞬态投影：当前会话及后代发起的 run 分片（专有 SSE 订阅，单分片 `MAX_PROJECTED_RUNS_PER_CONVERSATION = 100` 保留全部 `running` + 最新终态，剥离完整 `result` 仅保留 `hasResult`/`resultPreview` 并附带 `errorCode`/`resumable`）；启动时自 `records` 重建，停用不落盘 |
-| `run-badges` | 公开 `ctx.doc`（`durable: false`） | 纯内存瞬态投影：基于全量运行态聚合的每会话紧凑角标（`count / tone / footerText`，不受 100 条分片滑窗影响）；启动时自 `records` 重建，停用不落盘 |
+| `run-badges` | 公开 `ctx.doc`（`durable: false`） | 纯内存瞬态投影：基于全量运行态聚合的每会话紧凑角标（`count / tone / footerText`，不受 100 条分片滑窗影响；**一级口径**——只计本会话直接发起的 run，后代 run 归其发起会话自己的角标）；启动时自 `records` 重建，停用不落盘 |
 
 工作流定义文件唯一存储真源是 `<ctx.dataDir>/workflows/<name>.js`。引擎经 `emitEvent` 发布 `workflow.updated`（全局仅状态失效提示）与 `workflow.settled`（完整 summary，`broadcast: false` 进程内分发，`builtin:herdr` 监听它做双轨保活清理）。
 

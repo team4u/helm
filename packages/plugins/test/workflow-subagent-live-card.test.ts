@@ -1261,6 +1261,30 @@ test('executionLightStatus 精度：后代真实失败不被 run 级中止掩盖
   assert.equal(executionLightStatus('done', abortedRun), 'done')
 })
 
+test('子树进度徽标一级口径：B 卡片只数直接子任务，孙子层不并入分母', { timeout: 60_000 }, () => {
+  // B(11) 直接派 C(21)，C 又派 D(31)：B 卡片徽标应为一级 "Subtree 0/1"（旧跨层口径为 0/2）。
+  const makeNode = (key: string, status: string, conversationId?: number): ExecutionNode => ({
+    key,
+    kind: 'conversation',
+    status: status as ExecutionNode['status'],
+    ...(conversationId !== undefined ? { conversationId } : {}),
+    children: [],
+    aggregated: { status: status as ExecutionNode['status'], total: 1, done: status === 'done' ? 1 : 0, running: status === 'working' ? 1 : 0, blocked: 0, error: status === 'error' ? 1 : 0 },
+    updatedAt: 100,
+  })
+  const childWithOwnChild: ExecutionNode = {
+    ...makeNode('c21', 'working', 21),
+    children: [makeNode('c31', 'working', 31)],
+    aggregated: { status: 'working', total: 2, done: 0, running: 2, blocked: 0, error: 0 },
+  }
+  const html = renderCard('running', {
+    conversations: [summary(11, 'working')],
+    childNodes: [childWithOwnChild],
+  })
+  assert.ok(html.includes('Subtree 0/1'), `B 卡片进度徽标只数直接子（实际应含 Subtree 0/1）`)
+  assert.ok(!html.includes('Subtree 0/2'), '孙子层 D 不得并入 B 卡片的进度分母')
+})
+
 test('清亮化终审：自身状态文字移出主头部——灯的可访问名称交代自身状态', { timeout: 60_000 }, () => {
   const html = renderCard('done', {
     expanded: undefined,

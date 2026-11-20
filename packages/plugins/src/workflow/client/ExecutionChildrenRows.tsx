@@ -140,7 +140,7 @@ export function ExecutionChildrenRows({ nodes }: { nodes: ExecutionNode[] }): Re
                   <span className="badge badge-warn">{execApprovalBadge(descendantApprovals, locale)}</span>
                 ) : null}
                 {node.children.length > 0 ? (
-                  <span className="execution-child-count tabular-nums">{`${aggregated.done}/${aggregated.total}`}</span>
+                  <span className="execution-child-count tabular-nums">{`${node.children.filter((c) => c.status === 'done' || c.status === 'error').length}/${node.children.length}`}</span>
                 ) : null}
                 {(() => {
                   const lightStatus = executionLightStatus(

@@ -244,6 +244,53 @@ test('buildExecutionTree：任意深度递归 + 状态自底向上聚合 + 子�
   assert.equal(grand.children[0]!.children.length, 0, '叶子无子节点')
 })
 
+test('活动托盘进度一级口径：根→B→C 链上 B 行不显示 0/2，只有 ≥2 个直接子才显示进度', { timeout: 60_000 }, () => {
+  // 用户实测场景：根会话派 1 个子代理 B（11），B 又派 1 个子代理 C（21）。
+  // 旧口径把 B 自身 + C 计入 B 行 aggregated（total=2）显示 "0/2"；一级口径下
+  // B 行只有一个直接子任务，不显示进度徽标——嵌套层归嵌套层自己的托盘管。
+  const conversations = [
+    summary(1, 'working'),
+    summary(11, 'working', 1, { doing: 'subagent: running' }),
+    summary(21, 'working', 11, { doing: 'thinking...' }),
+  ]
+  const runs = [
+    subagentRun('wf_11', 1, 11, 'running'),
+    subagentRun('wf_21', 11, 21, 'running'),
+  ]
+  const trayRoot = m.buildActiveTraySummary({ rootConversationId: 1, conversations, runs })
+  assert.deepEqual(
+    trayRoot.items.map((i) => i.conversationId),
+    [11],
+    '根托盘只挂 B 一行',
+  )
+  assert.equal(trayRoot.items[0]!.progress, undefined, 'B 行不得显示跨层进度徽标（旧口径 0/2）')
+
+  const trayChild = m.buildActiveTraySummary({ rootConversationId: 11, conversations, runs })
+  assert.deepEqual(
+    trayChild.items.map((i) => i.conversationId),
+    [21],
+    'B 自己的托盘只挂 C 一行',
+  )
+  assert.equal(trayChild.items[0]!.progress, undefined, 'C 行单任务同样无进度徽标')
+
+  // 对照：B 并行派 2 个直接子代理时进度徽标按一级计数（1/2），C 的后代不计入。
+  const conversations2 = [
+    summary(1, 'working'),
+    summary(11, 'working', 1),
+    summary(21, 'done', 11),
+    summary(22, 'working', 11),
+    summary(31, 'working', 22),
+  ]
+  const runs2 = [
+    subagentRun('wf_11', 1, 11, 'running'),
+    subagentRun('wf_21', 11, 21, 'completed'),
+    subagentRun('wf_22', 11, 22, 'running'),
+    subagentRun('wf_31', 22, 31, 'running'),
+  ]
+  const trayParallel = m.buildActiveTraySummary({ rootConversationId: 1, conversations: conversations2, runs: runs2 })
+  assert.deepEqual(trayParallel.items[0]!.progress, { done: 1, total: 2 }, 'B 行进度只数直接子（21 完成 + 22 在跑），31 是孙子层不计入')
+})
+
 test('buildExecutionTree：DSL run 认领的会话挂 run 节点下，孙代递归挂在会话节点下', { timeout: 60_000 }, () => {
   const conversations = [
     summary(1, 'idle'),
@@ -821,7 +868,7 @@ test('工作台父卡渲染子树徽章 / 前线摘要 / 下一级紧凑子项�
   const Panel = mod['WorkflowWorkbenchPanel'] as (p: Record<string, unknown>) => React.ReactElement
   const { host, unmount } = await mountClient(spy, e(Panel, { conversation: summary(1, 'working') }))
   try {
-    assert.match(host.textContent!, /Subtree 0\/2/, '应渲染子树完成计数徽章')
+    assert.match(host.textContent!, /Subtree 0\/1/, '父卡进度徽章一级口径：只数直接子（#21），深层 #31 不并入')
     const approvalBadge = host.querySelector('.subagent-live-trigger .badge-warn')
     assert.ok(approvalBadge !== null, '后代审批徽章应渲染')
     assert.match(approvalBadge.getAttribute('title')!, /确认删除文件 \(#21\) awaiting approval/, '审批徽章 title 应含后代审批摘要')
@@ -838,7 +885,7 @@ test('工作台父卡渲染子树徽章 / 前线摘要 / 下一级紧凑子项�
     assert.match(row.textContent!, /确认删除文件/)
     assert.ok(row.textContent!.indexOf('确认删除文件') < row.textContent!.indexOf('#21'), '子项名称应排在 #21 之前')
     assert.match(row.textContent!, /Awaiting approval/)
-    assert.match(row.textContent!, /0\/2/, '紧凑子项应携带子树完成计数')
+    assert.match(row.textContent!, /0\/1/, '紧凑子项计数一级口径：#21 行只数其直接子（#31）')
     assert.equal(row.getAttribute('aria-label')?.endsWith('Open conversation #21 drawer'), true, '行 aria-label 含真实抽屉入口语义')
     act(() => {
       row.click()
