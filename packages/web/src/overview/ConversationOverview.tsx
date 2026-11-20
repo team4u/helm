@@ -74,10 +74,14 @@ function OverviewCardView({
     >
       <div className="overview-card-head">
         <span className="nav-status-slot">
+          {/* 灯位与侧栏会话行完全同构（通用统一口径）：根会话自身状态 +
+              树级后台在途聚合，经同一 resolveStatusLight 单灯裁决——根 idle
+              且树内有后台在途时同样渲染空心蓝环；子代理等后代状态由后代
+              芯片各自的灯与诚实摘要承载，不在卡面灯位混入代表位语义。 */}
           <ConversationStatusDot
-            conv={card.representative}
+            conv={card.root}
             background={{ active: card.backgroundActive, summary: card.backgroundSummary }}
-            showDone={card.representative.unread && !viewedConversationIds.has(card.representative.id)}
+            showDone={card.root.unread && !viewedConversationIds.has(card.root.id)}
           />
         </span>
         <span className="overview-card-title">

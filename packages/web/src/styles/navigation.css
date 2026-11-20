@@ -709,6 +709,12 @@
   flex-wrap: wrap;
 }
 
+/* 侧栏头部总览入口（命令面板搜索钮旁）：复用 rail-overview-dot 同源 tone
+ * 灯点（绝对定位锚点需要 relative 宿主），与 Rail 总览按钮同一事实源。 */
+.sidebar-overview-open-btn {
+  position: relative;
+}
+
 /* 话题切换已回归左栏手风琴（仅展开当前智能体），顶栏恢复单行标题。 */
 
 

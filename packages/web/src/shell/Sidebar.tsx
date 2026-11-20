@@ -691,6 +691,9 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
                   }}
                 >
                   <HelmxIcon name="activity" size={13} />
+                  {attentionIndicator.tone !== null && (
+                    <span className="rail-overview-dot" data-tone={attentionIndicator.tone} />
+                  )}
                 </button>
               </Tooltip>
             )}
