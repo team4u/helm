@@ -343,7 +343,7 @@ function attentionScenarioStore(): HelmxExternalStore {
   })
 }
 
-test('Sidebar header keeps the overview icon button next to the command palette search, with the same-source tone dot', { timeout: 60_000 }, () => {
+test('Sidebar header keeps the overview icon button next to the command palette search, with the same-source count badge', { timeout: 60_000 }, () => {
   const html = renderSidebar(attentionScenarioStore())
   const btnIdx = html.indexOf('sidebar-overview-open-btn')
   const headerIdx = html.indexOf('sidebar-header')
@@ -355,12 +355,13 @@ test('Sidebar header keeps the overview icon button next to the command palette 
   assert.ok(btnIdx > searchIdx && btnIdx - searchIdx < 900, 'the button sits right after the command palette search button')
   const btn = html.match(/<button[^>]*class="[^"]*sidebar-overview-open-btn[^"]*"[^>]*>/)?.[0] ?? ''
   assert.ok(btn !== '', 'the button carries its stable class hook')
-  // 同源 tone 灯点：有信号时随钮渲染（rail-overview-dot 同一词汇与事实源）；
-  // 全安静时零灯（不装忙）。
+  // 同源计数徽标：有信号时随钮渲染（overview-count-badge 同一词汇与事实
+  // 源，计数 = 有信号的树数）；全安静时零徽标（不装忙）。
   const btnEnd = html.indexOf('</button>', btnIdx)
   const btnInner = html.slice(btnIdx, btnEnd < 0 ? undefined : btnEnd)
-  assert.ok(btnInner.includes('rail-overview-dot'), 'the same-source tone dot rides the header button when a tree has a signal')
-  assert.ok(btnInner.includes('data-tone="error"'), 'the dot states the honest top tone (error leads the scenario)')
+  assert.ok(btnInner.includes('overview-count-badge'), 'the same-source count badge rides the header button when a tree has a signal')
+  assert.ok(btnInner.includes('data-tone="error"'), 'the badge states the honest top tone (error leads the scenario)')
+  assert.ok(btnInner.includes('>2<'), 'the badge states the honest signal-tree count (error tree + working tree)')
   const quietHtml = renderSidebar(
     sidebarStore({
       conversations: [
@@ -373,7 +374,7 @@ test('Sidebar header keeps the overview icon button next to the command palette 
   const quietBtnStart = quietHtml.indexOf('sidebar-overview-open-btn')
   const quietBtnEnd = quietHtml.indexOf('</button>', quietBtnStart)
   const quietInner = quietHtml.slice(quietBtnStart, quietBtnEnd < 0 ? undefined : quietBtnEnd)
-  assert.ok(quietBtnStart > 0 && !quietInner.includes('rail-overview-dot'), 'no dot without any signal (honest quiet)')
+  assert.ok(quietBtnStart > 0 && !quietInner.includes('overview-count-badge'), 'no count badge without any signal (honest quiet)')
   assert.ok(!html.includes('sidebar-overview-entry'), 'the pulse entry row is gone for good')
   assert.ok(!html.includes('sidebar-attention-group'), 'the legacy flat attention group is gone for good')
   assert.ok(!html.includes('attention-row'), 'no legacy attention row residue')
