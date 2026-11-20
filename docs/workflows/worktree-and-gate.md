@@ -104,7 +104,7 @@ sequenceDiagram
 | 2. 主根保护：登记路径即主工作树，或经 realpath 解析指向主工作树 | `worktree_owner_mismatch` | 否 |
 | 3. realpath 校验：登记路径经软链跳到其他工作树（登记可能已被替换）；附加权威登记的 path / branch / HEAD 归属匹配、prunable / locked 状态检查 | `worktree_owner_mismatch` / `worktree_locked` | 否（locked 需先解锁） |
 | 4. 进程占用保护：目标节点上的进程仍以工作树或其子目录为 cwd，或持有其中的文件句柄；探测不完整或不支持时同样拒绝 | `worktree_process_in_use` / `worktree_process_check_failed` | 否 |
-| 5. 脏工作区保护：含未提交修改、未跟踪或被忽略文件（`--ignored=matching` 也计入） | `worktree_dirty` | 是（`force`） |
+| 5. 脏工作区保护：含未提交修改或未跟踪文件（与 `git worktree remove` 同口径；gitignored 产物按定义可弃，不计入阻断） | `worktree_dirty` | 是（`force`） |
 | 6. 未合入保护：分支存在相对基准提交未合入的提交（`git rev-list --count`） | `worktree_dirty` | 是（`force`） |
 
 第 6 项检查的基准提交按以下顺序确定：
@@ -127,7 +127,7 @@ sequenceDiagram
 
 这次探测是删除前的进程快照，不是跨进程的原子锁：扫描之后新进程仍可能进入该目录。需要交付的文件应先用 `register_artifact` 或 `pnpm helmx artifacts put` 登记为产物——登记成功后副本保存在 Helmx 数据目录，源 worktree 清理不会删除副本（所属会话删除仍会级联删除产物）。
 
-分支删除只允许 `helmx/spawn-` 与 `helmx/wf-` 两个受管前缀，绝不触碰人类分支。目录已不存在的记录以 `worktree_missing` 显式报错并保留登记（节点真实 fs stat 证明缺失才算），绝不全仓 `prune` 其他登记。
+分支删除只允许 `helmx/spawn-` 与 `helmx/wf-` 两个受管前缀，绝不触碰人类分支。目录已不存在的记录默认以 `worktree_missing` 显式报错并保留登记（节点真实 fs stat 证明缺失才算），绝不主动 `prune`。确认无需保留时可传 `force: true` 走登记清除：二次复核目录确不存在后清除登记（记录置 `removed` 并留 `removedReason: 'directory_missing_forced'`），分支按 `mergedInto` / merged 规则处置（默认保留分支），并在主仓执行 `git worktree prune` 收敛 git 侧残留登记（prune 结果在返回值 `prune` 字段如实上报；`prune` 只清理 git 自身判定 prunable 的登记，不碰其他工作树）。
 
 ### CLI 与模型工具
 

@@ -42,7 +42,7 @@ export function activeSwarmGroupCoordinatorSection(
     skillStep,
     '2. Do not write business code or sit inside long blocking builds yourself; delegate implementation and verification to workers (quick read-only lookups to size and split the work are fine). Dynamically decide the squad for the task itself (never follow fixed role-name templates): choose worker count, lowercase names, directory access ("readwrite" / "readonly"), workspace isolation ("worktree" / "inherit"), and optional profileId / model via swarm_dispatch_worker.',
     '3. Coordinate handoffs via swarm_board_post / swarm_board_read / swarm_board_status using #seq pointers in refs without copy-pasting diffs or long reports; keep wake=true strictly for the next actor who must act, and never close the group while activeWorkingMembers is non-empty.',
-    '4. When all slices pass verification, merge worktree branches and call swarm_close_group (or pass keepWorktree: true to release holds while preserving unmerged branches).',
+    '4. When all slices pass verification, merge worktree branches and call swarm_close_group (or pass keepWorktree: true to release holds while preserving unmerged branches; force: true closes past the uncommitted/unmerged guard and discards such content).',
     '</active_swarm_group>',
   ].join('\n')
 }

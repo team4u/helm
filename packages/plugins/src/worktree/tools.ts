@@ -22,6 +22,17 @@ const cleanupSuccessOutputSchema = {
     branch: { type: 'string' },
     nodeId: { type: 'string' },
     branchDeleted: { type: 'boolean' },
+    removedReason: { type: 'string', enum: ['directory_missing_forced'] },
+    prune: {
+      type: 'object',
+      properties: {
+        ran: { type: 'boolean' },
+        ok: { type: 'boolean' },
+        output: { type: 'string' },
+      },
+      required: ['ran', 'ok'],
+      additionalProperties: false,
+    },
   },
   required: ['ok', 'removed', 'worktreeId', 'path', 'branch', 'nodeId', 'branchDeleted'],
 } as const
@@ -79,8 +90,18 @@ export function registerWorktreeTools(ctx: HelmxPluginContext, deps: WorktreeToo
           },
           context.signal,
         )
+        const pruneNote =
+          result.prune === undefined
+            ? ''
+            : result.prune.ran
+              ? result.prune.ok
+                ? '；已在主仓执行 git worktree prune 收敛 git 侧残留登记'
+                : `；git worktree prune 失败（git 侧残留登记可能仍在，请人工核对）：${result.prune.output ?? ''}`
+              : `；${result.prune.output ?? '未执行 git worktree prune'}`
         const summary = result.removed
-          ? `已移除受管 worktree ${result.path}（branch: ${result.branch}，节点 ${result.nodeId}${result.branchDeleted ? '，分支已删除' : '，分支保留'}）`
+          ? result.removedReason === 'directory_missing_forced'
+            ? `已按目录缺失恢复路径清除受管 worktree 登记 ${result.path}（branch: ${result.branch}，节点 ${result.nodeId}${result.branchDeleted ? '，分支已删除' : '，分支保留'}${pruneNote}）`
+            : `已移除受管 worktree ${result.path}（branch: ${result.branch}，节点 ${result.nodeId}${result.branchDeleted ? '，分支已删除' : '，分支保留'}）`
           : `受管 worktree ${result.path} 此前已清理（幂等跳过；branch: ${result.branch}${result.branchDeleted ? '，分支已删除' : ''}）`
         return {
           output: [{ type: 'text', text: summary }],

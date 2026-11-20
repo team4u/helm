@@ -10,8 +10,13 @@
  * - dirty 源仓库：dirtySource 如实记录，子代理 prompt 含隔离通知；
  * - resume：沿用原 worktree（不二次创建）、冲突 cwd 显式 resume_cwd_conflict、
  *   目录被删后显式 worktree_missing；
- * - cleanup_worktree：脏工作区拒绝（worktree_dirty）、force+deleteBranch 成功
+ * - cleanup_worktree：脏工作区拒绝（worktree_dirty；口径与 git worktree remove 对齐，
+ *   gitignored 产物不阻断、未跟踪非 ignored 文件仍阻断）、force+deleteBranch 成功
  *   移除并置 removed、未登记路径显式 not_found（绝不误删外部目录）；
+ * - 目录缺失态恢复：外部删除目录后默认 worktree_missing 诚实拒绝（提示 force 出口）；
+ *   force 二次复核后清登记（removedReason=directory_missing_forced）、先 prune 收敛
+ *   git 侧残留（残留登记会让分支保持「已检出」而拒绝删除）再按 merged 规则处置分支；
+ *   external 记录无 repoRoot 锚点时仅清登记并如实报告未执行 prune；
  * - 安全加固：external 登记去重与真实清理、baseCommit 为空也按主工作树
  *   HEAD 检查未合入提交、同路径跨节点登记歧义显式 validation_error、
  *   git status 失败 fail closed（绝不当作干净或目录缺失）、登记路径被替换
@@ -32,7 +37,7 @@ import { MemoryStorage } from '@earendil-works/pi-durable/storage/memory'
 import { HelmxError, type AgentExecutionInfo, type AgentSpawnRequest } from '@helmx/protocol'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { after, before, describe, it } from 'node:test'
 import assert from 'node:assert/strict'
@@ -1568,41 +1573,166 @@ describe('cleanup_worktree 工具 schema 扩展', { timeout: 60_000 }, () => {
   })
 })
 
-describe('ignored 文件保护', { timeout: 60_000 }, () => {
-  it('仅含 ignored 文件（.env）的 clean worktree 默认拒绝 worktree_dirty；force 可显式清除', { timeout: 60_000 }, async () => {
+describe('ignored 内容不阻断 cleanup（脏检查口径与 git worktree remove 对齐）', { timeout: 60_000 }, () => {
+  it('仅含 gitignored 产物（dist/ 与 .env）的 worktree 无 force 可正常清理；分支保留', { timeout: 60_000 }, async () => {
     const dir = join(rootDir, 't15')
     const repo = makeGitRepo(join(dir, 'repo'))
-    // 主仓先提交 .gitignore（忽略 .env）。
-    writeFileSync(join(repo, '.gitignore'), '.env\n')
+    // 主仓先提交 .gitignore（忽略 dist/ 与 .env）。
+    writeFileSync(join(repo, '.gitignore'), '.env\ndist/\n')
     execFileSync('git', ['add', '.gitignore'], { cwd: repo })
-    execFileSync('git', ['commit', '-qm', 'ignore env'], { cwd: repo })
+    execFileSync('git', ['commit', '-qm', 'ignore build artifacts'], { cwd: repo })
     const docs = new Map<string, unknown>()
     const allocator = bareAllocator(docs)
     try {
       const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
+      // 模拟 worker 跑过构建：ignored 产物 dist/ 与本地 .env。
+      mkdirSync(join(record.path, 'dist'), { recursive: true })
+      writeFileSync(join(record.path, 'dist', 'bundle.js'), 'console.log(1)\n')
       writeFileSync(join(record.path, '.env'), 'SECRET=1\n')
-      // 默认（force=false）：git status 默认口径为 clean，但 remove 实测会
-      // 删掉 ignored 内容——保护必须覆盖。
+      // 旧口径（--ignored=matching 计入阻断）会让任何跑过构建的 worktree 永远「脏」；
+      // 新口径必须放行（进程占用检查照常执行，不因放行脏检查而跳过）。
+      if (PROCESS_SCAN_ON) {
+        const result = await allocator.cleanup({ worktreeId: record.id })
+        assert.equal(result.removed, true)
+        assert.equal(result.branchDeleted, false, '未传 deleteBranch 时分支保留')
+        assert.equal(result.removedReason, undefined, '常规移除不设置 removedReason')
+        assert.ok(!existsSync(record.path), 'worktree 目录应被真实移除')
+        const persisted = rawRecords(docs).find((r) => r.id === record.id)
+        assert.equal(persisted?.status, 'removed')
+        // 分支仍在（可后续合入或手工删除）。
+        execFileSync('git', ['rev-parse', '--verify', `refs/heads/${record.branch}`], { cwd: repo })
+      } else {
+        // 非 Linux：脏检查放行后停在进程占用扫描（绝不回退 worktree_dirty）。
+        await assertCleanupPlatformRejected(() => allocator.cleanup({ worktreeId: record.id }))
+        assert.ok(existsSync(record.path), '平台拒绝清理时目录不得被移除')
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('含未跟踪非 ignored 文件仍拒绝 worktree_dirty（保护面只放开 ignored，不缩到零）', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 't15b')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    writeFileSync(join(repo, '.gitignore'), 'dist/\n')
+    execFileSync('git', ['add', '.gitignore'], { cwd: repo })
+    execFileSync('git', ['commit', '-qm', 'ignore dist'], { cwd: repo })
+    const docs = new Map<string, unknown>()
+    const allocator = bareAllocator(docs)
+    try {
+      const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
+      writeFileSync(join(record.path, 'draft.txt'), 'uncommitted draft\n')
       await assert.rejects(
         () => allocator.cleanup({ worktreeId: record.id }),
         (err: unknown) => {
           assert.ok(err instanceof HelmxError)
-          assert.equal(err.code, 'worktree_dirty', 'ignored 文件必须计入脏检查（git worktree remove 无 --force 也会删 ignored 内容）')
+          assert.equal(err.code, 'worktree_dirty', '未跟踪非 ignored 文件必须继续阻断（错误文案不得再提「被忽略」）')
+          assert.ok(!err.message.includes('被忽略'), `文案应删除被忽略字样：${err.message}`)
           const details = err.details as { dirtyFiles?: string[] }
-          assert.ok(details?.dirtyFiles?.some((f) => f.includes('.env')), 'details 应列出 ignored 的 .env')
+          assert.ok(details?.dirtyFiles?.some((f) => f.includes('draft.txt')), 'details 应列出未跟踪文件')
           return true
         },
       )
-      assert.ok(existsSync(join(record.path, '.env')), '拒绝时 ignored 文件不得被删')
-      // force：显式清除（进程占用检查仍执行：无进程占用时放行）。
-      if (PROCESS_SCAN_ON) {
-        const result = await allocator.cleanup({ worktreeId: record.id, force: true })
-        assert.equal(result.removed, true)
-        assert.ok(!existsSync(record.path))
-      } else {
-        await assertCleanupPlatformRejected(() => allocator.cleanup({ worktreeId: record.id, force: true }))
-        assert.ok(existsSync(record.path), '非 Linux 拒绝清理时目录不得被移除')
-      }
+      assert.ok(existsSync(join(record.path, 'draft.txt')), '拒绝时未跟踪文件不得被删')
+      const persisted = rawRecords(docs).find((r) => r.id === record.id)
+      assert.equal(persisted?.status, 'active', '拒绝时登记保持 active')
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('目录缺失态恢复（force 登记清除）', { timeout: 60_000 }, () => {
+  it('外部删除目录：默认 worktree_missing 诚实拒绝并提示 force 出口；force 二次复核后清登记、prune git 残留、保留分支', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 't15c')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const allocator = bareAllocator(docs)
+    try {
+      const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
+      // 外部删除实体目录（git 侧登记残留）。
+      rmSync(record.path, { recursive: true, force: true })
+      await assert.rejects(
+        () => allocator.cleanup({ worktreeId: record.id }),
+        (err: unknown) => {
+          assert.ok(err instanceof HelmxError)
+          assert.equal(err.code, 'worktree_missing', '默认保持诚实拒绝（fail-closed）')
+          assert.ok(err.message.includes('force: true'), '错误文案应提示 force 登记清除出口')
+          return true
+        },
+      )
+      assert.equal(rawRecords(docs).find((r) => r.id === record.id)?.status, 'active', '拒绝时登记保留')
+      // force：登记清除（进程扫描检查不适用于不存在的目录路径——forceClear 路径不执行删除动作）。
+      const result = await allocator.cleanup({ worktreeId: record.id, force: true })
+      assert.equal(result.removed, true)
+      assert.equal(result.removedReason, 'directory_missing_forced')
+      assert.equal(result.branchDeleted, false, '默认保留分支只清登记')
+      assert.ok(result.prune !== undefined && result.prune.ran === true && result.prune.ok === true, 'prune 已执行且成功')
+      const persisted = rawRecords(docs).find((r) => r.id === record.id)
+      assert.equal(persisted?.status, 'removed')
+      assert.equal(persisted?.removedReason, 'directory_missing_forced')
+      // 分支保留：spawn 分支仍可解析。
+      execFileSync('git', ['rev-parse', '--verify', `refs/heads/${record.branch}`], { cwd: repo })
+      // git 侧残留登记被 prune 收敛（worktree list 不再包含该路径，admin 目录消失）。
+      const listed = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: repo, encoding: 'utf-8' })
+      assert.ok(!listed.includes(record.path), 'prune 后权威登记不得再包含缺失路径')
+      assert.ok(!existsSync(join(repo, '.git', 'worktrees', basename(record.path))), 'git worktree admin 目录应被 prune 移除')
+      // 幂等重放：已 removed 的记录再次 force cleanup 返回 removed:false。
+      const again = await allocator.cleanup({ worktreeId: record.id, force: true })
+      assert.equal(again.removed, false)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('force + deleteBranch：未合入提交的分支按 force 语义删除；登记清除留 removedReason', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 't15d')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const allocator = bareAllocator(docs)
+    try {
+      const record = await allocator.allocate({ nodeId: 'local', sourceCwd: repo, parentConversationId: 1 })
+      // 未合入提交 + 外部删除目录。
+      writeFileSync(join(record.path, 'feature.txt'), 'content\n')
+      execFileSync('git', ['add', 'feature.txt'], { cwd: record.path })
+      execFileSync('git', ['commit', '-qm', 'feat: unmerged'], { cwd: record.path })
+      rmSync(record.path, { recursive: true, force: true })
+      const result = await allocator.cleanup({ worktreeId: record.id, force: true, deleteBranch: true })
+      assert.equal(result.removed, true)
+      assert.equal(result.removedReason, 'directory_missing_forced')
+      assert.equal(result.branchDeleted, true, 'force 语义下未合入分支也删除（-D）')
+      assert.ok(result.prune?.ran === true && result.prune.ok === true)
+      // 分支已不可解析（show-ref 静默校验退出码非零 → rev-parse 抛错）。
+      assert.throws(() => execFileSync('git', ['rev-parse', '--verify', `refs/heads/${record.branch}`], { cwd: repo }))
+      const persisted = rawRecords(docs).find((r) => r.id === record.id)
+      assert.equal(persisted?.status, 'removed')
+      assert.equal(persisted?.branchDeleted, true)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('external 记录无 repoRoot 锚点：force 清登记但不执行 prune，输出如实说明', { timeout: 60_000 }, async () => {
+    const dir = join(rootDir, 't15e')
+    const repo = makeGitRepo(join(dir, 'repo'))
+    const docs = new Map<string, unknown>()
+    const allocator = bareAllocator(docs)
+    try {
+      const ghostPath = join(dir, '.helmx-worktrees', 'repo-ghost01')
+      allocator.registerExternal({
+        nodeId: 'local',
+        path: ghostPath,
+        branch: 'helmx/wf-ghost01',
+        parentConversationId: 1,
+      })
+      assert.ok(!existsSync(ghostPath), '前置：登记路径本不存在')
+      const result = await allocator.cleanup({ worktreeId: `local:${ghostPath}`, force: true })
+      assert.equal(result.removed, true)
+      assert.equal(result.removedReason, 'directory_missing_forced')
+      assert.ok(result.prune !== undefined && result.prune.ran === false, '无 repoRoot 锚点时不执行 prune')
+      assert.ok((result.prune?.output ?? '').includes('repoRoot'), '输出应如实说明未执行 prune 的原因')
+      const persisted = rawRecords(docs).find((r) => r.id === `local:${ghostPath}`)
+      assert.equal(persisted?.status, 'removed')
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }

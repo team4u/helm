@@ -37,6 +37,22 @@ export function registerWorktreeActions(ctx: HelmxPluginContext, deps: WorktreeA
         branch: { type: 'string' },
         nodeId: { type: 'string' },
         branchDeleted: { type: 'boolean' },
+        removedReason: {
+          type: 'string',
+          enum: ['directory_missing_forced'],
+          description: 'Set only when the registration was force-cleared after the directory was confirmed missing',
+        },
+        prune: {
+          type: 'object',
+          description: 'git worktree prune outcome (directory-missing force path only; ran=false when no repoRoot anchor)',
+          properties: {
+            ran: { type: 'boolean' },
+            ok: { type: 'boolean' },
+            output: { type: 'string' },
+          },
+          required: ['ran', 'ok'],
+          additionalProperties: false,
+        },
       },
       required: ['removed', 'worktreeId', 'path', 'branch', 'nodeId', 'branchDeleted'],
       additionalProperties: false,
