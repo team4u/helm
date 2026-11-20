@@ -573,22 +573,18 @@ test('model & thinking level: the model rides with create; the thinking level pa
   clickButton('button.composer-model-button')
   const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
   assert.ok(popover, 'the model popover opens')
-  const glm = [...popover!.querySelectorAll<HTMLButtonElement>('button.popover-item')]
-    .find((btn) => btn.textContent?.includes('glm-4.6'))
-  assert.ok(glm, 'an available model exists in the catalog')
-  await act(async () => { glm!.click() })
-  await settle()
-  // Clicking a row only STAGES the candidate (no draft commit yet); the pinned apply
-  // bar then applies model + level together in the same session
-  const modelBtn = document.querySelector<HTMLButtonElement>('button.composer-model-button')
-  const stayingPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
-  assert.ok(stayingPopover !== null, 'the model popover stays open after staging')
-  assert.ok(!modelBtn!.textContent?.includes('glm-4.6'), 'staging alone does not commit the draft model')
-  const high = [...stayingPopover!.querySelectorAll<HTMLButtonElement>('.composer-model-apply .segmented-control-btn')]
+  // Each row carries its thinking levels inline: one chip click applies
+  // model + level together in a single commit
+  const glmRow = [...popover!.querySelectorAll<HTMLElement>('.composer-model-row')]
+    .find((row) => row.querySelector('.composer-model-row-main')?.textContent?.includes('glm-4.6'))
+  assert.ok(glmRow, 'an available model row exists in the catalog')
+  const high = [...glmRow!.querySelectorAll<HTMLButtonElement>('.composer-model-level-chip')]
     .find((btn) => btn.textContent?.trim() === 'high')
-  assert.ok(high, 'the apply-bar level control renders for the staged model')
+  assert.ok(high, 'the row renders its inline thinking level chips')
   await act(async () => { high!.click() })
   await settle()
+  const modelBtn = document.querySelector<HTMLButtonElement>('button.composer-model-button')
+  assert.ok(document.body.querySelector('.composer-model-popover') === null, 'the chip click closes the popover')
   assert.ok(modelBtn!.textContent?.includes('glm-4.6'), 'the button shows the applied pick')
   const input = textarea(MAIN_LABEL)
   act(() => { typeInto(input, '带模型偏好') })
@@ -618,15 +614,18 @@ test('model selection restores defaults: after an explicit pick you can still re
   await mount('#/a/assistant')
   clickButton('button.composer-model-button')
   const popover = document.body.querySelector<HTMLElement>('.composer-model-popover')
-  const glm = [...popover!.querySelectorAll<HTMLButtonElement>('button.popover-item')]
+  const glmMain = [...popover!.querySelectorAll<HTMLButtonElement>('.composer-model-row-main')]
     .find((btn) => btn.textContent?.includes('glm-4.6'))
-  await act(async () => { glm!.click() })
+  assert.ok(glmMain !== undefined, 'the glm row main button exists')
+  await act(async () => { glmMain!.click() })
   await settle()
-  // Staging does not commit; the restore-default item stays reachable in the open popover
-  const stayingPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
-  assert.ok(stayingPopover !== null, 'the model popover stays open after staging')
-  assert.ok(!document.querySelector('button.composer-model-button')?.textContent?.includes('glm-4.6'), 'staging alone does not commit the draft model')
-  const resetBtn = [...stayingPopover!.querySelectorAll<HTMLButtonElement>('button.popover-item')]
+  assert.ok(document.body.querySelector('.composer-model-popover') === null, 'the row click closes the popover')
+  assert.ok(document.querySelector('button.composer-model-button')?.textContent?.includes('glm-4.6'), 'the row body click commits the draft model with the default level')
+  // Reopen: the restore-default item returns to following the profile default
+  clickButton('button.composer-model-button')
+  const resetPopover = document.body.querySelector<HTMLElement>('.composer-model-popover')
+  assert.ok(resetPopover !== null, 'the popover reopens after an explicit pick')
+  const resetBtn = [...resetPopover!.querySelectorAll<HTMLButtonElement>('button.popover-item')]
     .find((btn) => btn.textContent?.includes('Follow profile default'))
   assert.ok(resetBtn, 'the restore-default item exists')
   assert.equal(resetBtn!.disabled, false, 'after an explicit pick you can still return to following the default')

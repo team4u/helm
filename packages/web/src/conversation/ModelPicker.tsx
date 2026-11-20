@@ -4,7 +4,6 @@ import { assetsApi, conversationsApi } from '../lib/api.js'
 import { HelmxIcon, Popover, PopoverContent, PopoverPortal, PopoverTrigger } from '@helmx/plugin-client'
 import { useModels, useOptionalModels, useOptionalStoreActions, useStoreActions } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
-import { ThinkingLevelControl } from '../ui/ThinkingLevelControl.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import {
   COMPOSER_SHORTCUTS,
@@ -19,10 +18,12 @@ import {
 // ModelPicker (extracted from Composer.tsx): model and thinking level picking
 // in a Radix Popover. Conversation mode and the standby pane share
 // ModelPickerControl with unified keyboard navigation, Ctrl+L focus and
-// catalog refresh. Clicking a model row only STAGES the candidate; the pinned
-// apply bar commits: a level chip applies model + level together, "use
-// default level" / Enter applies the model alone. Esc and outside clicks
-// discard the staged candidate.
+// catalog refresh. Each model row carries its thinking levels inline on the
+// right: one click on a level chip applies model + level together in a single
+// commit; clicking the row body (or Enter in the search) applies the model
+// alone so the level follows the default chain. Only the effective model's
+// row shows an active level chip (the default chain for other models resolves
+// server-side, so pre-highlighting one would be dishonest).
 // ---------------------------------------------------------------------------
 
 export interface ModelPickerControlProps {
@@ -80,12 +81,9 @@ export function ModelPickerControl({
   const [open, setOpen] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [query, setQuery] = useState('')
-  // Candidate staged inside this popover session (undefined = the effective
-  // model). Nothing commits until an explicit apply action in the pinned bar.
-  const [stagedModel, setStagedModel] = useState<string | undefined>(undefined)
   const rootRef = useRef<HTMLSpanElement | null>(null)
   const searchInputRef = useRef<HTMLInputElement | null>(null)
-  const itemRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const itemRefs = useRef<Array<HTMLElement | null>>([])
   const interactedOutsideRef = useRef(false)
 
   usePanelShortcut(
@@ -104,22 +102,19 @@ export function ModelPickerControl({
 
   const filteredModels = models.filter((model) => model.available && model.disabled !== true && model.id.toLowerCase().includes(query.toLowerCase()))
   const filteredKeys = filteredModels.map((model) => model.id).join('|')
-  const candidateModel = stagedModel ?? effectiveModel
   const [activeIndex, setActiveIndex] = useState(() => initialModelActiveIndex(filteredModels, effectiveModel))
 
-  // Closing (Esc / outside click / toggle) discards the staged candidate.
   useEffect(() => {
     setQuery('')
-    setStagedModel(undefined)
     interactedOutsideRef.current = false
   }, [open])
 
   useEffect(() => {
     if (!open) return
-    setActiveIndex(initialModelActiveIndex(filteredModels, candidateModel))
+    setActiveIndex(initialModelActiveIndex(filteredModels, effectiveModel))
     // filteredKeys precisely expresses changes of the filtered result set
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, query, filteredKeys, candidateModel])
+  }, [open, query, filteredKeys, effectiveModel])
 
   useEffect(() => {
     if (!open || activeIndex < 0) return
@@ -163,11 +158,6 @@ export function ModelPickerControl({
     }
   }
 
-  // Staging only moves the candidate; nothing commits here.
-  const stageModel = (modelId: string): void => {
-    setStagedModel(modelId)
-  }
-
   const applySelection = (model: string | undefined, level: string | null): void => {
     if (model === undefined || model === '') return
     setOpen(false)
@@ -194,22 +184,6 @@ export function ModelPickerControl({
   const effectiveLevel = resolveEffectiveThinkingLevel(currentLevels, activeThinkingLevel)
   const showLevel = supportsThinking && effectiveLevel !== '' && effectiveLevel !== 'off'
   const allUnavailable = models.every((model) => !model.available || model.disabled === true)
-
-  // Apply-bar state targets the staged candidate. The level highlight is only
-  // honest for the committed model (the default chain for a different model
-  // resolves server-side), so staging another model shows no active chip.
-  const candidateShortName =
-    candidateModel !== undefined && candidateModel !== ''
-      ? candidateModel.split('/').pop() ?? candidateModel
-      : (placeholderLabel ?? t('composer.model.defaultLabel'))
-  const candidateEntry = candidateModel !== undefined && candidateModel !== ''
-    ? models.find((model) => model.id === candidateModel)
-    : undefined
-  const candidateLevels = candidateEntry?.thinkingLevels ?? ['off']
-  const candidateSupportsThinking = candidateLevels.some((level) => level !== 'off')
-  const candidateLevel = candidateModel === effectiveModel
-    ? resolveEffectiveThinkingLevel(candidateLevels, activeThinkingLevel)
-    : ''
 
   return (
     <span className="composer-picker-root" ref={rootRef}>
@@ -325,61 +299,60 @@ export function ModelPickerControl({
               <span>{t('composer.model.listHeader')}</span>
               <span className="kbd-hint popover-kbd-hint">{t('composer.kbd.navConfirm')}</span>
             </div>
-            {filteredModels.map((m, idx) => (
-              <button
-                key={m.id}
-                ref={(node) => {
-                  itemRefs.current[idx] = node
-                }}
-                title={m.id}
-                type="button"
-                disabled={disabled}
-                aria-current={m.id === candidateModel ? 'true' : undefined}
-                className={`popover-item${idx === activeIndex ? ' popover-item-active' : ''}`}
-                onMouseEnter={() => setActiveIndex(idx)}
-                onClick={() => stageModel(m.id)}
-              >
-                <span className="mono">{m.modelId}</span>
-                <span className="popover-item-meta">{m.provider}</span>
-              </button>
-            ))}
+            {filteredModels.map((m, idx) => {
+              const levels = m.thinkingLevels ?? ['off']
+              const supportsThinking = levels.some((level) => level !== 'off')
+              // Level highlight only for the effective model's row: for other
+              // models the default chain resolves server-side.
+              const activeRowLevel = m.id === effectiveModel
+                ? resolveEffectiveThinkingLevel(levels, activeThinkingLevel)
+                : ''
+              return (
+                <div
+                  key={m.id}
+                  ref={(node) => {
+                    itemRefs.current[idx] = node
+                  }}
+                  className={`popover-item composer-model-row${idx === activeIndex ? ' popover-item-active' : ''}`}
+                  onMouseEnter={() => setActiveIndex(idx)}
+                >
+                  <button
+                    type="button"
+                    className="composer-model-row-main"
+                    title={t('composer.model.rowDefaultTitle', { model: m.id })}
+                    disabled={disabled}
+                    aria-current={m.id === effectiveModel ? 'true' : undefined}
+                    onClick={() => applySelection(m.id, null)}
+                  >
+                    <span className="mono">{m.modelId}</span>
+                    <span className="popover-item-meta">{m.provider}</span>
+                  </button>
+                  {supportsThinking ? (
+                    <span className="segmented-control composer-model-row-levels" role="group" aria-label={t('composer.model.thinkingHeader')}>
+                      {levels.map((level) => (
+                        <button
+                          key={level}
+                          type="button"
+                          className="segmented-control-btn composer-model-level-chip"
+                          disabled={disabled}
+                          aria-pressed={m.id === effectiveModel && level === activeRowLevel ? 'true' : undefined}
+                          title={t('composer.model.levelChipTitle', { model: m.id, level })}
+                          onClick={() => applySelection(m.id, level)}
+                        >
+                          {level}
+                        </button>
+                      ))}
+                    </span>
+                  ) : null}
+                </div>
+              )
+            })}
             {allUnavailable ? (
               <div className="popover-item composer-model-empty">{t('composer.model.emptyCatalog')}</div>
             ) : filteredModels.length === 0 ? (
               <div className="popover-item composer-model-empty">{t('composer.model.noMatches')}</div>
             ) : null}
             </div>
-            {allUnavailable ? null : (
-              <div className="composer-model-apply">
-                <div className="popover-header composer-model-apply-header">
-                  {candidateSupportsThinking ? (
-                    <span>
-                      {t('composer.model.thinkingHeader')}
-                      <span className="composer-model-thinking-name"> · {candidateShortName}</span>
-                    </span>
-                  ) : (
-                    <span className="composer-model-thinking-name">{candidateShortName}</span>
-                  )}
-                  <button
-                    type="button"
-                    className="btn btn-ghost btn-sm composer-model-default-btn"
-                    disabled={disabled || pending || candidateModel === undefined || candidateModel === ''}
-                    onClick={() => applySelection(candidateModel, null)}
-                  >
-                    {t('composer.model.applyDefault')}
-                  </button>
-                </div>
-                {candidateSupportsThinking ? (
-                  <ThinkingLevelControl
-                    value={candidateLevel}
-                    levels={candidateLevels}
-                    allowEmpty
-                    disabled={disabled || pending}
-                    onPick={(level) => applySelection(candidateModel, level)}
-                  />
-                ) : null}
-              </div>
-            )}
           </PopoverContent>
         </PopoverPortal>
       </Popover>
