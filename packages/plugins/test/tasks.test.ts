@@ -1,14 +1,13 @@
 /**
  * builtin:tasks 纯函数与插件定义单测（Unit 档，纯内存零全局副作用）：
  * - 插件契约：TASKS_PLUGIN_ID / 受管技能 ID / 标签常量 / 无静态 dependencies / 双语元数据；
- * - 配置边界（maxConcurrentTasks 0..50）与 doc / record / id 强校验；
- * - 依赖环 DFS 检测与 assertDependenciesValid 全拒绝面；
+ * - 配置边界（defaultPlannerProfile / defaultAssigneeProfile）与 doc / record / id 强校验；
  * - board 投影截断（未归档全量 + 最近 50 条历史）与徽标聚合全状态判定
- *   （attention / review / running / tone 阶梯 / 双语摘要 / 子树会话事实 / 脏检查键）；
- * - <active_task> 段落 100% 字节恒定与 kickoff 任务书内容（planFirst 走真实 Ask 指令）；
+ *   （attention / review / running / tone 阶梯 / 双语摘要 / 主会话事实 / 脏检查键）；
+ * - <active_task> 段落 100% 字节恒定与 kickoff 任务书内容；
  * - before_turn 工具过滤纯函数（规划/执行隔离、子会话与自动化会话）；
- * - 子树忙碌检查与停滞判定纯函数（含 Workflow 在途 'unknown' 保守分支）；
- * - 重启恢复：两阶段启动中断任务诚实回滚待办；
+ * - 客户端纯模型：deriveTaskLiveView 只看主会话 + background 快照、
+ *   「会话已空闲 · 未交卷」纯派生、screen params archived 开关、compareTaskItems 归档沉底；
  * - 会话总览卡胶囊（OVERVIEW_CARD_META_SLOT）：findTaskForOverviewCard 纯函数
  *   优先序（根精确 > 树成员；未归档 > 已归档；updatedAt 最新）+ 编译产物
  *   TaskOverviewCardMeta 只读跳转渲染/交互（命中渲染、点击深链且阻止冒泡、
@@ -39,18 +38,14 @@ import {
   assertTaskId,
   assertTaskRecord,
   assertTaskStoreDoc,
-  blockedDependenciesOf,
   createTasksPlugin,
-  detectDependencyCycle,
   projectBoardDoc,
   resolveTasksConfig,
-  subtreeAttentionFlags,
   taskBoardBadgeKey,
   type TaskRecord,
 } from '../src/tasks.js'
-import { assertDependenciesValid, recoverInterruptedStartups, recoverKickoffMarkers } from '../src/tasks/store.js'
-import { activeTaskSection, buildMergeClosingPrompt, buildTaskKickoffPrompt } from '../src/tasks/prompts.js'
-import { filterTaskToolsForTurn, shouldMarkStalled, subtreeHasWorkingOrBlocked } from '../src/tasks/hooks.js'
+import { activeTaskSection, buildTaskKickoffPrompt } from '../src/tasks/prompts.js'
+import { filterTaskToolsForTurn } from '../src/tasks/hooks.js'
 
 function makeTask(over: Partial<TaskRecord> = {}): TaskRecord {
   return {
@@ -59,7 +54,6 @@ function makeTask(over: Partial<TaskRecord> = {}): TaskRecord {
     brief: 'Fix the login redirect loop described in issue 42. Acceptance: e2e test passes.',
     column: 'backlog',
     assigneeProfileId: 'assistant',
-    dependsOn: [],
     reworkCount: 0,
     createdAt: 1_000,
     updatedAt: 1_000,
@@ -104,16 +98,11 @@ test('tasks-unit2: config bounds and boundary validators', { timeout: 60_000 }, 
   assert.deepEqual(defaults, {
     defaultPlannerProfile: 'assistant',
     defaultAssigneeProfile: 'assistant',
-    maxConcurrentTasks: 0,
   })
-  assert.deepEqual(resolveTasksConfig({ maxConcurrentTasks: 5, defaultAssigneeProfile: 'lx' }), {
-    defaultPlannerProfile: 'assistant',
+  assert.deepEqual(resolveTasksConfig({ defaultAssigneeProfile: 'lx', defaultPlannerProfile: 'code2' }), {
+    defaultPlannerProfile: 'code2',
     defaultAssigneeProfile: 'lx',
-    maxConcurrentTasks: 5,
   })
-  assert.throws(() => resolveTasksConfig({ maxConcurrentTasks: -1 }), /0\.\.50/)
-  assert.throws(() => resolveTasksConfig({ maxConcurrentTasks: 51 }), /0\.\.50/)
-  assert.throws(() => resolveTasksConfig({ maxConcurrentTasks: 2.5 }), /0\.\.50/)
   assert.throws(() => resolveTasksConfig({ defaultAssigneeProfile: '' }), /1\.\.64/)
 
   assert.equal(assertTaskId('T-1'), 'T-1')
@@ -126,39 +115,10 @@ test('tasks-unit2: config bounds and boundary validators', { timeout: 60_000 }, 
   assert.throws(() => assertTaskRecord(makeTask({ title: '' })), /title/)
   assert.throws(() => assertTaskRecord(makeTask({ column: 'weird' as TaskRecord['column'] })), /column/)
   assert.throws(() => assertTaskRecord(makeTask({ reworkCount: -1 })), /reworkCount/)
-  assert.throws(() => assertTaskRecord(makeTask({ dependsOn: 'T-2' as unknown as string[] })), /dependsOn/)
 
   assert.equal(assertTaskStoreDoc({ nextSeq: 2, tasks: { 'T-1': task } }).nextSeq, 2)
   assert.throws(() => assertTaskStoreDoc({ nextSeq: 0, tasks: {} }), /nextSeq/)
   assert.throws(() => assertTaskStoreDoc({ nextSeq: 1, tasks: { 'T-9': task } }), /不一致/)
-})
-
-test('tasks-unit3: dependency cycle detection and full rejection surface', { timeout: 60_000 }, () => {
-  const t1 = makeTask({ id: 'T-1' })
-  const t2 = makeTask({ id: 'T-2', dependsOn: ['T-1'] })
-  assert.equal(detectDependencyCycle({ 'T-1': t1, 'T-2': t2 }), null)
-
-  // Two-node cycle
-  const c1 = makeTask({ id: 'T-1', dependsOn: ['T-2'] })
-  const c2 = makeTask({ id: 'T-2', dependsOn: ['T-1'] })
-  assert.deepEqual(detectDependencyCycle({ 'T-1': c1, 'T-2': c2 }), ['T-1', 'T-2', 'T-1'])
-
-  // Three-node cycle skips over an acyclic sibling
-  const a = makeTask({ id: 'T-a' })
-  const b = makeTask({ id: 'T-b', dependsOn: ['T-c'] })
-  const c = makeTask({ id: 'T-c', dependsOn: ['T-d'] })
-  const d = makeTask({ id: 'T-d', dependsOn: ['T-b'] })
-  const cycle = detectDependencyCycle({ 'T-a': a, 'T-b': b, 'T-c': c, 'T-d': d })
-  assert.ok(cycle !== null)
-  assert.equal(cycle[0], cycle[cycle.length - 1])
-
-  assert.throws(() => assertDependenciesValid('T-1', ['T-1'], {}), /不得依赖自身/)
-  assert.throws(() => assertDependenciesValid('T-1', ['T-404'], { 'T-1': t1 }), /不存在/)
-  assert.throws(() => assertDependenciesValid('T-2', ['T-1'], { 'T-1': c1, 'T-2': t2 }), /依赖环/)
-  assert.doesNotThrow(() => assertDependenciesValid('T-2', ['T-1'], { 'T-1': t1, 'T-2': t2 }))
-
-  assert.deepEqual(blockedDependenciesOf({ dependsOn: ['T-1', 'T-2'] }, { 'T-1': t1, 'T-2': t2 }), ['T-1', 'T-2'])
-  assert.deepEqual(blockedDependenciesOf({ dependsOn: ['T-1'] }, { 'T-1': makeTask({ column: 'done' }) }), [])
 })
 
 test('tasks-unit4: board projection truncation keeps all active plus last 50 done entries', { timeout: 60_000 }, () => {
@@ -186,30 +146,19 @@ test('tasks-unit4: board projection truncation keeps all active plus last 50 don
 test('tasks-unit5: <active_task> section is byte-constant and kickoff prompt carries brief + rules', { timeout: 60_000 }, () => {
   const task = makeTask()
   const first = activeTaskSection(task)
-  const second = activeTaskSection({ ...task, submission: { summary: 'x', submittedAt: 2 }, silenceState: { stalledAt: 3 } })
+  const second = activeTaskSection({ ...task, submission: { summary: 'x', submittedAt: 2 } })
   assert.equal(first, second, 'mutable state must not leak into the section')
 
-  assert.match(first, /^<active_task id="T-1" title="Ship login fix" plan-first="false" auto-merge="false">/)
+  assert.match(first, /^<active_task id="T-1" title="Ship login fix">/)
   assert.match(first, /task_submit/)
   assert.match(first, /subagent \/ SubagentWorkflow \/ Swarm/)
-  assert.doesNotMatch(first, /stalledAt|submission/)
-
-  const planFirst = activeTaskSection(makeTask({ planFirst: true, autoMerge: true }))
-  assert.match(planFirst, /plan-first="true" auto-merge="true"/)
-  assert.match(planFirst, /task_request_plan_approval/)
-  assert.match(planFirst, /before the plan is approved/)
-  assert.match(planFirst, /merge your isolated branch/)
+  assert.doesNotMatch(first, /submission|plan-first|auto-merge/, 'deleted flags must not leak into the section')
 
   const kickoff = buildTaskKickoffPrompt(task)
   assert.match(kickoff, /<task_kickoff id="T-1">/)
   assert.match(kickoff, /Fix the login redirect loop/)
-  assert.match(kickoff, /NEVER merge into the main line yourself/)
-  const planKickoff = buildTaskKickoffPrompt(makeTask({ planFirst: true }))
-  assert.match(planKickoff, /task_request_plan_approval with your concise plan/)
-  const mergeClosing = buildMergeClosingPrompt(makeTask({ id: 'T-9' }), 'do it')
-  assert.match(mergeClosing, /explicitly authorized merging it now/)
-  assert.match(mergeClosing, /merged: true explicitly/)
-  assert.match(mergeClosing, /no second manual approval is needed/)
+  assert.match(kickoff, /task_submit with a summary/)
+  assert.doesNotMatch(kickoff, /planFirst|autoMerge|task_request_plan_approval/)
 })
 
 test('tasks-unit6: tool filtering isolates planner vs assignee vs child/automated sessions', { timeout: 60_000 }, () => {
@@ -243,100 +192,6 @@ test('tasks-unit6: tool filtering isolates planner vs assignee vs child/automate
   assert.equal(filterTaskToolsForTurn(hostOnly, makeConversation(), undefined), undefined)
 })
 
-test('tasks-unit7: subtree busy check with cycle defense and stalled decision table', { timeout: 60_000 }, () => {
-  const conv = (id: number, over: Record<string, unknown> = {}) => ({
-    id,
-    title: `c${id}`,
-    profileId: 'assistant',
-    tags: [],
-    cwd: '/repo',
-    model: 'faux/faux-1',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-    ...over,
-  }) as never as import('@helmx/protocol').ConversationSummary
-
-  const all = [
-    conv(1),
-    conv(2, { parentConversationId: 1, status: 'working' as never }),
-    conv(3, { parentConversationId: 2, status: 'blocked' as never }),
-    conv(4, { status: 'idle' as never }),
-  ]
-  assert.equal(subtreeHasWorkingOrBlocked(1, all), true)
-  assert.equal(subtreeHasWorkingOrBlocked(4, all), false)
-  // Cycle defense: 5 -> 6 -> 5 must terminate
-  const cyclic = [...all, conv(5, { parentConversationId: 6 } as never), conv(6, { parentConversationId: 5 } as never)]
-  assert.equal(subtreeHasWorkingOrBlocked(5, cyclic), false)
-
-  const task = makeTask({ column: 'in_progress', conversationId: 7 })
-  const base = {
-    task,
-    conversation: { id: 7, status: 'done' as const, pendingAskCount: 0 },
-    subtreeBusy: false,
-    workflowBusy: false as boolean | 'unknown',
-  }
-  // Fully quiescent, still in progress, not yet marked -> mark stalled (no delivery ever)
-  assert.equal(shouldMarkStalled(base), true)
-  // Already marked -> no double marking
-  assert.equal(shouldMarkStalled({ ...base, task: { ...task, silenceState: { stalledAt: 5 } } }), false)
-  assert.equal(shouldMarkStalled({ ...base, conversation: { ...base.conversation, pendingAskCount: 1 } }), false)
-  assert.equal(shouldMarkStalled({ ...base, subtreeBusy: true }), false)
-  // Workflow in-flight (or unknown probe) -> conservatively do not mark (avoid false "stalled")
-  assert.equal(shouldMarkStalled({ ...base, workflowBusy: true }), false)
-  assert.equal(shouldMarkStalled({ ...base, workflowBusy: 'unknown' }), false)
-  assert.equal(shouldMarkStalled({ ...base, task: { ...task, column: 'in_review' } }), false)
-  assert.equal(shouldMarkStalled({ ...base, task: { ...task, conversationId: 8 } }), false)
-})
-
-test('tasks-unit7b: restart recovery rolls back interrupted two-phase startups honestly', { timeout: 60_000 }, () => {
-  const draft = {
-    nextSeq: 5,
-    tasks: {
-      'T-1': makeTask({ id: 'T-1', column: 'in_progress', conversationId: 11 }),
-      // interrupted startup placeholder: in_progress without a bound conversation
-      'T-2': makeTask({ id: 'T-2', column: 'in_progress', startedAt: 9 }),
-      'T-3': makeTask({ id: 'T-3', column: 'backlog' }),
-    },
-  }
-  const rolled = recoverInterruptedStartups(draft)
-  assert.deepEqual(rolled, ['T-2'])
-  assert.equal(draft.tasks['T-2']!.column, 'backlog')
-  assert.equal(draft.tasks['T-2']!.startedAt, undefined)
-  assert.match(draft.tasks['T-2']!.silenceState!.lastError!, /startup interrupted/)
-  // Bound or non-running tasks untouched
-  assert.equal(draft.tasks['T-1']!.column, 'in_progress')
-  assert.equal(draft.tasks['T-3']!.column, 'backlog')
-  assert.equal(draft.tasks['T-3']!.silenceState, undefined)
-})
-
-test('tasks-unit7c: kickoff marker recovery marks undelivered for live tasks only, never auto-delivers', { timeout: 60_000 }, () => {
-  const draft = {
-    nextSeq: 9,
-    tasks: {
-      // in_progress + bound + marker pending -> honestly marked undelivered (board shows "resume")
-      'T-1': makeTask({ id: 'T-1', column: 'in_progress', conversationId: 11, kickoffPending: true }),
-      // backlog residue (e.g. rolled back concurrently): marker cleared, no false undelivered flag
-      'T-2': makeTask({ id: 'T-2', column: 'backlog', kickoffPending: true }),
-      // healthy task: no marker, untouched
-      'T-3': makeTask({ id: 'T-3', column: 'in_progress', conversationId: 13 }),
-    },
-  }
-  const marked = recoverKickoffMarkers(draft)
-  assert.deepEqual(marked, ['T-1'])
-  assert.equal(draft.tasks['T-1']!.kickoffPending, undefined)
-  assert.equal(draft.tasks['T-1']!.kickoffUndelivered, true)
-  assert.equal(draft.tasks['T-2']!.kickoffPending, undefined)
-  assert.equal(draft.tasks['T-2']!.kickoffUndelivered, undefined)
-  assert.equal(draft.tasks['T-3']!.kickoffUndelivered, undefined)
-})
-
 test('tasks-unit8: HelmxError contract sanity for store validators', { timeout: 60_000 }, () => {
   try {
     assertTaskStoreDoc({ nextSeq: 1, tasks: { 'T-1': makeTask({ createdAt: -5 }) } })
@@ -366,9 +221,9 @@ test('tasks-unit9: board badge projection — honest attention counts, tone ladd
       createdAt: 1,
       updatedAt: 1,
       ...over,
-    }) as never as import('@helmx/protocol').ConversationSummary
+    }) as never as ConversationSummary
 
-  const board = (tasks: Record<string, TaskRecord>, conversations?: import('@helmx/protocol').ConversationSummary[]) =>
+  const board = (tasks: Record<string, TaskRecord>, conversations?: ConversationSummary[]) =>
     projectBoardDoc({ nextSeq: 100, tasks }, conversations)
 
   // Empty board: fully quiet neutral
@@ -386,7 +241,7 @@ test('tasks-unit9: board badge projection — honest attention counts, tone ladd
   assert.equal(backlog.attentionCount, 0)
   assert.equal(backlog.badgeSummary, undefined)
 
-  // Healthy running (no conversation facts provided): quiet accent dot, running summary
+  // Healthy running (main idle, no facts): quiet accent dot, running summary
   const running = board({
     'T-1': makeTask({ column: 'in_progress', conversationId: 7, startedAt: 2_000 }),
     'T-2': makeTask({ id: 'T-2', column: 'in_progress', conversationId: 8, startedAt: 2_000 }),
@@ -408,45 +263,6 @@ test('tasks-unit9: board badge projection — honest attention counts, tone ladd
   assert.equal(review.badgeTone, 'warn')
   assert.deepEqual(review.badgeSummary, { en: '1 awaiting review', 'zh-CN': '1 个待验收' })
 
-  // Persisted record signals (no conversation facts needed): stalled / lastError / kickoffUndelivered / plan ask
-  const stalled = board({
-    'T-1': makeTask({ column: 'in_progress', conversationId: 7, silenceState: { stalledAt: 5 } }),
-  })
-  assert.equal(stalled.attentionCount, 1)
-  assert.equal(stalled.runningCount, 0)
-  assert.equal(stalled.badgeTone, 'warn')
-  assert.deepEqual(stalled.badgeSummary, { en: '1 needs attention', 'zh-CN': '1 个需处理' })
-
-  const lastError = board({
-    'T-1': makeTask({ column: 'in_progress', conversationId: 7, silenceState: { lastError: 'boom' } }),
-  })
-  assert.equal(lastError.attentionCount, 1)
-  assert.equal(lastError.badgeTone, 'warn')
-
-  const undelivered = board({
-    'T-1': makeTask({ column: 'in_progress', conversationId: 7, kickoffUndelivered: true }),
-  })
-  assert.equal(undelivered.attentionCount, 1)
-  assert.equal(undelivered.badgeTone, 'warn')
-
-  const planAsk = board({
-    'T-1': makeTask({ column: 'in_progress', conversationId: 7, pendingPlanAskId: 'ask-1' }),
-  })
-  assert.equal(planAsk.attentionCount, 1)
-  assert.equal(planAsk.badgeTone, 'warn')
-  // Decided plan (even rejected) is not an attention signal by itself
-  const planDecided = board({
-    'T-1': makeTask({
-      column: 'in_progress',
-      conversationId: 7,
-      pendingPlanAskId: 'ask-1',
-      planApproval: { decision: 'approved', askedAt: 1, decidedAt: 2, askId: 'ask-1' },
-    }),
-  })
-  assert.equal(planDecided.attentionCount, 0)
-  assert.equal(planDecided.runningCount, 1)
-  assert.equal(planDecided.badgeTone, 'accent')
-
   // conversationMissing flag (persisted by conversation.deleted): error severity
   const missingFlag = board({
     'T-1': makeTask({ column: 'in_progress', conversationId: 7, conversationMissing: true }),
@@ -455,7 +271,7 @@ test('tasks-unit9: board badge projection — honest attention counts, tone ladd
   assert.equal(missingFlag.badgeTone, 'error')
   assert.deepEqual(missingFlag.badgeSummary, { en: '1 needs attention', 'zh-CN': '1 个需处理' })
 
-  // Live conversation facts: bound conversation absent from the provided list -> error
+  // Live main-conversation facts: bound conversation absent from the provided list -> error
   const absent = board(
     { 'T-1': makeTask({ column: 'in_progress', conversationId: 7 }) },
     [conv(8)],
@@ -463,22 +279,22 @@ test('tasks-unit9: board badge projection — honest attention counts, tone ladd
   assert.equal(absent.attentionCount, 1)
   assert.equal(absent.badgeTone, 'error')
 
-  // Descendant error in the bound conversation subtree -> attention at error severity (subtree traversal)
-  const descendantError = board(
+  // Main conversation error -> attention at error severity
+  const errored = board(
     { 'T-1': makeTask({ column: 'in_progress', conversationId: 7 }) },
-    [conv(7), conv(8, { parentConversationId: 7 }), conv(9, { parentConversationId: 8, status: 'error' })],
+    [conv(7, { status: 'error' })],
   )
-  assert.equal(descendantError.attentionCount, 1)
-  assert.equal(descendantError.badgeTone, 'error')
+  assert.equal(errored.attentionCount, 1)
+  assert.equal(errored.badgeTone, 'error')
 
-  // Blocked descendant / pending ask on the bound conversation -> warn attention (not error, not running)
-  const descendantBlocked = board(
+  // Main blocked / pending ask -> warn attention (not error, not running)
+  const blocked = board(
     { 'T-1': makeTask({ column: 'in_progress', conversationId: 7 }) },
-    [conv(7), conv(9, { parentConversationId: 7, status: 'blocked' })],
+    [conv(7, { status: 'blocked' })],
   )
-  assert.equal(descendantBlocked.attentionCount, 1)
-  assert.equal(descendantBlocked.runningCount, 0)
-  assert.equal(descendantBlocked.badgeTone, 'warn')
+  assert.equal(blocked.attentionCount, 1)
+  assert.equal(blocked.runningCount, 0)
+  assert.equal(blocked.badgeTone, 'warn')
 
   const pendingAsk = board(
     { 'T-1': makeTask({ column: 'in_progress', conversationId: 7 }) },
@@ -486,6 +302,16 @@ test('tasks-unit9: board badge projection — honest attention counts, tone ladd
   )
   assert.equal(pendingAsk.attentionCount, 1)
   assert.equal(pendingAsk.badgeTone, 'warn')
+
+  // Descendant-only signals are NOT attention (subtree monitoring removed): a
+  // working child under an idle main conversation is still a healthy run.
+  const descendantBusy = board(
+    { 'T-1': makeTask({ column: 'in_progress', conversationId: 7 }) },
+    [conv(7), conv(9, { parentConversationId: 7, status: 'working' })],
+  )
+  assert.equal(descendantBusy.attentionCount, 0)
+  assert.equal(descendantBusy.runningCount, 1)
+  assert.equal(descendantBusy.badgeTone, 'accent')
 
   // In-review card with a missing conversation: review attention at error severity
   const reviewMissing = board(
@@ -511,12 +337,12 @@ test('tasks-unit9: board badge projection — honest attention counts, tone ladd
   // Review + other attention: combined summary with both parts (EN pluralization included)
   const combined = board({
     'T-1': makeTask({ column: 'in_review', conversationId: 7, submission: { summary: 'done', submittedAt: 3 } }),
-    'T-2': makeTask({ id: 'T-2', column: 'in_progress', conversationId: 8, silenceState: { stalledAt: 5 } }),
-    'T-3': makeTask({ id: 'T-3', column: 'in_progress', conversationId: 9, silenceState: { stalledAt: 6 } }),
+    'T-2': makeTask({ id: 'T-2', column: 'in_progress', conversationId: 8, conversationMissing: true }),
+    'T-3': makeTask({ id: 'T-3', column: 'in_progress', conversationId: 9, conversationMissing: true }),
   })
   assert.equal(combined.attentionCount, 3)
   assert.equal(combined.reviewCount, 1)
-  assert.equal(combined.badgeTone, 'warn')
+  assert.equal(combined.badgeTone, 'error')
   assert.deepEqual(combined.badgeSummary, { en: '1 awaiting review · 2 need attention', 'zh-CN': '1 个待验收 · 2 个需处理' })
 
   // Archived cards are excluded from every badge count even in active-ish columns
@@ -529,43 +355,6 @@ test('tasks-unit9: board badge projection — honest attention counts, tone ladd
   assert.equal(archived.runningCount, 0)
   assert.equal(archived.badgeTone, 'neutral')
   assert.equal(archived.badgeSummary, undefined)
-})
-
-test('tasks-unit10: subtreeAttentionFlags collects error and blocked/ask facts in one cycle-safe walk', { timeout: 60_000 }, () => {
-  const conv = (id: number, over: Record<string, unknown> = {}) =>
-    ({
-      id,
-      title: `c${id}`,
-      profileId: 'assistant',
-      tags: [],
-      cwd: '/repo',
-      model: 'faux/faux-1',
-      thinkingLevel: '',
-      status: 'idle',
-      stateChangeSeq: 1,
-      completionSeq: 0,
-      unread: false,
-      pinned: false,
-      pendingAskCount: 0,
-      createdAt: 1,
-      updatedAt: 1,
-      ...over,
-    }) as never as import('@helmx/protocol').ConversationSummary
-
-  const quiet = subtreeAttentionFlags(1, [conv(1), conv(2, { parentConversationId: 1 })])
-  assert.deepEqual({ ...quiet }, { error: false, blockedOrAsk: false })
-
-  const errored = subtreeAttentionFlags(1, [conv(1), conv(2, { parentConversationId: 1, status: 'error' })])
-  assert.deepEqual({ ...errored }, { error: true, blockedOrAsk: false })
-
-  const asked = subtreeAttentionFlags(1, [conv(1, { pendingAskCount: 2 })])
-  assert.deepEqual({ ...asked }, { error: false, blockedOrAsk: true })
-
-  // Root itself counts; cycle defense terminates
-  const rootBlocked = subtreeAttentionFlags(1, [conv(1, { status: 'blocked' })])
-  assert.deepEqual({ ...rootBlocked }, { error: false, blockedOrAsk: true })
-  const cyclic = [conv(1), conv(2, { parentConversationId: 3 }), conv(3, { parentConversationId: 2, status: 'error' })]
-  assert.deepEqual({ ...subtreeAttentionFlags(1, cyclic) }, { error: false, blockedOrAsk: false })
 
   // Dirty-check key: stable serialization of the badge tuple
   assert.equal(
@@ -588,6 +377,96 @@ test('tasks-unit10: subtreeAttentionFlags collects error and blocked/ask facts i
 })
 
 // ---------------------------------------------------------------------------
+// 客户端纯模型（deriveTaskLiveView 只看主会话 + background 快照）
+// ---------------------------------------------------------------------------
+
+test('tasks-unit-models: deriveTaskLiveView 主会话事实优先级与「会话已空闲 · 未交卷」纯派生', { timeout: 60_000 }, async () => {
+  const { deriveTaskLiveView } = await import('../src/tasks/client/models.js')
+  const conv = (id: number, over: Record<string, unknown> = {}) =>
+    ({
+      id,
+      title: `c${id}`,
+      profileId: 'assistant',
+      tags: [],
+      cwd: '/repo',
+      model: 'faux/faux-1',
+      thinkingLevel: '',
+      status: 'idle',
+      stateChangeSeq: 1,
+      completionSeq: 0,
+      unread: false,
+      pinned: false,
+      pendingAskCount: 0,
+      createdAt: 1,
+      updatedAt: 1,
+      ...over,
+    }) as never as ConversationSummary
+
+  const running = makeTask({ column: 'in_progress', conversationId: 7 })
+  // 主会话 working：running 灯 + doing 摘要
+  const working = deriveTaskLiveView(running, [conv(7, { status: 'working', doing: '跑测试' })], undefined, 'zh-CN')
+  assert.equal(working.lightStatus, 'running')
+  assert.equal(working.needsAttention, false)
+  assert.equal(working.liveSummary, '跑测试')
+
+  // 主会话 blocked + 待答 Ask：blocked 灯 + 等待审批 + needsAttention
+  const asked = deriveTaskLiveView(running, [conv(7, { status: 'blocked', pendingAskCount: 1 })], undefined, 'zh-CN')
+  assert.equal(asked.lightStatus, 'blocked')
+  assert.equal(asked.approvalPending, true)
+  assert.equal(asked.needsAttention, true)
+  assert.ok(asked.liveSummary.includes('等待审批'))
+
+  // 主会话 error：error 灯 + lastError 摘要
+  const errored = deriveTaskLiveView(running, [conv(7, { status: 'error', lastError: 'boom' })], undefined, 'zh-CN')
+  assert.equal(errored.lightStatus, 'error')
+  assert.equal(errored.needsAttention, true)
+  assert.ok(errored.liveSummary.includes('boom'))
+
+  // 会话缺失：error 灯 + 缺失摘要（真实会话表里没有绑定会话）
+  const missing = deriveTaskLiveView(running, [conv(8)], undefined, 'zh-CN')
+  assert.equal(missing.conversationMissing, true)
+  assert.equal(missing.lightStatus, 'error')
+  assert.equal(missing.needsAttention, true)
+  assert.ok(missing.liveSummary.includes('执行会话缺失'))
+
+  // 纯派生「会话已空闲 · 未交卷」：in_progress + 主会话 idle + 无 background 在途
+  const idle = deriveTaskLiveView(running, [conv(7, { status: 'idle' })], undefined, 'zh-CN')
+  assert.equal(idle.lightStatus, 'idle')
+  assert.equal(idle.idleNotSubmitted, true)
+  assert.ok(idle.liveSummary.includes('会话已空闲'))
+  assert.ok(idle.liveSummary.includes('未交卷'))
+  // 空闲未交卷不进 needsAttention（服务端口径一致：主会话 error/blocked/缺失才算）
+  assert.equal(idle.needsAttention, false)
+
+  // background 在途优先于 idle：SDK 快照 active 时不误报「空闲未交卷」
+  const backgroundActive = deriveTaskLiveView(running, [conv(7, { status: 'idle' })], undefined, 'zh-CN', {
+    unknown: false,
+    byConversation: new Map([[7, { active: true, summary: '后台跑 workflow' }]]),
+  })
+  assert.equal(backgroundActive.lightStatus, 'background')
+  assert.equal(backgroundActive.backgroundActive, true)
+  assert.equal(backgroundActive.idleNotSubmitted, false)
+  assert.ok(backgroundActive.liveSummary.includes('后台跑 workflow'))
+
+  // background unknown（doc 加载中）：不推断任何方向，idle 派生照常按主会话事实给出
+  const backgroundUnknown = deriveTaskLiveView(running, [conv(7, { status: 'idle' })], undefined, 'zh-CN', {
+    unknown: true,
+    byConversation: new Map(),
+  })
+  assert.equal(backgroundUnknown.lightStatus, 'idle')
+  assert.equal(backgroundUnknown.idleNotSubmitted, true)
+
+  // 子会话状态不影响灯位（子树扫描已删）：working 子会话下主会话 idle 仍是 idle
+  const childWorking = deriveTaskLiveView(running, [conv(7, { status: 'idle' }), conv(9, { parentConversationId: 7, status: 'working' })], undefined, 'zh-CN')
+  assert.equal(childWorking.lightStatus, 'idle')
+
+  // backlog 卡恒可开工；无会话时无摘要
+  const backlogCard = deriveTaskLiveView(makeTask(), [], undefined, 'zh-CN')
+  assert.equal(backlogCard.isReadyToStart, true)
+  assert.equal(backlogCard.liveSummary, '')
+})
+
+// ---------------------------------------------------------------------------
 // 看板归档语义（归档即收离看板；已归档卡仅历史开关打开时可见、沉底淡化）
 // ---------------------------------------------------------------------------
 
@@ -605,7 +484,7 @@ test('tasks-unit: screen params 解析 archived 开关（深链单一事实源�
 
 test('tasks-unit: compareTaskItems 已归档卡沉底（活跃卡永远在前）', { timeout: 60_000 }, async () => {
   const { bucketByColumn, deriveBoardItems } = await import('../src/tasks/client/models.js')
-  const base = { reworkCount: 0, dependsOn: [], createdAt: 0, updatedAt: 0 } as const
+  const base = { reworkCount: 0, createdAt: 0, updatedAt: 0 } as const
   const tasks = [
     { ...base, id: 'T-1', title: '旧归档', column: 'done', archived: true, createdAt: 5000 },
     { ...base, id: 'T-2', title: '新结单', column: 'done', createdAt: 100 },
@@ -634,7 +513,6 @@ test('tasks-unit11: 总览卡胶囊查找优先序与 TaskOverviewCardMeta 只�
     brief: '',
     column: 'backlog',
     assigneeProfileId: 'assistant',
-    dependsOn: [],
     reworkCount: 0,
     createdAt: 1,
     updatedAt: 1,
@@ -965,7 +843,7 @@ test('tasks-unit12: 详情抽屉交付信息与返工意见走宿主 Markdown �
     submission: { summary: summaryText, verification: verificationText, branch: 'helmx/spawn-demo', submittedAt: 1_000 },
     lastReworkFeedback: feedbackText,
   })
-  const live = deriveTaskLiveView(task, [], undefined)
+  const live = deriveTaskLiveView(task, [], undefined, 'zh-CN')
 
   const container = document.createElement('div')
   document.body.appendChild(container)
@@ -984,7 +862,6 @@ test('tasks-unit12: 详情抽屉交付信息与返工意见走宿主 Markdown �
             inline: true,
             onClose: () => undefined,
             onRework: () => undefined,
-            onResumeKickoff: () => undefined,
             busy: false,
           }),
         ),
@@ -1014,256 +891,4 @@ test('tasks-unit12: 详情抽屉交付信息与返工意见走宿主 Markdown �
   assert.ok(mdBlocks.some((s) => s.includes(feedbackText)), '返工意见应在 markdown 容器中')
   assert.ok(container.querySelector('.task-detail-submission .task-card-submission-summary') === null, '抽屉交付区不得复用卡片 line-clamp 摘要类')
   assert.ok((container.querySelector('.task-detail-submission .mono')?.textContent ?? '') === 'helmx/spawn-demo', '分支事实行保留')
-})
-
-test('tasks-unit13: 会话头部任务徽标与总览胶囊开工未送达警示态', { timeout: 60_000 }, async (t) => {
-  // 会话→任务回链（conversation:header 徽标）：findTaskForConversation 纯函数优先序
-  // + 编译产物 TaskHeaderBadge 命中渲染/点击深链/无命中零残留；
-  // 总览胶囊 kickoffUndelivered 同枚胶囊切 warn 态（不增第二枚按钮）。
-  if (typeof globalThis.document === 'undefined') GlobalRegistrator.register()
-  const { findTaskForConversation, findTaskForOverviewCard } = await import('../src/tasks/client/models.ts')
-  type ClientTaskRecord = import('../src/tasks/client/models.ts').TaskRecord
-  const ct = (over: Partial<ClientTaskRecord> = {}): ClientTaskRecord => ({
-    id: 'T-0',
-    title: 'Demo',
-    brief: '',
-    column: 'backlog',
-    assigneeProfileId: 'assistant',
-    dependsOn: [],
-    reworkCount: 0,
-    createdAt: 1,
-    updatedAt: 1,
-    ...over,
-  })
-
-  // ---- findTaskForConversation 纯函数：精确会话命中 + 同一会话内排序优先序 ----
-  assert.equal(findTaskForConversation([ct({ id: 'T-1', conversationId: 7 }), ct({ id: 'T-2', conversationId: 8 })], 7)?.id, 'T-1', '精确会话命中')
-  assert.equal(
-    findTaskForConversation([ct({ id: 'T-3', conversationId: 7, archived: true, updatedAt: 900 }), ct({ id: 'T-4', conversationId: 7, updatedAt: 100 })], 7)?.id,
-    'T-4',
-    '未归档优先于已归档（即便归档者 updatedAt 更新）',
-  )
-  assert.equal(
-    findTaskForConversation([ct({ id: 'T-5', conversationId: 7, updatedAt: 10 }), ct({ id: 'T-6', conversationId: 7, updatedAt: 20 })], 7)?.id,
-    'T-6',
-    'updatedAt 决胜',
-  )
-  assert.equal(findTaskForConversation([ct({ id: 'T-7', conversationId: 9 })], 7), undefined, '无匹配零残留')
-  assert.equal(findTaskForConversation([], 7), undefined, '空表零残留')
-  // findTaskForOverviewCard 根桶口径与 findTaskForConversation 同源（同排序不分叉）
-  const boardTasks = [ct({ id: 'T-8', conversationId: 7, archived: true, updatedAt: 900 }), ct({ id: 'T-9', conversationId: 7, updatedAt: 100 })]
-  assert.equal(findTaskForOverviewCard(boardTasks, 7, [7])?.id, findTaskForConversation(boardTasks, 7)?.id, '根桶与徽标查找同口径')
-
-  // ---- 编译产物组件交互（真实 bundle + 共享宿主 SDK + DOM 事件） ----
-  const req = createRequire(new URL('../../plugin-client/package.json', import.meta.url))
-  const React = req('react') as typeof import('react')
-  const ReactDOM = req('react-dom') as unknown
-  const ReactDOMClient = req('react-dom/client') as {
-    createRoot: (container: Element) => { render(node: React.ReactNode): void; unmount(): void }
-  }
-  const ReactJsxRuntime = req('react/jsx-runtime') as Record<string, unknown>
-  const LucideReact = req('lucide-react') as Record<string, unknown>
-  const SDK = await import('../../plugin-client/src/index.js')
-
-  const g = globalThis as Record<string, unknown>
-  const sharedKeys = [
-    'React',
-    'IS_REACT_ACT_ENVIRONMENT',
-    CLIENT_SHARED_GLOBALS['react']!,
-    CLIENT_SHARED_GLOBALS['react-dom']!,
-    CLIENT_SHARED_GLOBALS['react-dom/client']!,
-    CLIENT_SHARED_GLOBALS['react/jsx-runtime']!,
-    CLIENT_SHARED_GLOBALS['lucide-react']!,
-    CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!,
-  ]
-  const prevGlobals = new Map(sharedKeys.map((k) => [k, g[k]]))
-  const buildDir = mkdtempSync(join(tmpdir(), 'helmx-tasks-header-badge-'))
-  t.after(() => {
-    for (const key of sharedKeys) {
-      const prev = prevGlobals.get(key)
-      if (prev === undefined) delete g[key]
-      else g[key] = prev
-    }
-    rmSync(buildDir, { recursive: true, force: true })
-  })
-
-  g.React = React
-  g.IS_REACT_ACT_ENVIRONMENT = true
-  g[CLIENT_SHARED_GLOBALS['react']!] = React
-  g[CLIENT_SHARED_GLOBALS['react-dom']!] = ReactDOM
-  g[CLIENT_SHARED_GLOBALS['react-dom/client']!] = ReactDOMClient
-  g[CLIENT_SHARED_GLOBALS['react/jsx-runtime']!] = ReactJsxRuntime
-  g[CLIENT_SHARED_GLOBALS['lucide-react']!] = LucideReact
-  g[CLIENT_SHARED_GLOBALS['@helmx/plugin-client']!] = SDK
-
-  const clientDir = resolve(dirname(fileURLToPath(import.meta.url)), '../src/tasks/client')
-  const bundle = await compilePluginClientModule(TASKS_PLUGIN_ID, clientDir, 'index.tsx', buildDir)
-  const rawModule = (await import(`data:text/javascript;base64,${Buffer.from(bundle.code, 'utf8').toString('base64')}`)) as Record<
-    string,
-    unknown
-  >
-  const TaskHeaderBadge = rawModule['TaskHeaderBadge'] as React.ComponentType<Record<string, unknown>>
-  const TaskOverviewCardMeta = rawModule['TaskOverviewCardMeta'] as React.ComponentType<Record<string, unknown>>
-  assert.ok(TaskHeaderBadge !== undefined, '客户端应导出 TaskHeaderBadge')
-
-  const rootConversation: ConversationSummary = {
-    id: 42,
-    title: 'Fix login redirect',
-    profileId: 'assistant',
-    tags: ['task'],
-    cwd: '/workspace/demo',
-    model: 'faux/echo',
-    thinkingLevel: '',
-    status: 'idle',
-    stateChangeSeq: 1,
-    completionSeq: 0,
-    unread: false,
-    pinned: false,
-    pendingAskCount: 0,
-    createdAt: 1_700_000_000_000,
-    updatedAt: 1_700_000_010_000,
-  }
-
-  const mountWith = (element: React.ReactElement, board: unknown) => {
-    const screens: string[] = []
-    const port: import('../../plugin-client/src/index.js').PluginClientHostPort = {
-      authenticated: true,
-      theme: 'light',
-      locale: 'zh-CN',
-      conversations: [],
-      conversationDetails: {},
-      conversationLives: {},
-      pendingAsks: [],
-      loadErrors: {},
-      plugins: [],
-      screens: [],
-      pluginDocs: board === undefined ? {} : { 'builtin:tasks/board': board },
-      ensurePluginDoc: async () => undefined,
-      getPluginSessionDoc: async () => undefined,
-      subscribeSessionDoc: () => () => {},
-      getSessionDocState: () => ({ hasValue: false, deleted: false, connected: false }),
-      invokePluginAction: async () => ({}),
-      submitConversationInput: async () => undefined,
-      openTarget: (target) => {
-        screens.push(target)
-      },
-      openConversationDrawer: () => undefined,
-      openArtifactPreview: () => undefined,
-      setWorkbenchOpen: () => undefined,
-      setWorkbenchTab: () => undefined,
-      notify: () => undefined,
-      loadConversationDetail: () => undefined,
-      slots: { collectItems: () => [], renderItem: () => null },
-      markdown: { view: () => null, codeBlock: () => null },
-    }
-    const ctx = SDK.createPluginClientContext(port, TASKS_PLUGIN_ID, 42)
-    let outerClicks = 0
-    const container = document.createElement('div')
-    document.body.appendChild(container)
-    const root = ReactDOMClient.createRoot(container)
-    React.act(() => {
-      root.render(
-        React.createElement(
-          SDK.PluginClientHostContext.Provider,
-          { value: port },
-          React.createElement(
-            SDK.PluginClientContext.Provider,
-            { value: ctx },
-            React.createElement(
-              'div',
-              {
-                onClick: () => {
-                  outerClicks += 1
-                },
-              },
-              element,
-            ),
-          ),
-        ),
-      )
-    })
-    return {
-      container,
-      screens,
-      outerClicks: () => outerClicks,
-      unmount: () => {
-        React.act(() => {
-          root.unmount()
-        })
-        container.remove()
-      },
-    }
-  }
-
-  const badgeElement = React.createElement(TaskHeaderBadge, { conversation: rootConversation })
-  const pillElement = React.createElement(TaskOverviewCardMeta, { rootConversation, memberIds: [42, 43] })
-
-  // ---- 徽标命中：任务号 + 列位文案 + data-column 事实；点击深链且不冒泡 ----
-  const inReviewBoard = {
-    tasks: [
-      { id: 'T-12', title: 'Ship', column: 'in_review', conversationId: 42, updatedAt: 9 },
-      { id: 'T-13', title: 'Other', column: 'backlog', conversationId: 999, updatedAt: 99 },
-    ],
-    updatedAt: 9,
-  }
-  const hit = mountWith(badgeElement, inReviewBoard)
-  try {
-    const badge = hit.container.querySelector('button.task-header-badge')
-    assert.ok(badge !== null, '命中应渲染徽标按钮')
-    assert.ok(badge.getAttribute('data-column') === 'in_review', 'data-column 应携带真实列位')
-    assert.ok(badge.getAttribute('data-kickoff-undelivered') === null, '正常态不带警示标记')
-    const text = badge.textContent ?? ''
-    assert.ok(text.includes('T-12'), `徽标应含任务号，实际：${text}`)
-    assert.ok(text.includes('待验收'), `zh-CN 列位文案应渲染，实际：${text}`)
-    assert.ok(!EMOJI_RE.test(text), '渲染文本不得含 Emoji')
-    React.act(() => {
-      badge.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-    })
-    assert.deepEqual(hit.screens, ['screen:builtin:tasks/board?task=T-12'], '点击应深链看板任务抽屉')
-    assert.ok(hit.outerClicks() === 0, '点击徽标不得冒泡')
-  } finally {
-    hit.unmount()
-  }
-
-  // ---- 徽标开工未送达：状态词切换警示文案 + data 标记 + title 恢复指引 ----
-  const undeliveredBoard = {
-    tasks: [{ id: 'T-14', title: 'Recover', column: 'in_progress', conversationId: 42, kickoffUndelivered: true, updatedAt: 5 }],
-    updatedAt: 5,
-  }
-  const warn = mountWith(badgeElement, undeliveredBoard)
-  try {
-    const badge = warn.container.querySelector('button.task-header-badge')
-    assert.ok(badge !== null, '未送达任务应渲染徽标')
-    assert.ok(badge.getAttribute('data-kickoff-undelivered') === 'true', '警示标记应携带')
-    const text = badge.textContent ?? ''
-    assert.ok(text.includes('开工未送达'), `状态词应切为恢复警示，实际：${text}`)
-    const title = badge.getAttribute('title') ?? ''
-    assert.ok(title.includes('点「继续」'), `title 应为恢复指引，实际：${title}`)
-  } finally {
-    warn.unmount()
-  }
-
-  // ---- 总览胶囊同枚切 warn 态：不增第二枚按钮 ----
-  const pillWarn = mountWith(pillElement, undeliveredBoard)
-  try {
-    const pills = pillWarn.container.querySelectorAll('button.task-overview-pill')
-    assert.ok(pills.length === 1, '警示态仍是同一枚胶囊，不新增按钮')
-    const pill = pills[0]!
-    assert.ok(pill.getAttribute('data-kickoff-undelivered') === 'true', '胶囊应携带警示标记')
-    assert.ok((pill.textContent ?? '').includes('开工未送达'), '胶囊状态词应切为恢复警示')
-    assert.ok((pill.getAttribute('title') ?? '').includes('点「继续」'), '胶囊 title 应为恢复指引')
-  } finally {
-    pillWarn.unmount()
-  }
-
-  // ---- 无命中（doc 未加载 / >50 归档截断出投影 / 无匹配）零残留 ----
-  for (const board of [undefined, { tasks: [{ id: 'T-13', title: 'Other', column: 'backlog', conversationId: 999 }], updatedAt: 1 }]) {
-    const miss = mountWith(badgeElement, board)
-    try {
-      assert.ok(miss.container.querySelector('button') === null, '无命中不应渲染任何按钮')
-      assert.ok((miss.container.textContent ?? '') === '', '无命中零文本残留')
-    } finally {
-      miss.unmount()
-    }
-  }
 })

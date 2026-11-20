@@ -232,8 +232,8 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 | `helmx herdr steer` | builtin:herdr | 向受管且由 workflow run 派生的窗格插话（`guardLevel=preflight` 发送前预检）；通常用 `helmx workflows steer <runId> --text` 自动路由 |
 | `helmx superagent <action>` | builtin:superagent | `dispatch_worker / inspect_worker / recall_context / subscribe_thread / archive_worker / set_router_mode` 与 `watchdog_*` |
 | `helmx magpie status / refresh / quota / groups / group <id>` | builtin:magpie | 网关状态、目录刷新、配额查询与路由组 |
-| `helmx tasks create / list / inspect <taskId> / update <taskId>` | builtin:tasks | 建卡（自包含 brief，`--auto-start` 缺省开工）、按列/项目/角色/节点过滤列表、单卡详情与编辑（已启动卡锁执行环境，依赖图禁环） |
-| `helmx tasks start / submit / approve / rework <taskId>` | builtin:tasks | 开工 backlog 卡、执行者交卷（`submit` 在任务会话内自动反查绑定卡）、验收（`--merge-action close_only\|merge_and_close`）与打回返工（`--recreate-conversation` 重建已删会话） |
+| `helmx tasks create / list / inspect <taskId> / update <taskId>` | builtin:tasks | 建卡（自包含 brief，`--auto-start` 缺省开工）、按列/项目/角色/节点过滤列表、单卡详情与编辑（已启动卡锁执行环境） |
+| `helmx tasks start / submit / approve / rework <taskId>` | builtin:tasks | 开工 backlog 卡、执行者交卷（`submit` 在任务会话内自动反查绑定卡）、验收（`--confirm-stopped` 人工收尾进行中卡）与打回返工（`--recreate-conversation` 重建已删会话） |
 | `helmx tasks archive <taskId> / delete <taskId>` | builtin:tasks | 归档 backlog/done 卡、删除任务记录（绝不删会话历史；进行中卡 409 拒绝） |
 
 ---

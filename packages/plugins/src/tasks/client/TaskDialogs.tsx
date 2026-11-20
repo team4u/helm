@@ -4,27 +4,24 @@
  *
  * - TaskCreateDialog: lightweight centered modal with a 3-second core form
  *   (title / brief / start immediately); secondary fields (project / assignee /
- *   node / cwd / dependsOn MultiSelect / plan first / auto merge) collapse
- *   behind a "More options" disclosure with value chips when set. Submit goes
- *   through ctx.callAction('create') and backend errors render verbatim.
+ *   node / cwd) collapse behind a "More options" disclosure with value chips
+ *   when set. Submit goes through ctx.callAction('create') and backend errors
+ *   render verbatim.
  * - TaskReworkDialog: centered modal collecting the rework feedback and
  *   calling ctx.callAction('rework').
- * - TaskMergeConfirmDialog: explicit consent before merge_and_close (the
- *   branch / worktree / changed-file facts, never a one-tap dispatch).
  * - TaskDetailDrawer: right-side 540px drawer (host .primary-drawer-* shell):
  *   MarkdownView brief / submission summary / verification / rework feedback,
- *   dependency chain, submission facts with clickable
- *   artifact chips (ctx.openArtifact) and an expandable changed-file list,
- *   inline edit (title / brief / project + the same "More options" set as the
- *   create dialog: assignee / node / cwd / dependsOn MultiSelect / plan first /
- *   auto merge; once started the executor / node / cwd inputs lock disabled
- *   with the backend 409 reason while staying visible), start / approve /
- *   rework / archive / delete with a two-step delete confirm.
+ *   submission facts with clickable artifact chips (ctx.openArtifact) and an
+ *   expandable changed-file list, inline edit (title / brief / project + the
+ *   same "More options" set as the create dialog: assignee / node / cwd; once
+ *   started the executor / node / cwd inputs lock disabled with the backend
+ *   409 reason while staying visible), start / approve / rework / archive /
+ *   delete with a two-step delete confirm.
  *
  * Data flows through the @helmx/plugin-client shared hooks and the plugin
  * context; display copy resolves from copy.ts against the host locale.
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import {
   Dialog,
@@ -36,7 +33,6 @@ import {
   DialogTitle,
   HelmxIcon,
   MarkdownView,
-  MultiSelect,
   StatusLight,
   Switch,
   formatTime,
@@ -44,7 +40,6 @@ import {
   usePluginLocale,
   usePluginTranslator,
 } from '@helmx/plugin-client'
-import type { TaskSubmission } from './models.ts'
 import type { TaskItem, TaskRecord } from './models.ts'
 import { taskLightWord } from './models.ts'
 import {
@@ -61,8 +56,6 @@ import {
   TASK_ACTION_DELETE_TITLE,
   TASK_ACTION_EDIT,
   TASK_ACTION_FAILED,
-  TASK_ACTION_MERGE_CLOSE,
-  TASK_ACTION_MERGE_CLOSE_TITLE,
   TASK_ACTION_REWORK,
   TASK_ACTION_REWORK_TITLE,
   TASK_ACTION_SAVE,
@@ -76,45 +69,20 @@ import {
   TASK_CREATE_SUBMIT,
   TASK_DELETE_CONFIRM,
   TASK_DELETING,
-  TASK_DEP_DONE,
-  TASK_DEP_OFF_BOARD,
-  TASK_DEP_OFF_BOARD_TITLE,
-  TASK_DEP_PENDING,
-  TASK_DEPS_CANDIDATES_EMPTY,
-  TASK_DEPS_NONE,
-  TASK_DEPS_SECTION,
-  TASK_DEPS_UNKNOWN,
-  TASK_DEPS_UNKNOWN_TITLE,
-  TASK_KICKOFF_UNDELIVERED,
-  TASK_KICKOFF_UNDELIVERED_TITLE,
-  TASK_ACTION_RESUME_KICKOFF_TITLE,
-  TASK_KV_MERGE_MODE,
-  TASK_KV_PLAN_APPROVAL,
-  TASK_PLAN_APPROVED,
-  TASK_PLAN_ASK_PENDING,
-  TASK_PLAN_REJECTED,
   TASK_FIELD_ASSIGNEE,
   TASK_FIELD_ASSIGNEE_PLACEHOLDER,
-  TASK_FIELD_AUTO_MERGE,
-  TASK_FIELD_AUTO_MERGE_DESC,
   TASK_FIELD_AUTO_START,
   TASK_FIELD_AUTO_START_DESC,
   TASK_FIELD_BRIEF,
   TASK_FIELD_BRIEF_PLACEHOLDER,
   TASK_FIELD_CWD,
   TASK_FIELD_CWD_PLACEHOLDER,
-  TASK_FIELD_DEPENDS_ON,
   TASK_FIELD_NODE,
   TASK_FIELD_NODE_PLACEHOLDER,
-  TASK_FIELD_PLAN_FIRST,
-  TASK_FIELD_PLAN_FIRST_DESC,
   TASK_FIELD_PROJECT,
   TASK_FIELD_PROJECT_PLACEHOLDER,
   TASK_FIELD_TITLE,
   TASK_FIELD_TITLE_PLACEHOLDER,
-  TASK_FLAG_AUTO_MERGE_SHORT,
-  TASK_FLAG_ISOLATED_BRANCH,
-  TASK_FLAG_PLAN_FIRST,
   TASK_KV_ASSIGNEE,
   TASK_KV_COMPLETED,
   TASK_KV_CONVERSATION,
@@ -124,7 +92,6 @@ import {
   TASK_KV_MODEL,
   TASK_KV_NODE,
   TASK_KV_THINKING_LEVEL,
-  TASK_KV_PLAN_FIRST,
   TASK_KV_ORIGIN,
   TASK_KV_STARTED,
   TASK_KV_SUBMITTED_AT,
@@ -142,14 +109,6 @@ import {
   TASK_SUBMISSION_ARTIFACTS,
   TASK_SUBMIT_REQUIRED,
   TASK_TITLE_TOO_LONG,
-  TASK_MERGE_CONFIRM_BODY,
-  TASK_MERGE_CONFIRM_CANCEL,
-  TASK_MERGE_CONFIRM_FILES,
-  TASK_MERGE_CONFIRM_SUBMIT,
-  TASK_MERGE_CONFIRM_TITLE,
-  TASK_MERGE_CONFIRM_TO_BRANCH,
-  TASK_MERGE_CONFIRM_UNKNOWN_BRANCH,
-  TASK_MERGE_CONFIRM_WORKTREE,
   taskArtifactOpenTitle,
   taskChangedFiles,
   taskColumnLabel,
@@ -157,7 +116,6 @@ import {
   taskCreateDialogAria,
   taskDetailDialogLabel,
   taskLightLabel,
-  taskMergeConfirmAria,
   taskOriginJumpTitle,
   taskReworkDialogAria,
   taskReworkDialogTitle,
@@ -191,8 +149,6 @@ function modalFormField(
 export interface TaskCreateDialogProps {
   open: boolean
   onClose: () => void
-  /** Candidate dependencies (existing unfinished tasks) for the MultiSelect. */
-  dependencyCandidates?: ReadonlyArray<{ id: string; title: string }>
 }
 
 export function TaskCreateDialog(props: TaskCreateDialogProps): ReactNode {
@@ -208,9 +164,6 @@ export function TaskCreateDialog(props: TaskCreateDialogProps): ReactNode {
   const [assignee, setAssignee] = useState('')
   const [nodeId, setNodeId] = useState('')
   const [cwd, setcwd] = useState('')
-  const [dependsOn, setDependsOn] = useState<string[]>([])
-  const [planFirst, setPlanFirst] = useState(false)
-  const [autoMerge, setAutoMerge] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [touched, setTouched] = useState(false)
@@ -230,9 +183,6 @@ export function TaskCreateDialog(props: TaskCreateDialogProps): ReactNode {
       setAssignee('')
       setNodeId('')
       setcwd('')
-      setDependsOn([])
-      setPlanFirst(false)
-      setAutoMerge(false)
       setSubmitting(false)
       setError(null)
       setTouched(false)
@@ -247,25 +197,12 @@ export function TaskCreateDialog(props: TaskCreateDialogProps): ReactNode {
     : undefined
   const briefError = touched && brief.trim() === '' ? t(TASK_SUBMIT_REQUIRED) : undefined
 
-  const candidates = props.dependencyCandidates ?? []
-  const dependencyOptions = useMemo(
-    () => candidates.map((candidate) => ({ value: candidate.id, label: `${candidate.id} · ${candidate.title}` })),
-    [candidates],
-  )
-
   // Collapsed-disclosure summary chips: only non-default values, never noise.
   const advancedChips: ReactNode[] = []
   if (project.trim() !== '') advancedChips.push(<span key="project" className="badge badge-neutral">{project.trim()}</span>)
   if (assignee.trim() !== '') advancedChips.push(<span key="assignee" className="badge badge-neutral mono">{assignee.trim()}</span>)
   if (nodeId.trim() !== '') advancedChips.push(<span key="node" className="badge badge-neutral mono">@{nodeId.trim()}</span>)
   if (cwd.trim() !== '') advancedChips.push(<span key="cwd" className="badge badge-neutral mono" title={cwd.trim()}>{cwd.trim()}</span>)
-  if (dependsOn.length > 0) {
-    advancedChips.push(
-      <span key="deps" className="badge badge-neutral mono">{dependsOn.join(', ')}</span>,
-    )
-  }
-  if (planFirst) advancedChips.push(<span key="plan" className="badge badge-neutral">{t(TASK_FLAG_PLAN_FIRST)}</span>)
-  if (autoMerge) advancedChips.push(<span key="merge" className="badge badge-neutral">{t(TASK_FLAG_AUTO_MERGE_SHORT)}</span>)
 
   const submit = (): void => {
     if (submitting) return
@@ -282,9 +219,6 @@ export function TaskCreateDialog(props: TaskCreateDialogProps): ReactNode {
         ...(assignee.trim() !== '' ? { assigneeProfileId: assignee.trim() } : {}),
         ...(nodeId.trim() !== '' ? { nodeId: nodeId.trim() } : {}),
         ...(cwd.trim() !== '' ? { cwd: cwd.trim() } : {}),
-        ...(dependsOn.length > 0 ? { dependsOn } : {}),
-        planFirst,
-        autoMerge,
         autoStart,
       })
       .then(() => {
@@ -410,37 +344,6 @@ export function TaskCreateDialog(props: TaskCreateDialogProps): ReactNode {
                     />,
                   )}
                 </div>
-                <div className="task-form-field">
-                  <span className="task-form-label">{t(TASK_FIELD_DEPENDS_ON)}</span>
-                  {dependencyOptions.length > 0 ? (
-                    <MultiSelect
-                      value={dependsOn}
-                      options={dependencyOptions}
-                      onValuesChange={(values) => setDependsOn(values)}
-                      aria-label={t(TASK_FIELD_DEPENDS_ON)}
-                      size="sm"
-                      searchable
-                    />
-                  ) : (
-                    <div className="task-form-hint">{t(TASK_DEPS_CANDIDATES_EMPTY)}</div>
-                  )}
-                </div>
-                <div className="task-form-switches">
-                  <div className="task-form-switch-row">
-                    <Switch checked={planFirst} onChange={setPlanFirst} aria-label={t(TASK_FIELD_PLAN_FIRST)} />
-                    <span className="task-form-switch-text">
-                      <span className="task-form-switch-label">{t(TASK_FIELD_PLAN_FIRST)}</span>
-                      <span className="task-form-switch-desc">{t(TASK_FIELD_PLAN_FIRST_DESC)}</span>
-                    </span>
-                  </div>
-                  <div className="task-form-switch-row">
-                    <Switch checked={autoMerge} onChange={setAutoMerge} aria-label={t(TASK_FIELD_AUTO_MERGE)} />
-                    <span className="task-form-switch-text">
-                      <span className="task-form-switch-label">{t(TASK_FIELD_AUTO_MERGE)}</span>
-                      <span className="task-form-switch-desc">{t(TASK_FIELD_AUTO_MERGE_DESC)}</span>
-                    </span>
-                  </div>
-                </div>
               </div>
             ) : null}
 
@@ -563,94 +466,6 @@ export function TaskReworkDialog(props: TaskReworkDialogProps): ReactNode {
 }
 
 // ---------------------------------------------------------------------------
-// Merge & close confirmation
-// ---------------------------------------------------------------------------
-
-export interface TaskMergeConfirmDialogProps {
-  taskId: string
-  title: string
-  submission: TaskSubmission | undefined
-  open: boolean
-  onClose: () => void
-  onConfirm: (taskId: string) => void
-  busy: boolean
-}
-
-/**
- * Explicit confirmation before `approve { mergeAction: 'merge_and_close' }`:
- * the action touches the repository main branch through the executor, so the
- * dialog shows the exact branch, the worktree that will be cleaned up and the
- * changed-file count before dispatching. No auto-merge without this consent.
- */
-export function TaskMergeConfirmDialog(props: TaskMergeConfirmDialogProps): ReactNode {
-  const locale = usePluginLocale()
-  const t = usePluginTranslator()
-  const submission = props.submission
-  return (
-    <Dialog open={props.open} onOpenChange={(open) => { if (!open && !props.busy) props.onClose() }}>
-      <DialogPortal>
-        <DialogOverlay>
-          <DialogContent className="modal task-modal" aria-label={taskMergeConfirmAria(props.taskId, locale)}>
-          <div className="modal-header">
-            <div className="task-modal-title-row">
-              <HelmxIcon name="git-pull-request" size={15} />
-              <DialogTitle className="modal-title">{t(TASK_MERGE_CONFIRM_TITLE)}</DialogTitle>
-              <span className="badge badge-neutral mono">{props.taskId}</span>
-            </div>
-            <DialogClose asChild>
-              <button type="button" className="btn btn-ghost btn-sm" aria-label={t(TASK_ACTION_CLOSE)} title={t(TASK_ACTION_CLOSE)}>
-                <HelmxIcon name="x" size={14} />
-              </button>
-            </DialogClose>
-          </div>
-          <div className="modal-body task-modal-body">
-            <DialogDescription className="text-secondary" style={{ fontSize: '13px', lineHeight: 1.5 }}>
-              {props.title}
-            </DialogDescription>
-            <div className="callout callout-warn">{t(TASK_MERGE_CONFIRM_BODY)}</div>
-            <div className="form-grid">
-              <div className="form-grid-row">
-                <span className="form-grid-label"><span>{t(TASK_MERGE_CONFIRM_TO_BRANCH)}</span></span>
-                <span className="form-grid-value mono">
-                  {submission?.branch ?? t(TASK_MERGE_CONFIRM_UNKNOWN_BRANCH)}
-                </span>
-              </div>
-              {submission?.worktreePath !== undefined ? (
-                <div className="form-grid-row">
-                  <span className="form-grid-label"><span>{t(TASK_MERGE_CONFIRM_WORKTREE)}</span></span>
-                  <span className="form-grid-value mono" title={submission.worktreePath}>{submission.worktreePath}</span>
-                </div>
-              ) : null}
-              {submission?.changedFiles !== undefined && submission.changedFiles.length > 0 ? (
-                <div className="form-grid-row">
-                  <span className="form-grid-label"><span>{t(TASK_MERGE_CONFIRM_FILES)}</span></span>
-                  <span className="form-grid-value">{taskChangedFiles(submission.changedFiles.length, locale)}</span>
-                </div>
-              ) : null}
-            </div>
-          </div>
-          <div className="task-modal-footer">
-            <button type="button" className="btn btn-sm btn-ghost" disabled={props.busy} onClick={props.onClose}>
-              <span>{t(TASK_MERGE_CONFIRM_CANCEL)}</span>
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm btn-primary"
-              disabled={props.busy}
-              onClick={() => props.onConfirm(props.taskId)}
-            >
-              <HelmxIcon name="git-pull-request" size={12} />
-              <span>{t(TASK_MERGE_CONFIRM_SUBMIT)}</span>
-            </button>
-          </div>
-          </DialogContent>
-        </DialogOverlay>
-      </DialogPortal>
-    </Dialog>
-  )
-}
-
-// ---------------------------------------------------------------------------
 // Detail drawer
 // ---------------------------------------------------------------------------
 
@@ -661,10 +476,6 @@ export interface TaskDetailDrawerProps {
   onClose: () => void
   /** Open the rework dialog for this task (owned by the screen). */
   onRework: (taskId: string) => void
-  /** Open the merge-and-close confirmation for this task (owned by the screen — never a one-tap dispatch). */
-  onMerge: (taskId: string) => void
-  /** Explicit resume of a kickoff-undelivered task (resume_kickoff action; user-driven only). */
-  onResumeKickoff: (taskId: string) => void
   busy: boolean
 }
 
@@ -752,9 +563,6 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
   const [editAssignee, setEditAssignee] = useState(task.assigneeProfileId)
   const [editNodeId, setEditNodeId] = useState(task.nodeId ?? '')
   const [editCwd, setEditCwd] = useState(task.cwd ?? '')
-  const [editDependsOn, setEditDependsOn] = useState<string[]>(task.dependsOn)
-  const [editPlanFirst, setEditPlanFirst] = useState(task.planFirst === true)
-  const [editAutoMerge, setEditAutoMerge] = useState(task.autoMerge === true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -768,9 +576,6 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
     setEditAssignee(task.assigneeProfileId)
     setEditNodeId(task.nodeId ?? '')
     setEditCwd(task.cwd ?? '')
-    setEditDependsOn(task.dependsOn)
-    setEditPlanFirst(task.planFirst === true)
-    setEditAutoMerge(task.autoMerge === true)
     setBusy(false)
     setError(null)
     setConfirmDelete(false)
@@ -799,43 +604,14 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
     setEditAssignee(task.assigneeProfileId)
     setEditNodeId(task.nodeId ?? '')
     setEditCwd(task.cwd ?? '')
-    setEditDependsOn(task.dependsOn)
-    setEditPlanFirst(task.planFirst === true)
-    setEditAutoMerge(task.autoMerge === true)
     setEditing(true)
   }
 
   const submission = task.submission
-  const depRows = useMemo(() => {
-    const authoritative = Array.isArray(task.blockedBy) ? (task.blockedBy ?? []) : undefined
-    return task.dependsOn.map((depId) => {
-      if (authoritative === undefined) return { depId, state: 'unknown' as const }
-      if (authoritative.includes(depId)) return { depId, state: 'pending' as const }
-      return { depId, state: props.tasksById.has(depId) ? ('done' as const) : ('done-off-board' as const) }
-    })
-  }, [task.dependsOn, task.blockedBy, props.tasksById])
 
   // 启动判定与后端 update 锁同源：已启动（非 backlog 或已绑定会话）时执行角色 / 节点 /
   // 工作目录三字段锁定（409 task_already_started），编辑表单以禁用态如实呈现。
   const started = task.column !== 'backlog' || task.conversationId !== undefined
-
-  // 依赖候选：板上其余任务（含已完成——既有依赖可能指向它们，缺项会让 MultiSelect
-  // 静默丢值）；自身永远排除。
-  const dependencyOptions = useMemo(() => {
-    const ids = new Set<string>([task.id])
-    for (const depId of editDependsOn) ids.add(depId)
-    const options: Array<{ value: string; label: string }> = []
-    for (const depId of ids) {
-      if (depId === task.id) continue
-      const record = props.tasksById.get(depId)
-      options.push({ value: depId, label: record !== undefined ? `${depId} · ${record.title}` : depId })
-    }
-    for (const other of props.tasksById.values()) {
-      if (other.id === task.id || ids.has(other.id)) continue
-      options.push({ value: other.id, label: `${other.id} · ${other.title}` })
-    }
-    return options
-  }, [props.tasksById, task.id, editDependsOn])
 
   const saveEdit = (): void => {
     if (busy) return
@@ -861,9 +637,6 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
         ...(!started && nextAssignee !== task.assigneeProfileId ? { assigneeProfileId: nextAssignee } : {}),
         ...(nextNodeId !== (task.nodeId ?? '') ? { nodeId: nextNodeId === '' ? null : nextNodeId } : {}),
         ...(nextCwd !== (task.cwd ?? '') ? { cwd: nextCwd === '' ? null : nextCwd } : {}),
-        dependsOn: editDependsOn,
-        planFirst: editPlanFirst,
-        autoMerge: editAutoMerge,
       }).then(() => setEditing(false)),
     )
   }
@@ -874,15 +647,6 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
   if (editAssignee.trim() !== '') editAdvancedChips.push(<span key="assignee" className="badge badge-neutral mono">{editAssignee.trim()}</span>)
   if (editNodeId.trim() !== '') editAdvancedChips.push(<span key="node" className="badge badge-neutral mono">@{editNodeId.trim()}</span>)
   if (editCwd.trim() !== '') editAdvancedChips.push(<span key="cwd" className="badge badge-neutral mono" title={editCwd.trim()}>{editCwd.trim()}</span>)
-  if (editDependsOn.length > 0) {
-    editAdvancedChips.push(
-      <span key="deps" className="badge badge-neutral mono">{editDependsOn.join(', ')}</span>,
-    )
-  }
-  if (editPlanFirst) editAdvancedChips.push(<span key="plan" className="badge badge-neutral">{t(TASK_FLAG_PLAN_FIRST)}</span>)
-  if (editAutoMerge) editAdvancedChips.push(<span key="merge" className="badge badge-neutral">{t(TASK_FLAG_AUTO_MERGE_SHORT)}</span>)
-
-  const hasMergeMaterial = submission?.branch !== undefined || submission?.worktreePath !== undefined
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open && !busy) props.onClose() }}>
@@ -915,11 +679,6 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
           </div>
 
           <div className="primary-drawer-body">
-            {task.kickoffUndelivered === true ? (
-              <div className="callout callout-warn" title={t(TASK_KICKOFF_UNDELIVERED_TITLE)}>
-                {t(TASK_KICKOFF_UNDELIVERED)}
-              </div>
-            ) : null}
             {live.liveSummary !== '' ? (
               <div className={`task-card-live${live.lightStatus === 'error' ? ' is-error' : live.needsAttention ? ' is-attention' : ''}`}>
                 <StatusLight status={taskLightWord(live.lightStatus)} label={taskLightLabel(live.lightStatus, locale)} />
@@ -934,33 +693,6 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
               {task.cwd !== undefined ? kvRow(t(TASK_KV_CWD), <span className="mono" title={task.cwd}>{task.cwd}</span>) : null}
               {task.model !== undefined ? kvRow(t(TASK_KV_MODEL), <span className="mono">{task.model}</span>) : null}
               {task.thinkingLevel !== undefined && task.thinkingLevel !== '' ? kvRow(t(TASK_KV_THINKING_LEVEL), <span className="mono">{task.thinkingLevel}</span>) : null}
-              {task.planFirst === true ? kvRow(t(TASK_KV_PLAN_FIRST), <span className="badge badge-neutral">{t(TASK_FLAG_PLAN_FIRST)}</span>) : null}
-              {kvRow(
-                t(TASK_KV_MERGE_MODE),
-                task.autoMerge === true ? (
-                  <span className="badge badge-ok">{t(TASK_FIELD_AUTO_MERGE)}</span>
-                ) : (
-                  <span className="badge badge-neutral">{t(TASK_FLAG_ISOLATED_BRANCH)}</span>
-                ),
-              )}
-              {task.pendingPlanAskId !== undefined && task.planApproval === undefined
-                ? kvRow(t(TASK_KV_PLAN_APPROVAL), <span className="badge badge-warn">{t(TASK_PLAN_ASK_PENDING)}</span>)
-                : null}
-              {task.planApproval !== undefined
-                ? kvRow(
-                    t(TASK_KV_PLAN_APPROVAL),
-                    <span>
-                      <span className={`badge ${task.planApproval.decision === 'approved' ? 'badge-ok' : 'badge-warn'}`}>
-                        {t(task.planApproval.decision === 'approved' ? TASK_PLAN_APPROVED : TASK_PLAN_REJECTED)}
-                      </span>
-                      {task.planApproval.decidedAt > 0 ? (
-                        <span className="tabular-nums" style={{ marginLeft: 6 }}>
-                          {formatTime(task.planApproval.decidedAt)}
-                        </span>
-                      ) : null}
-                    </span>,
-                  )
-                : null}
               {task.createdAt > 0 ? kvRow(t(TASK_KV_CREATED), <span className="tabular-nums">{formatTime(task.createdAt)}</span>) : null}
               {task.startedAt !== undefined && task.startedAt > 0
                 ? kvRow(t(TASK_KV_STARTED), <span className="tabular-nums">{formatTime(task.startedAt)}</span>)
@@ -975,10 +707,10 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                       type="button"
                       className="btn btn-ghost btn-xs mono"
                       title={taskConversationJumpTitle(task.conversationId, locale)}
-                      onClick={() => ctx.openConversationDrawer(live.jumpConversationId ?? task.conversationId ?? 0)}
+                      onClick={() => ctx.openConversationDrawer(task.conversationId ?? 0)}
                     >
                       <HelmxIcon name="message-square" size={11} />
-                      <span>#{live.jumpConversationId ?? task.conversationId}</span>
+                      <span>#{task.conversationId}</span>
                     </button>,
                   )
                 : null}
@@ -1063,74 +795,12 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                           onChange={(e) => setEditCwd(e.target.value)}
                         />
                       ))}
-                      <div className="task-form-field">
-                        <span className="task-form-label">{t(TASK_FIELD_DEPENDS_ON)}</span>
-                        {dependencyOptions.length > 0 ? (
-                          <MultiSelect
-                            value={editDependsOn}
-                            options={dependencyOptions}
-                            onValuesChange={(values) => setEditDependsOn(values)}
-                            aria-label={t(TASK_FIELD_DEPENDS_ON)}
-                            size="sm"
-                            searchable
-                          />
-                        ) : (
-                          <div className="task-form-hint">{t(TASK_DEPS_CANDIDATES_EMPTY)}</div>
-                        )}
-                      </div>
-                      <div className="task-form-switches">
-                        <div className="task-form-switch-row">
-                          <Switch checked={editPlanFirst} onChange={setEditPlanFirst} aria-label={t(TASK_FIELD_PLAN_FIRST)} />
-                          <span className="task-form-switch-text">
-                            <span className="task-form-switch-label">{t(TASK_FIELD_PLAN_FIRST)}</span>
-                            <span className="task-form-switch-desc">{t(TASK_FIELD_PLAN_FIRST_DESC)}</span>
-                          </span>
-                        </div>
-                        <div className="task-form-switch-row">
-                          <Switch checked={editAutoMerge} onChange={setEditAutoMerge} aria-label={t(TASK_FIELD_AUTO_MERGE)} />
-                          <span className="task-form-switch-text">
-                            <span className="task-form-switch-label">{t(TASK_FIELD_AUTO_MERGE)}</span>
-                            <span className="task-form-switch-desc">{t(TASK_FIELD_AUTO_MERGE_DESC)}</span>
-                          </span>
-                        </div>
-                      </div>
                     </div>
                   ) : null}
                 </div>
               ) : (
                 <div className="task-detail-brief">
                   <MarkdownView text={task.brief} />
-                </div>
-              )}
-            </div>
-
-            <div className="task-detail-section">
-              <h4 className="task-detail-section-title">
-                <HelmxIcon name="list-tree" size={13} />
-                <span>{t(TASK_DEPS_SECTION)}</span>
-              </h4>
-              {depRows.length === 0 ? (
-                <span className="text-subtle">{t(TASK_DEPS_NONE)}</span>
-              ) : (
-                <div className="task-detail-deps">
-                  {depRows.map((row) => (
-                    <div key={row.depId} className="task-detail-dep-row">
-                      <span className="mono">{row.depId}</span>
-                      {row.state === 'unknown' ? (
-                        <span className="badge badge-warn" title={t(TASK_DEPS_UNKNOWN_TITLE)}>
-                          {t(TASK_DEPS_UNKNOWN)}
-                        </span>
-                      ) : row.state === 'done-off-board' ? (
-                        <span className="badge badge-ok" title={t(TASK_DEP_OFF_BOARD_TITLE)}>
-                          {t(TASK_DEP_DONE)} · {t(TASK_DEP_OFF_BOARD)}
-                        </span>
-                      ) : row.state === 'done' ? (
-                        <span className="badge badge-ok">{t(TASK_DEP_DONE)}</span>
-                      ) : (
-                        <span className="badge badge-warn">{t(TASK_DEP_PENDING)}</span>
-                      )}
-                    </div>
-                  ))}
                 </div>
               )}
             </div>
@@ -1220,18 +890,6 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                 <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={props.onClose}>
                   <span>{t(TASK_ACTION_CLOSE)}</span>
                 </button>
-                {task.kickoffUndelivered === true ? (
-                  <button
-                    type="button"
-                    className="btn btn-sm btn-primary"
-                    disabled={busy || props.busy}
-                    title={t(TASK_ACTION_RESUME_KICKOFF_TITLE)}
-                    onClick={() => props.onResumeKickoff(task.id)}
-                  >
-                    <HelmxIcon name="play" size={12} />
-                    <span>{t(TASK_ACTION_CONTINUE)}</span>
-                  </button>
-                ) : null}
                 {editing ? (
                   <>
                     <button type="button" className="btn btn-sm btn-ghost" disabled={busy} onClick={() => setEditing(false)}>
@@ -1268,24 +926,12 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                           <HelmxIcon name="rotate-ccw" size={12} />
                           <span>{t(TASK_ACTION_REWORK)}</span>
                         </button>
-                        {hasMergeMaterial ? (
-                          <button
-                            type="button"
-                            className="btn btn-sm"
-                            disabled={busy}
-                            title={t(TASK_ACTION_MERGE_CLOSE_TITLE)}
-                            onClick={() => props.onMerge(task.id)}
-                          >
-                            <HelmxIcon name="git-pull-request" size={12} />
-                            <span>{t(TASK_ACTION_MERGE_CLOSE)}</span>
-                          </button>
-                        ) : null}
                         <button
                           type="button"
                           className="btn btn-sm btn-primary"
                           disabled={busy}
                           title={t(TASK_ACTION_APPROVE_TITLE)}
-                          onClick={() => runAction(() => ctx.callAction('approve', { taskId: task.id, mergeAction: 'close_only' }))}
+                          onClick={() => runAction(() => ctx.callAction('approve', { taskId: task.id }))}
                         >
                           <HelmxIcon name="check" size={12} />
                           <span>{t(TASK_ACTION_APPROVE)}</span>
