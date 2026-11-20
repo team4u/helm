@@ -567,7 +567,8 @@ test('search,models,plugins,actions list,status', { timeout: 60_000 }, async (t)
 
   const st = await runCliCaptured(['status', '--json'], env)
   assert.equal(st.code, 0, st.err)
-  assert.deepEqual(JSON.parse(st.out), { configured: true, authenticated: false })
+  assert.equal(JSON.parse(st.out).configured, true)
+  assert.equal(JSON.parse(st.out).authenticated, false)
 
   // Human-readable table output (non-JSON)
   const human = await runCliCaptured(['models', 'list'], env)
@@ -1130,7 +1131,8 @@ test('status works without a token and attaches token when present to report rea
 
   const noToken = await runCliCaptured(['status', '--json'], noTokenEnv)
   assert.equal(noToken.code, 0, noToken.err)
-  assert.deepEqual(JSON.parse(noToken.out), { configured: true, authenticated: false })
+  assert.equal(JSON.parse(noToken.out).configured, true)
+  assert.equal(JSON.parse(noToken.out).authenticated, false)
   assert.equal(hub.recorded.hits.at(-1)?.authorization, undefined)
 
   // With stored token in cli-token: status attaches Authorization and reports authenticated: true
@@ -1207,7 +1209,8 @@ test('cross-Hub isolation: ignores stored token when HELMX_HUB_URL points to a d
   const newEnvNoToken = makeCliEnv(newHub.url, dir, { HELMX_TOKEN: undefined })
   const probe = await runCliCaptured(['status', '--json'], newEnvNoToken)
   assert.equal(probe.code, 0, probe.err)
-  assert.deepEqual(JSON.parse(probe.out), { configured: true, authenticated: false }, 'new Hub must not receive old Hub token')
+  assert.equal(JSON.parse(probe.out).configured, true, 'new Hub must not receive old Hub token')
+  assert.equal(JSON.parse(probe.out).authenticated, false, 'new Hub must not receive old Hub token')
   const leakHit = newHub.recorded.hits.find((h) => h.path === '/api/auth/status')!
   assert.equal(leakHit.authorization, undefined, 'must not leak old Hub token to new Hub')
 
@@ -1340,7 +1343,8 @@ test('origin binding: cli-token only authenticates the matching Hub and omits to
   )
   const probe = await runCliCaptured(['status', '--json'], makeCliEnv(otherHub.url, dir, { HELMX_TOKEN: '' }))
   assert.equal(probe.code, 0, probe.err)
-  assert.deepEqual(JSON.parse(probe.out), { configured: true, authenticated: false }, 'new Hub must not receive old Hub token')
+  assert.equal(JSON.parse(probe.out).configured, true, 'new Hub must not receive old Hub token')
+  assert.equal(JSON.parse(probe.out).authenticated, false, 'new Hub must not receive old Hub token')
 })
 
 test('corrupt cli-token errors explicitly; HELMX_TOKEN env var bypasses disk reads', { timeout: 60_000 }, async (t) => {
@@ -1821,12 +1825,9 @@ test('helmx update --check queries the selected channel without loading Hub cred
     blocked: null,
   })
   await assert.rejects(fsp.stat(installRoot), { code: 'ENOENT' })
-  const status = await runCliCaptured(['update', '--status', '--json'], env)
-  assert.equal(status.code, 0, status.err)
-  assert.equal(JSON.parse(status.out).current, null)
 })
 
-test('helmx update help and mode validation work offline', { timeout: 60_000 }, async (t) => {
+test('helmx update/start help and flag validation work offline', { timeout: 60_000 }, async (t) => {
   const dir = useTempDir(t, 'helmx-cli-update-flags-')
   const env = makeCliEnv('http://127.0.0.1:1', dir, { HELMX_HUB_INSTALL_ROOT: path.join(dir, 'install') })
   let requests = 0
@@ -1838,19 +1839,27 @@ test('helmx update help and mode validation work offline', { timeout: 60_000 }, 
   }
   const help = await runCliCaptured(['update', '--help'], env, options)
   assert.equal(help.code, 0, help.err)
-  assert.match(help.out, /--watch.*15 minutes/)
+  assert.doesNotMatch(help.out, /--watch/, 'the supervised watch mode is gone; lifecycle verbs replace it')
   for (const [argv, code] of [
-    [['--check', '--watch'], 'conflicting_flags'],
     [['--channel', 'beta', '--version', '1.2.0'], 'conflicting_flags'],
     [['--check', '--force'], 'invalid_option_for_command'],
-    [['--watch', '--interval-ms', '2147483648'], 'invalid_flag_value'],
+    [['--watch'], 'unknown_flag'],
+    [['--interval-ms', '900000'], 'unknown_flag'],
     [['--tarball', 'payload.tgz'], 'tarball_requires_version'],
     [['--version', 'v1.2.0'], 'invalid_version'],
-    [['--watch'], 'json_not_supported_for_watch'],
   ] as const) {
     const result = await runCliCaptured(['update', ...argv, '--json'], env, options)
     assert.equal(result.code, 1, argv.join(' '))
     assert.equal(JSON.parse(result.err).error.code, code)
   }
+  // start verbs are registered and validated offline too (unknown flags rejected, -d alias parsed).
+  const startHelp = await runCliCaptured(['start', '--help'], env, options)
+  assert.equal(startHelp.code, 0, startHelp.err)
+  assert.match(startHelp.out, /--detached/)
+  const stopHelp = await runCliCaptured(['stop', '--help'], env, options)
+  assert.equal(stopHelp.code, 0, stopHelp.err)
+  const badFlag = await runCliCaptured(['start', '--detached', '--bogus', '--json'], env, options)
+  assert.equal(badFlag.code, 1)
+  assert.equal(JSON.parse(badFlag.err).error.code, 'unknown_flag')
   assert.equal(requests, 0)
 })

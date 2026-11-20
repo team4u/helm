@@ -13,6 +13,7 @@
  * supplies a handler.
  */
 import { createHash } from 'node:crypto';
+import path from 'node:path';
 import fsp from 'node:fs/promises';
 import net from 'node:net';
 import process from 'node:process';
@@ -37,6 +38,59 @@ export function controlEndpoint(dataDir: string, instanceId: string, product: st
   const hash = createHash('sha256').update(`${dataDir}\0${instanceId}`).digest('hex').slice(0, 16);
   const safeProduct = product.replace(/[^A-Za-z0-9-]/g, '-');
   return process.platform === 'win32' ? `\\\\.\\pipe\\${safeProduct}-${hash}` : `/tmp/${safeProduct}-${hash}.sock`;
+}
+
+/** Endpoint prefix namespacing Hub control sockets (distinct from `helmx-node`). */
+export const HUB_CONTROL_PRODUCT = 'helmx-hub';
+
+/** Discovery record a running Hub writes into its data directory (`0600`, removed on shutdown). */
+export interface HubControlRecord {
+  instanceId: string;
+  endpoint: string;
+  pid: number;
+  version: string;
+  port: number;
+  startedAt: string;
+}
+
+function validateHubControlRecord(raw: unknown): HubControlRecord {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new Error('expected JSON object');
+  const rec = raw as Record<string, unknown>;
+  const str = (key: string): string => {
+    const value = rec[key];
+    if (typeof value !== 'string' || value === '') throw new Error(`expected field "${key}" to be a non-empty string`);
+    return value;
+  };
+  const port = rec['port'];
+  if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error('expected field "port" to be an integer between 1 and 65535');
+  }
+  const pid = rec['pid'];
+  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) throw new Error('expected field "pid" to be a positive integer');
+  return { instanceId: str('instanceId'), endpoint: str('endpoint'), pid, version: str('version'), port, startedAt: str('startedAt') };
+}
+
+/** Record path inside the Hub data directory (`<dataDir>/hub-control.json`). */
+export function hubControlRecordPath(dataDir: string): string {
+  return path.join(dataDir, 'hub-control.json');
+}
+
+/** Strict reader for CLI / handoff consumers; `null` only on ENOENT, corrupt records throw. */
+export async function readHubControlRecord(dataDir: string): Promise<HubControlRecord | null> {
+  let raw: string;
+  try {
+    raw = await fsp.readFile(hubControlRecordPath(dataDir), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`hub control record is corrupt (${hubControlRecordPath(dataDir)}); remove it and retry`);
+  }
+  return validateHubControlRecord(parsed);
 }
 
 /** Control-channel response payload (`state` is product-owned and opaque here). */

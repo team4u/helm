@@ -1,17 +1,22 @@
 /**
- * Command implementations: check / update / watch / stop / status. Each command
- * prints either human-readable text or a JSON object (`--json`) and returns a process exit code.
- * Errors carry a stable `code` (UsageError) surfaced in the JSON error envelope by the CLI layer.
+ * Command implementations: check / update / start / stop / restart. Each command prints either
+ * human-readable text or a JSON object (`--json`) and returns a process exit code. Errors carry
+ * a stable `code` (UsageError) surfaced in the JSON error envelope by the CLI layer.
+ *
+ * Verb split (matches `helmx-node`): `start`/`stop`/`restart` own the local Hub lifecycle;
+ * `update` is the explicit, proactive update command (`claude update` semantics). There is no
+ * supervised watch mode — background update readiness is surfaced by the Hub itself
+ * (`/api/hub-update`) and applied by `helmx update` or the Web UI.
  */
 import { readCurrentRelease, readBlockedRelease } from '@helmx/env-io';
-import { assertDistTag, pathsOf, resolvePayloadPackageName, resolveRegistryUrl, resolveUpdateIntervalMs, resolveUpdateTag } from './layout.js';
-import { readLaunchConfig, resolveEffectiveLaunchConfig } from './records.js';
-import { readRunningHub, stopHub } from './process.js';
+import { assertDistTag, pathsOf, resolvePayloadPackageName, resolveRegistryUrl } from './layout.js';
+import { readLaunchConfig, readPidRecord, resolveEffectiveLaunchConfig } from './records.js';
+import { readRunningHub, startHub, stopHubGraceful, withLifecycleLock } from './process.js';
 import { checkHubUpgrade, performHubUpdate } from './update.js';
-import { runSupervised } from './run.js';
+import { runHubForeground } from './run.js';
 import { describeActivityCounts } from './activity.js';
 import type { UpdateCore } from './update-core.js';
-import { UsageError, type LauncherIo } from './io.js';
+import { UsageError, isAliveOf, type LauncherIo } from './io.js';
 
 export interface CommandContext {
   io: LauncherIo;
@@ -25,10 +30,10 @@ export interface CommandFlags {
   version?: string;
   registry?: string;
   tag?: string;
-  intervalMs?: number;
   tarball?: string;
   force?: boolean;
   json?: boolean;
+  detached?: boolean;
   port?: number;
   host?: string;
   dataDir?: string;
@@ -138,29 +143,84 @@ export async function cmdUpdate(ctx: CommandContext, flags: CommandFlags): Promi
   const lines = [`updated: ${outcome.previousVersion ?? '(none)'} -> ${outcome.targetVersion}`];
   if (outcome.restarted) lines.push(`hub restarted (pid ${outcome.pid}, ${outcome.url})`);
   else if (outcome.started) lines.push(`hub started (pid ${outcome.pid}, ${outcome.url})`);
-  else lines.push('hub is not running; use helmx update --watch');
   ctx.io.out(`${lines.join('\n')}\n`);
   return 0;
 }
 
 // ---------------------------------------------------------------------------
-// run
+// start / stop / restart
 // ---------------------------------------------------------------------------
 
-export async function cmdRun(ctx: CommandContext, flags: CommandFlags): Promise<number> {
-  if (flags.json === true) {
+interface StartedInfo {
+  pid: number;
+  version: string;
+  url: string;
+  logPath: string;
+}
+
+/** Refuse when a hub this command did not start is already running (never adopt foreign processes). */
+async function assertNoExistingHub(ctx: CommandContext): Promise<void> {
+  const record = await readPidRecord(ctx.root);
+  if (record !== null && isAliveOf(ctx.io)(record.pid)) {
     throw new UsageError(
-      'run streams human-readable progress lines and is meant for a service manager or an interactive terminal. --json is not supported with --watch',
-      'json_not_supported_for_watch',
+      `a hub is already running (pid ${record.pid}, version ${record.version}); use helmx restart to take it over, helmx stop to stop it, or keep managing it manually`,
+      'start_refuses_existing_hub',
     );
   }
-  return await runSupervised({
+}
+
+/** Install-if-needed then start detached; shared by `start -d` and `restart`. */
+async function ensureHubStartedDetached(ctx: CommandContext, flags: CommandFlags): Promise<StartedInfo> {
+  await assertNoExistingHub(ctx);
+  const current = await readCurrentRelease(ctx.root);
+  if (current === null) {
+    const outcome = await performHubUpdate({
+      io: ctx.io,
+      root: ctx.root,
+      pkgName: payloadPackageNameOf(ctx),
+      registryUrl: registryUrlOf(ctx, flags),
+      ...(tagOf(flags, ctx.io.env) !== undefined ? { tag: tagOf(flags, ctx.io.env)! } : {}),
+      startIfNotRunning: true,
+      launchFlags: launchFlagsOf(flags),
+      ...(flags.healthTimeoutMs !== undefined ? { healthTimeoutMs: flags.healthTimeoutMs } : {}),
+      ...(ctx.fetchFn !== undefined ? { fetchFn: ctx.fetchFn } : {}),
+      ...(ctx.core !== undefined ? { core: ctx.core } : {}),
+    });
+    if (outcome.pid === undefined || outcome.url === null) {
+      throw new UsageError('install finished without a running hub (internal error)', 'bootstrap_start_failed');
+    }
+    return { pid: outcome.pid, version: outcome.targetVersion, url: outcome.url as string, logPath: pathsOf(ctx.root).hubLogPath };
+  }
+  const started = await startHub(ctx.root, ctx.io, {
+    flags: launchFlagsOf(flags),
+    ...(flags.healthTimeoutMs !== undefined ? { healthTimeoutMs: flags.healthTimeoutMs } : {}),
+    ...(ctx.fetchFn !== undefined ? { fetchFn: ctx.fetchFn } : {}),
+  });
+  return { pid: started.pid, version: started.version, url: started.url, logPath: started.logPath };
+}
+
+export async function cmdStart(ctx: CommandContext, flags: CommandFlags): Promise<number> {
+  if (flags.detached === true) {
+    const started = await ensureHubStartedDetached(ctx, flags);
+    if (flagsAsJson(flags)) {
+      ctx.io.out(`${JSON.stringify({ ok: true, detached: true, pid: started.pid, version: started.version, url: started.url, log: started.logPath }, null, 2)}\n`);
+      return 0;
+    }
+    ctx.io.out(`hub started (pid ${started.pid}, ${started.url})\nlog: ${started.logPath}\n`);
+    return 0;
+  }
+  if (flagsAsJson(flags)) {
+    throw new UsageError(
+      'foreground start streams hub log lines and is meant for an interactive terminal or a service manager; --json is only supported with --detached',
+      'json_not_supported_for_foreground_start',
+    );
+  }
+  return await runHubForeground({
     io: ctx.io,
     root: ctx.root,
     pkgName: payloadPackageNameOf(ctx),
     registryUrl: registryUrlOf(ctx, flags),
-    tag: tagOf(flags, ctx.io.env) ?? resolveUpdateTag(ctx.io.env),
-    intervalMs: flags.intervalMs ?? resolveUpdateIntervalMs(ctx.io.env),
+    ...(tagOf(flags, ctx.io.env) !== undefined ? { tag: tagOf(flags, ctx.io.env)! } : {}),
     launchFlags: launchFlagsOf(flags),
     ...(flags.healthTimeoutMs !== undefined ? { healthTimeoutMs: flags.healthTimeoutMs } : {}),
     ...(ctx.fetchFn !== undefined ? { fetchFn: ctx.fetchFn } : {}),
@@ -168,12 +228,8 @@ export async function cmdRun(ctx: CommandContext, flags: CommandFlags): Promise<
   });
 }
 
-// ---------------------------------------------------------------------------
-// stop
-// ---------------------------------------------------------------------------
-
 export async function cmdStop(ctx: CommandContext, flags: CommandFlags): Promise<number> {
-  const result = await stopHub(ctx.root, ctx.io);
+  const result = await stopHubGraceful(ctx.root, ctx.io);
   if (flagsAsJson(flags)) {
     ctx.io.out(`${JSON.stringify({ ok: true, ...result }, null, 2)}\n`);
     return 0;
@@ -182,24 +238,53 @@ export async function cmdStop(ctx: CommandContext, flags: CommandFlags): Promise
     ctx.io.out(result.cleanedStalePid ? 'hub was not running (stale pid record removed)\n' : 'hub is not running\n');
     return 0;
   }
-  ctx.io.out(
-    `hub pid ${result.pid} stopped${result.escalated ? ' (escalated after graceful timeout)' : ''}\n`,
-  );
+  const via = result.via === 'control-channel' ? ' via control channel' : '';
+  ctx.io.out(`hub pid ${result.pid} stopped${via}${result.escalated ? ' (escalated after graceful timeout)' : ''}\n`);
+  return 0;
+}
+
+export async function cmdRestart(ctx: CommandContext, flags: CommandFlags): Promise<number> {
+  const stopped = await stopHubGraceful(ctx.root, ctx.io);
+  const started = await ensureHubStartedDetached(ctx, flags);
+  if (flagsAsJson(flags)) {
+    ctx.io.out(
+      `${JSON.stringify({ ok: true, wasRunning: stopped.wasRunning, pid: started.pid, version: started.version, url: started.url, log: started.logPath }, null, 2)}\n`,
+    );
+    return 0;
+  }
+  const lines = [
+    stopped.wasRunning ? `hub pid ${stopped.pid} stopped` : 'hub was not running',
+    `hub started (pid ${started.pid}, ${started.url})`,
+  ];
+  ctx.io.out(`${lines.join('\n')}\n`);
   return 0;
 }
 
 // ---------------------------------------------------------------------------
-// status
+// local snapshot (merged into `helmx status`)
 // ---------------------------------------------------------------------------
 
-export async function cmdStatus(ctx: CommandContext, flags: CommandFlags): Promise<number> {
+export interface LocalHubSnapshot {
+  installRoot: string;
+  current: { version: string; updatedAt: string } | null;
+  running:
+    | { pid: number; version: string; port: number; alive: boolean; healthy: boolean; startedAt: string }
+    | null;
+  blocked: { version: string; reason: string; at: string } | null;
+  launch: { port: number; host?: string; dataDir?: string };
+  pidFile: string;
+  logFile: string;
+}
+
+/** Read-only local-Hub snapshot for `helmx status` (no side effects, honest about liveness). */
+export async function readLocalHubSnapshot(ctx: CommandContext): Promise<LocalHubSnapshot> {
   const paths = pathsOf(ctx.root);
   const current = await readCurrentRelease(ctx.root);
   const running = await readRunningHub(ctx.root, ctx.io, ctx.fetchFn);
   const saved = await readLaunchConfig(ctx.root);
   const effective = resolveEffectiveLaunchConfig({ env: ctx.io.env, saved });
   const blocked = await readBlockedRelease(ctx.root);
-  const payload = {
+  return {
     installRoot: ctx.root,
     current:
       current === null
@@ -207,7 +292,6 @@ export async function cmdStatus(ctx: CommandContext, flags: CommandFlags): Promi
         : {
             version: current.version,
             updatedAt: current.updatedAt,
-            entryPath: current.entries['entryPath'] ?? null,
           },
     running:
       running === null
@@ -223,32 +307,10 @@ export async function cmdStatus(ctx: CommandContext, flags: CommandFlags): Promi
     blocked,
     launch: {
       port: effective.port,
-      host: effective.host,
+      ...(effective.host !== undefined ? { host: effective.host } : {}),
       ...(effective.dataDir !== undefined ? { dataDir: effective.dataDir } : {}),
     },
     pidFile: paths.pidPath,
     logFile: paths.hubLogPath,
   };
-  if (flagsAsJson(flags)) {
-    ctx.io.out(`${JSON.stringify(payload, null, 2)}\n`);
-    return 0;
-  }
-  const lines = [
-    `install root: ${ctx.root}`,
-    `current:      ${current === null ? '(not installed)' : `${current.version} (${current.updatedAt})`}`,
-    `running:      ${
-      running === null
-        ? 'no'
-        : `pid ${running.record.pid} (version ${running.record.version}, ${running.alive ? 'alive' : 'DEAD'}, ${
-            running.health !== null ? 'healthy' : 'health unreachable'
-          })`
-    }`,
-    `listen:       ${effective.host}:${effective.port}`,
-  ];
-  if (payload.blocked !== null) {
-    lines.push(`blocked:      ${payload.blocked.version} since ${payload.blocked.at} (${payload.blocked.reason})`);
-  }
-  lines.push(`log:          ${paths.hubLogPath}`);
-  ctx.io.out(`${lines.join('\n')}\n`);
-  return running !== null && (!running.alive || running.health === null) ? 1 : 0;
 }

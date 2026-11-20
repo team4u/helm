@@ -5,9 +5,8 @@
  * This is what makes `helmx stop` / `restart` / browser-triggered restarts work identically on
  * Linux, macOS, and Windows: instead of guessing at PIDs, the CLI (or the update handoff
  * helper) reads `<dataDir>/hub-control.json` and speaks to the live process, which proves its
- * identity (`instanceId`) before any shutdown path runs. The record is written `0600` and
- * removed on every shutdown path; a stale record is simply unreachable (connect fails) and
- * callers fall back to honest pid-record identity checks.
+ * identity (`instanceId`) before any shutdown path runs. The record contract (schema + reader)
+ * lives in `@helmx/env-io` so the CLI and the Hub never drift apart.
  *
  * Deadlock note: the channel's own `stop` handling (`runStopAndClose` in env-io) closes the
  * server socket itself after `onStop` resolves, so the shutdown callback passed in here must
@@ -18,23 +17,12 @@ import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { atomicWriteJson } from '@helmx/env-io';
-import { controlEndpoint, createControlServer, type ControlServer } from '@helmx/env-io';
+import { atomicWriteJson, controlEndpoint, createControlServer, hubControlRecordPath, HUB_CONTROL_PRODUCT, type ControlServer, type HubControlRecord } from '@helmx/env-io';
 
-/** Endpoint prefix namespacing Hub control sockets (distinct from `helmx-node`). */
-export const HUB_CONTROL_PRODUCT = 'helmx-hub';
+export { hubControlRecordPath, readHubControlRecord, HUB_CONTROL_PRODUCT, type HubControlRecord } from '@helmx/env-io';
 
 /** Serving state reported over the control channel (`stopping` is appended by the transport). */
 export type HubControlState = 'serving';
-
-export interface HubControlRecord {
-  instanceId: string;
-  endpoint: string;
-  pid: number;
-  version: string;
-  port: number;
-  startedAt: string;
-}
 
 export interface HubControlHandle {
   endpoint: string;
@@ -42,47 +30,6 @@ export interface HubControlHandle {
   server: ControlServer;
   /** Signal-path shutdown: closes the listener and removes the record. Never call from `requestStop`. */
   close(): Promise<void>;
-}
-
-function validateRecord(raw: unknown): HubControlRecord {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) throw new Error('expected JSON object');
-  const rec = raw as Record<string, unknown>;
-  const str = (key: string): string => {
-    const value = rec[key];
-    if (typeof value !== 'string' || value === '') throw new Error(`expected field "${key}" to be a non-empty string`);
-    return value;
-  };
-  const port = rec['port'];
-  if (typeof port !== 'number' || !Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error('expected field "port" to be an integer between 1 and 65535');
-  }
-  const pid = rec['pid'];
-  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0) throw new Error('expected field "pid" to be a positive integer');
-  return { instanceId: str('instanceId'), endpoint: str('endpoint'), pid, version: str('version'), port, startedAt: str('startedAt') };
-}
-
-/** Record path inside the Hub data directory (`<dataDir>/hub-control.json`). */
-export function hubControlRecordPath(dataDir: string): string {
-  return path.join(dataDir, 'hub-control.json');
-}
-
-/** Strict reader for CLI / handoff consumers; `null` only on ENOENT. */
-export async function readHubControlRecord(dataDir: string): Promise<HubControlRecord | null> {
-  const fsp = await import('node:fs/promises');
-  let raw: string;
-  try {
-    raw = await fsp.readFile(hubControlRecordPath(dataDir), 'utf8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-    throw error;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error(`hub control record is corrupt (${hubControlRecordPath(dataDir)}); remove it and retry`);
-  }
-  return validateRecord(parsed);
 }
 
 /** The Hub's own package version (payload builds keep this in lockstep with `current.json`). */

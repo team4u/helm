@@ -26,7 +26,7 @@ managedByPlugin: {{MANAGED_BY}}
 - `helmx login --password <pwd>`: log in and save credentials to cli-token.
 
 ### Local Hub maintenance
-- `helmx update --check [--channel <tag>] --json` checks the local Hub release. `helmx update` applies it, `--watch` runs the supervised Hub and checks periodically, and `--status` reports the local installation. Use `helmx update --stop` to stop a detached Hub where process identity can be verified. Run lifecycle commands from a local terminal or service manager outside any Helmx turn. `--watch` streams human-readable progress.
+- `helmx start [-d] [--channel <tag>] [--port <n>] ...` starts the local Hub: installs the payload first when nothing is committed, then runs it in the foreground (Ctrl+C stops it via the verified control channel); `-d` runs detached in the background writing `hub.pid`. `helmx stop` stops gracefully (control channel first, pid identity proof fallback), `helmx restart` stops then starts detached. `helmx update --check [--channel <tag>] --json` checks the local Hub release and `helmx update` applies it (installs when nothing is committed). Run lifecycle commands from a local terminal or service manager outside any Helmx turn; foreground `helmx start` streams human-readable progress.
 
 ### Conversations
 - `helmx conversations list [--profile <id>] [--status <s>] [--tag <t>]`: top-level conversations only by default (noise reduction); `--all` includes all derived sub-conversations such as subagents; `--parent <id>` lists exactly one conversation's direct children (mutually exclusive with --all).
