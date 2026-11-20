@@ -103,6 +103,14 @@ export interface SidebarSectionSpec extends UiSpecBase {
   collapsible?: boolean
   defaultCollapsed?: boolean
   order?: number
+  /**
+   * Tag swapped onto conversations when they no longer match `filterTag`
+   * (closed/finished group members): keep the plugin's conversation home stable
+   * without dropping the tag silently. The host simply renders the group
+   * counting `keptAliveTag` members as still inside; the plugin side is
+   * responsible for guaranteeing that the swap happens at lifecycle moments.
+   */
+  keptAliveTag?: string
 }
 
 // 2. screen (full-screen custom view, supports left/right split view side by side)

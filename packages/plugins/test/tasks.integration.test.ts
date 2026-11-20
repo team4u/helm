@@ -195,10 +195,24 @@ test('tasks-int1: default-enabled boot, zero residents, workflow-disable freedom
     assert.deepEqual(surfaces, [
       'screen:board',
       'sidebar.item:task-board',
-      'sidebar.section:task-archived-conversations',
       'sidebar.section:task-conversations',
       'tool.view:task-tool-card',
     ])
+
+    // 单一分组收口：任务执行会话声明的 keptAliveTag 让结单/归档成员换
+    // task-archived 标签后仍留在「任务执行」分组（Web 侧按双标签渲染），
+    // 不再存在第二个「已完成任务」归档抽屉与宿主「已归档」争语义。
+    const taskSection = kernel.plugins
+      .listUi()
+      .find(
+        (u) =>
+          u.pluginId === TASKS_PLUGIN_ID &&
+          u.surface === 'sidebar.section' &&
+          (u.spec as { id?: string }).id === 'task-conversations',
+      )
+    assert.ok(taskSection, 'sidebar.section:task-conversations must exist')
+    assert.equal((taskSection!.spec as { filterTag?: string }).filterTag, 'task')
+    assert.equal((taskSection!.spec as { keptAliveTag?: string }).keptAliveTag, 'task-archived')
 
     // End-to-end badge wiring: the live plugin's sidebar.item contribution carries
     // the declared badge verbatim — protocol SidebarItemBadgeSpec + kernel boundary

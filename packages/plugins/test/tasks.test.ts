@@ -573,3 +573,33 @@ test('tasks-unit10: subtreeAttentionFlags collects error and blocked/ask facts i
     summaryField: 'badgeSummary',
   })
 })
+
+// ---------------------------------------------------------------------------
+// 看板归档语义（归档即收离看板；已归档卡仅历史开关打开时可见、沉底淡化）
+// ---------------------------------------------------------------------------
+
+test('tasks-unit: screen params 解析 archived 开关（深链单一事实源）', { timeout: 60_000 }, async () => {
+  const { parseTaskScreenParams } = await import('../src/tasks/client/models.js')
+  assert.equal(parseTaskScreenParams({}).showArchived, false)
+  assert.equal(parseTaskScreenParams({ archived: '1' }).showArchived, true)
+  assert.equal(parseTaskScreenParams({ archived: '0' }).showArchived, false)
+  // 既有参数不受影响
+  const parsed = parseTaskScreenParams({ q: 'fix', tab: 'done', task: 'T-9', archived: '1' })
+  assert.equal(parsed.filter.query, 'fix')
+  assert.equal(parsed.tab, 'done')
+  assert.equal(parsed.taskId, 'T-9')
+})
+
+test('tasks-unit: compareTaskItems 已归档卡沉底（活跃卡永远在前）', { timeout: 60_000 }, async () => {
+  const { bucketByColumn, deriveBoardItems } = await import('../src/tasks/client/models.js')
+  const base = { reworkCount: 0, dependsOn: [], createdAt: 0, updatedAt: 0 } as const
+  const tasks = [
+    { ...base, id: 'T-1', title: '旧归档', column: 'done', archived: true, createdAt: 5000 },
+    { ...base, id: 'T-2', title: '新结单', column: 'done', createdAt: 100 },
+    { ...base, id: 'T-3', title: '更新归档', column: 'done', archived: true, createdAt: 200 },
+  ] as never as Parameters<typeof deriveBoardItems>[0]
+  const items = deriveBoardItems(tasks, [])
+  const done = bucketByColumn(items).done
+  // 未归档在前；两张归档卡之间按创建时间倒序
+  assert.deepEqual(done.map((i) => i.task.id), ['T-2', 'T-1', 'T-3'])
+})

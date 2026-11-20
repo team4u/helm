@@ -79,6 +79,12 @@ import {
   TASK_ACTION_START_TITLE,
   TASK_ARCHIVE_ALL,
   TASK_ARCHIVE_ALL_TITLE,
+  TASK_ARCHIVE_HISTORY_SHOW,
+  TASK_ARCHIVE_HISTORY_HIDE,
+  TASK_ARCHIVE_HISTORY_TITLE,
+  TASK_ARCHIVE_HISTORY_HIDDEN_HINT,
+  TASK_ARCHIVED_BADGE,
+  TASK_ARCHIVED_EMPTY,
   TASK_ARCHIVING,
   TASK_BOARD_INVALID,
   TASK_BOARD_INVALID_HINT,
@@ -192,6 +198,11 @@ function TaskCard(props: {
   const showStart = task.column === 'backlog' && live.isReadyToStart
 
   const statePills: ReactNode[] = []
+  if (task.archived === true) {
+    statePills.push(
+      <span key="archived" className="badge badge-neutral">{t(TASK_ARCHIVED_BADGE)}</span>,
+    )
+  }
   if (task.column === 'backlog' && task.planFirst === true) {
     statePills.push(
       <span key="plan-first" className="badge badge-neutral">{t(TASK_FLAG_PLAN_FIRST)}</span>,
@@ -341,6 +352,7 @@ function TaskCard(props: {
       className={`task-card${live.needsAttention ? ' is-attention' : ''}${isSevere ? ' is-severe' : ''}${hasConversation ? '' : ' is-clickless'}`}
       data-task-id={task.id}
       data-column={task.column}
+      data-archived={task.archived === true ? 'true' : undefined}
       role="button"
       tabIndex={0}
       aria-label={`${task.id} ${task.title}`}
@@ -595,8 +607,22 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
   )
   const options = useMemo(() => collectFilterOptions(items), [items])
   const filtered = useMemo(() => filterTaskItems(items, filter, locale), [items, filter, locale])
-  const columns = useMemo(() => bucketByColumn(filtered), [filtered])
-  const mobileBuckets = useMemo(() => bucketMobile(filtered), [filtered])
+  // 归档即收离看板：默认只渲染未归档卡；已归档卡仅在「已归档」开关打开时附带展示（淡化沉底）。
+  const archivedItems = useMemo(() => filtered.filter((item) => item.task.archived === true), [filtered])
+  const activeItems = useMemo(() => filtered.filter((item) => item.task.archived !== true), [filtered])
+  const showArchivedHistory = params.showArchived && archivedItems.length > 0
+  const columns = useMemo(
+    () => bucketByColumn(showArchivedHistory ? filtered : activeItems),
+    [filtered, activeItems, showArchivedHistory],
+  )
+  const mobileBuckets = useMemo(
+    () => bucketMobile(showArchivedHistory ? filtered : activeItems),
+    [filtered, activeItems, showArchivedHistory],
+  )
+  const unarchivedDoneCount = useMemo(
+    () => activeItems.filter((item) => item.task.column === 'done').length,
+    [activeItems],
+  )
 
   const selectedTaskId = params.taskId
   const selectedItem = selectedTaskId !== undefined ? items.find((i) => i.task.id === selectedTaskId) : undefined
@@ -636,10 +662,10 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
       })
   }
 
-  /** Sequential batch archive of every visible done card; stops and surfaces the first failure honestly. */
+  /** Sequential batch archive of every visible unarchived done card; stops and surfaces the first failure honestly. */
   const archiveAllDone = (): void => {
     if (archivingDone || busyTaskId !== undefined) return
-    const ids = columns.done.map((item) => item.task.id)
+    const ids = columns.done.filter((item) => item.task.archived !== true).map((item) => item.task.id)
     if (ids.length === 0) return
     setArchivingDone(true)
     setActionError(null)
@@ -741,8 +767,12 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
   const hasActiveFilter =
     filter.query !== '' || filter.project !== '' || filter.assignee !== '' || filter.node !== ''
   const activeFilterCount = countActivePropertyFilters(filter)
-  const doneCount = columns.done.length
+  const doneCount = unarchivedDoneCount
   const openCreate = (): void => setCreateOpen(true)
+
+  const toggleArchivedHistory = (): void => {
+    props.setParams({ archived: params.showArchived ? undefined : '1' })
+  }
 
   const selectMobileTab = (tab: TaskMobileTab): void => {
     // `all` is the default grouped view: clear the param so the canonical URL
@@ -832,7 +862,7 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
               <HelmxIcon name="plus" size={11} />
             </button>
           ) : null}
-          {tab === 'done' ? (
+          {tab === 'done' && unarchivedDoneCount > 0 ? (
             <button
               type="button"
               className="btn btn-xs btn-icon-xs task-mobile-group-archive"
@@ -921,6 +951,21 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
             </span>
           ) : null}
         </button>
+        {archivedItems.length > 0 ? (
+          <button
+            type="button"
+            className={`task-board-filter-toggle${params.showArchived ? ' is-active' : ''}`}
+            aria-pressed={params.showArchived}
+            title={t(TASK_ARCHIVE_HISTORY_TITLE)}
+            onClick={toggleArchivedHistory}
+          >
+            <HelmxIcon name="archive" size={13} />
+            <span>{params.showArchived ? t(TASK_ARCHIVE_HISTORY_HIDE) : t(TASK_ARCHIVE_HISTORY_SHOW)}</span>
+            <span className="task-filter-count badge badge-neutral tabular-nums" title={t(TASK_ARCHIVE_HISTORY_TITLE)}>
+              {archivedItems.length}
+            </span>
+          </button>
+        ) : null}
       </div>
 
       {/* Property filters: always visible on desktop, collapsible tray on mobile. */}
@@ -972,6 +1017,12 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
           <HelmxIcon name="check-square" size={26} />
           <div className="task-board-empty-title">{t(TASK_EMPTY_NO_TASKS)}</div>
           <div className="task-board-empty-hint text-subtle">{t(TASK_EMPTY_HINT)}</div>
+          {archivedItems.length > 0 ? (
+            <button type="button" className="btn btn-ghost btn-sm" onClick={toggleArchivedHistory}>
+              <HelmxIcon name="archive" size={11} />
+              <span>{t(TASK_ARCHIVE_HISTORY_SHOW)} · {archivedItems.length}</span>
+            </button>
+          ) : null}
           <div className="task-board-actions" style={{ justifyContent: 'center' }}>
             {planButton}
             {newTaskButton}

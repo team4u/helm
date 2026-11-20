@@ -436,6 +436,36 @@ test('partitionSidebarUi 提取 profile / 会话 / section 标签去重规则', 
   assert.deepEqual([...partition.pinnedProfileIds].sort(), ['superagent', 'watchdog'])
   assert.deepEqual([...partition.pinnedConversationIds], [1])
   assert.deepEqual([...partition.sectionTags].sort(), ['worker', 'worker-archived'])
+  assert.equal(partition.keptAliveTags.size, 0)
+})
+
+test('partitionSidebarUi：keptAliveTag 进留组集合（与 filterTag 同值不计）', { timeout: 60_000 }, () => {
+  const partition = partitionSidebarUi(
+    [],
+    [
+      { pluginId: 'builtin:tasks', spec: { id: 'runs', label: '任务执行', filterTag: 'task', keptAliveTag: 'task-archived' } },
+      { pluginId: 'p', spec: { id: 'self', label: '自留', filterTag: 'same', keptAliveTag: 'same' } },
+    ],
+  )
+  assert.deepEqual([...partition.keptAliveTags], ['task-archived'])
+  // 留组成员视同插件接管：不回流 Agent 站位
+  const standings = buildAgentStandings({
+    locale: 'en',
+    profiles: [{ id: 'assistant', name: '个人助理' }],
+    conversations: [
+      conv({ id: 1, profileId: 'assistant', tags: ['task'] }),
+      conv({ id: 2, profileId: 'assistant', tags: ['task-archived'] }),
+      conv({ id: 3, profileId: 'assistant' }),
+    ],
+    plugins: [],
+    sidebarSections: [
+      { pluginId: 'builtin:tasks', spec: { id: 'runs', label: '任务执行', filterTag: 'task', keptAliveTag: 'task-archived' } },
+    ],
+  })
+  assert.deepEqual(
+    standings[0]!.conversations.map((c) => c.id),
+    [3],
+  )
 })
 
 test('partitionSidebarUi 跳过 conversation:tag: 前缀目标', { timeout: 60_000 }, () => {
@@ -455,6 +485,28 @@ test('filterConversationsByTag 按 filterTag 过滤分组会话（含折叠归�
   const archiveSpec = sidebarSections[1]!.spec
   assert.equal(archiveSpec.collapsible, true)
   assert.equal(archiveSpec.defaultCollapsed, true)
+})
+
+test('filterConversationsByTag：keptAliveTag 成员留在原分组（任务执行单分组收口）', { timeout: 60_000 }, () => {
+  const runs = [
+    conv({ id: 1, tags: ['task'], createdAt: 100 }),
+    conv({ id: 2, tags: ['task'], createdAt: 300 }),
+    conv({ id: 3, tags: ['task-archived'], createdAt: 500 }),
+    conv({ id: 4, tags: [] }),
+  ]
+  const members = filterConversationsByTag(runs, 'task', 'task-archived')
+  assert.deepEqual(members.map((c) => c.id), [1, 2, 3])
+  // 未声明 keptAliveTag 时不扩容
+  assert.deepEqual(filterConversationsByTag(runs, 'task').map((c) => c.id), [1, 2])
+  // 已结单成员即使被误打宿主归档 tag 也不进「已归档」抽屉（插件接管优先）
+  const hostArchivedKept = buildArchivedConversationList({
+    conversations: [conv({ id: 9, tags: [ARCHIVED_TAG, 'task-archived'] })],
+    profiles: [{ id: 'assistant', name: '个人助理' }],
+    sidebarSections: [
+      { pluginId: 'builtin:tasks', spec: { id: 'runs', label: '任务执行', filterTag: 'task', keptAliveTag: 'task-archived' } },
+    ],
+  })
+  assert.deepEqual(hostArchivedKept.map((item) => item.conv.id), [])
 })
 
 test('fuzzyMatchConversations 按标题、profileId 与纯数字 id 过滤', { timeout: 60_000 }, () => {

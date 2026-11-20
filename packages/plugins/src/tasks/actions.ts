@@ -1417,7 +1417,7 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
   const archiveTask = async (
     input: { taskId: string },
     context: PluginActionContext,
-  ): Promise<{ task: TaskRecord }> => {
+  ): Promise<{ task: TaskRecord; alreadyArchived?: boolean }> => {
     assertPlannerAuthority(runtime, context, 'archive')
     return runtime.track('task:archive', () =>
       runtime.store.enqueueMutation(async (draft) => {
@@ -1429,6 +1429,9 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
             409,
             { pluginId: TASKS_PLUGIN_ID, taskId: task.id, column: task.column },
           )
+        }
+        if (task.archived === true) {
+          return { task, alreadyArchived: true }
         }
         task.archived = true
         task.updatedAt = Date.now()

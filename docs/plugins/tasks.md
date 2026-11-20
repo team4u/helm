@@ -16,9 +16,9 @@
 ## 核心概念
 
 - **任务卡 `TaskRecord`**：`T-1`、`T-2` 单调递增短号；自包含任务书 `brief`（背景/范围/验收标准/坐标）、执行角色 `assigneeProfileId`、可选 `nodeId` / `cwd` / `model` / `thinkingLevel` 覆写。
-- **执行会话**：开工时由插件创建的独立顶层会话，贴 `task` 标签（侧栏「任务执行」分组收口）；验收通过或归档后换 `task-archived` 标签（「已完成任务」分组）。**绝不删除底层会话历史**。
+- **执行会话**：开工时由插件创建的独立顶层会话，贴 `task` 标签（侧栏「任务执行」分组收口）；验收通过或归档后换 `task-archived` 标签，仍留在「任务执行」分组内沉底（`keptAliveTag` 单分组收口，不另设归档抽屉）。**绝不删除底层会话历史**。
 - **受管技能 `tasks`**：随插件启停自举/消失，教会任意 Profile 角色做「需求规划者」——收清需求产出高质量 brief、按需拆分带依赖的任务组、不亲自下场写业务代码。
-- **双轨数据**：私有持久 doc `records`（`{ nextSeq, tasks }`）是单一真源；公开瞬态 doc `board`（`public: true, durable: false`）是前端实时投影，仅含未归档任务 + 最近 50 条已完成/归档历史。公开 doc 单值受宿主 **2 MiB 上限**（超限显式 413 拒绝写入），投影截断即为体积控制手段；全量历史经 `list({ includeArchived: true })` 动作按需查询。
+- **双轨数据**：私有持久 doc `records`（`{ nextSeq, tasks }`）是单一真源；公开瞬态 doc `board`（`public: true, durable: false`）是前端实时投影，仅含未归档任务 + 最近 50 条已完成/归档历史（归档即收离看板主视图，前端默认只渲染未归档卡，「已归档」开关打开时附带展示已归档卡并淡化沉底）。公开 doc 单值受宿主 **2 MiB 上限**（超限显式 413 拒绝写入），投影截断即为体积控制手段；全量历史经 `list({ includeArchived: true })` 动作按需查询。
 - **徽标聚合随板携带**：`board` 投影顶层携带诚实注意汇总——`attentionCount`（需人工介入任务数：全部未归档 in_review + 携任一诚实注意信号的未归档 in_progress，信号含：会话缺失（`conversationMissing` 或绑定会话不在实时会话表）/ 绑定会话子树（含自身）`error` 态 / 子树 `blocked` 或待答 Ask / `stalledAt` / `lastError` / `kickoffUndelivered` / 方案审批发起未决）、`reviewCount`（待验收数）、`runningCount`（健康在跑数）、`hasRunning`（`attentionCount === 0 && runningCount > 0`，安静圆点）、`badgeTone`（`error` > `warn` > `accent` > `neutral` 最高严重度）与 `badgeSummary`（双语摘要，如「2 个待验收 · 1 个需处理」）。徽标实时感知订阅真实内核事件（`conversation.upsert` / `ask.upsert` / `ask.resolved`，仅存在未归档活跃卡时重投影），并按徽标元组脏检查落笔——元组不变不写 doc，高频流式事件零 SSE 写放大。sidebarItem 徽标声明常量 `TASK_BOARD_SIDEBAR_BADGE`（`contracts.ts` 导出）与宿主通用 `SidebarItemBadgeSpec` 字段一一对应，`ui.ts` 注册处已声明 `badge: TASK_BOARD_SIDEBAR_BADGE`——宿主订阅本插件公开 doc `board`，在活动 Rail 快捷入口、移动端 MobileQuickNav 与侧栏视图行渲染计数徽标 / 安静圆点 / tooltip 摘要（零插件 ID 特判，停用即随贡献消失）。
 - **依赖真值随卡携带**：投影的每张卡附带 `blockedBy: string[]`（未 done 的前置 ID，按真源全量计算）——板书截断后前端无法看到被截掉的依赖卡状态，UI 必须消费该字段判定阻塞，不得自行从截断板书推导（契约见 `TaskBoardEntry`）。
 - **持久化输入脱敏**：brief / title / project / summary / verification / branch / worktreePath / feedback / note 等用户文本写入 doc 前统一过 `ctx.host.redact`（宿主唯一脱敏入口，已登记机密替换为标记），不落明文机密。
@@ -40,7 +40,7 @@
 | `rework` | `helmx tasks rework <id>` | `task_rework` | 打回返工：回 `in_progress`、`reworkCount + 1`、意见投回原会话（保留上下文与分支）；原会话被删时显式 `409 task_conversation_missing`（或 `recreateConversation: true` 重建，新会话收到**单条合成任务书**：原 brief + 返工意见） |
 | `request_plan_approval` | `helmx tasks request-plan-approval` | `task_request_plan_approval` | planFirst 方案审批（真实 AskDoc confirm 卡片，阻塞至用户作答）；批准决定持久化到 `planApproval` 后 `task_submit` 才放行 |
 | `resume_kickoff` | `helmx tasks resume-kickoff <id>` | — | 显式继续「开工未送达」的任务：向绑定会话重投任务书（requestId 幂等），清除标记；唯一重投路径，绝不自动触发 |
-| `archive` | `helmx tasks archive <id>` | — | 归档 backlog/done 卡（进行中拒 `409 task_in_progress`） |
+| `archive` | `helmx tasks archive <id>` | — | 归档 backlog/done 卡即收离看板主视图（进行中拒 `409 task_in_progress`；重复归档幂等返回 `alreadyArchived`，历史经看板「已归档」开关或 `list --include-archived` 查看） |
 | `delete` | `helmx tasks delete <id>` | — | 删除任务记录（进行中且会话忙碌拒 `409 task_in_progress`；仍被其他任务 `dependsOn` 引用时拒 `409 task_dependency_referenced`，先解除引用）；绝不删除会话历史 |
 
 模型工具用独立 `ctx.tool` 注册以获得契约约定的精确短名（`exposeAsTool` 派生名带哈希后缀，不满足）。
@@ -135,7 +135,7 @@
 
 - `sidebarItem` `task-board`（`order: 5`，先于 App Center；`quickEntry: true` 随宿主快捷入口体系直达）：Rail 视图图标一步直达看板；注册处声明 `badge: TASK_BOARD_SIDEBAR_BADGE`（count=`attentionCount` / tone=`badgeTone` / dot=`hasRunning` / summary=`badgeSummary`），驱动活动 Rail 快捷入口、移动端 MobileQuickNav 与侧栏视图行的通用徽标渲染；
 - `screen` `board`：`TaskBoardScreen` 全屏看板（四列 + 移动端清零流，由前端切片实现）；
-- `sidebarSection` `task-conversations`（`filterTag: task`）与 `task-archived-conversations`（`filterTag: task-archived`）：任务执行会话收口分组，默认折叠；
+- `sidebarSection` `task-conversations`（`filterTag: task` + `keptAliveTag: task-archived`）：任务执行会话单一收口分组（结单/归档成员换标签后仍留组沉底），默认折叠；
 - `toolView` `task-tool-card`：`task_create / task_start / task_submit / task_approve / task_rework` 的时间线活体回执卡。
 
 ## 生命周期与诚实边界

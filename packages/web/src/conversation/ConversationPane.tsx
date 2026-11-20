@@ -251,9 +251,11 @@ export function ConversationPane({ conversationId, isSplit, onCloseSplit, isDraw
   const headerActions = matchConversationActions(groupedUi.uiActions, 'conversation:header', conversation)
   const { toolbar: toolbarActions, menu: menuActions } = splitConversationHeaderActions(headerActions)
   const archived = isConversationArchived(conversation)
+  const sidebarPartition = partitionSidebarUi([], groupedUi.sidebarSections)
   const canManageArchive = isConversationArchivable(
     conversation,
-    partitionSidebarUi([], groupedUi.sidebarSections).sectionTags,
+    sidebarPartition.sectionTags,
+    sidebarPartition.keptAliveTags,
   )
 
   const saveTitle = async (): Promise<void> => {

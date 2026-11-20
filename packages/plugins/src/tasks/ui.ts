@@ -1,8 +1,9 @@
 /**
  * builtin:tasks UI 注册（仅显示元数据；数据流走公开投影 doc `board`）：
  * - Rail 一级入口 task-board（order 5，先于 App Center 15 与工作流库 16）直达看板；
- * - sidebarSection 收口任务执行会话（task / task-archived 标签，默认折叠，
- *   不淹没常规智能体列表）；
+ * - sidebarSection 收口任务执行会话（task 标签 + keptAliveTag task-archived：
+ *   结单/归档后换标签仍留在「任务执行」分组沉底，不回流智能体站位，
+ *   侧栏不另设第二归档抽屉）；
  * - toolView 接管 5 个 task_* 工具的时间线回执卡（Slice 3 实现 TaskToolView）。
  */
 import type { HelmxPluginContext } from '@helmx/protocol'
@@ -43,19 +44,10 @@ export function registerTasksUi(ctx: HelmxPluginContext): void {
     label: { en: 'Task Runs', 'zh-CN': '任务执行' },
     icon: 'check-square',
     filterTag: 'task',
+    keptAliveTag: 'task-archived',
     collapsible: true,
     defaultCollapsed: true,
     order: 40,
-  })
-
-  ctx.ui.sidebarSection({
-    id: 'task-archived-conversations',
-    label: { en: 'Completed Tasks', 'zh-CN': '已完成任务' },
-    icon: 'archive',
-    filterTag: 'task-archived',
-    collapsible: true,
-    defaultCollapsed: true,
-    order: 95,
   })
 
   ctx.ui.toolView({

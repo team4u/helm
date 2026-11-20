@@ -97,6 +97,11 @@
   color: var(--fg);
 }
 
+.task-board-filter-toggle.is-active {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
 .task-filter-count {
   padding: 0 5px;
   font-size: 10px;
@@ -265,6 +270,17 @@
 
 .task-card.is-clickless {
   cursor: default;
+}
+
+/* 已归档历史卡（仅「已归档」开关打开时出现）：整体淡化沉底，视觉上明确离场。 */
+.task-card[data-archived='true'] {
+  opacity: 0.62;
+  border-style: dashed;
+  box-shadow: none;
+}
+
+.task-card[data-archived='true']:hover {
+  opacity: 0.85;
 }
 
 .task-card-header {
