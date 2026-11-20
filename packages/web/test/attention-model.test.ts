@@ -21,8 +21,8 @@ import * as React from 'react'
 import { renderToString } from 'react-dom/server'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
-import type { ConversationSummary, PluginUiContribution, ScreenSpec, SidebarItemSpec, WorkbenchPanelSpec } from '@helmx/protocol'
-import { ARCHIVED_TAG } from '../src/shell/sidebar-model.js'
+import type { ConversationSummary, PluginUiContribution, ScreenSpec, SidebarItemBadgeSpec, SidebarItemSpec, WorkbenchPanelSpec } from '@helmx/protocol'
+import { ARCHIVED_TAG, type SidebarViewItem } from '../src/shell/sidebar-model.js'
 import type { ConversationBackgroundIndex } from '../src/shell/background-activity-model.js'
 import {
   buildAttentionItems,
@@ -779,4 +779,203 @@ test('useConversationBackground via the real host bridge: badge docs hydrate ent
   const last = captured.at(-1)!
   assert.ok(last.unknown === false, 'hydrated badge docs flip the snapshot to known')
   assert.ok(last.active === true && last.summary === '2 Running', 'the entry carries the host-standard aggregation verdict')
+})
+
+// ---------------------------------------------------------------------------
+// 侧栏视图徽标（sidebar.item badge 声明：纯函数 + Activity Rail / 视图行渲染）
+// ---------------------------------------------------------------------------
+
+const {
+  collectSidebarBadgeDocs,
+  composeSidebarBadgeLabel,
+  resolveSidebarItemBadge,
+  sidebarBadgeCountLabel,
+  sidebarBadgeToneClass,
+} = await import('../src/shell/sidebar-model.js')
+
+const TASK_BADGE_SPEC: SidebarItemBadgeSpec = {
+  doc: 'task-board',
+  countField: 'attentionCount',
+  toneField: 'badgeTone',
+  dotField: 'hasRunning',
+  summaryField: 'badgeSummary',
+}
+
+function viewItem(overrides: Partial<SidebarViewItem> = {}): SidebarViewItem {
+  return {
+    key: 'builtin:tasks/task-board',
+    pluginId: 'builtin:tasks',
+    label: 'Task Board',
+    icon: 'check-square',
+    order: 5,
+    target: { kind: 'screen', pluginId: 'builtin:tasks', screenId: 'board' },
+    badge: TASK_BADGE_SPEC,
+    ...overrides,
+  }
+}
+
+test('resolveSidebarItemBadge: count badge, tone fallback, quiet dot, LocalizedText summary, zero-noise null', { timeout: 60_000 }, () => {
+  // 计数 > 0：count 徽标，tone 用 doc 提供的合法值
+  assert.deepEqual(resolveSidebarItemBadge(TASK_BADGE_SPEC, { attentionCount: 3, badgeTone: 'error', badgeSummary: '2 awaiting review' }, 'en'), {
+    count: 3,
+    tone: 'error',
+    dot: false,
+    summary: '2 awaiting review',
+  })
+  // tone 非法/缺省回落 warn；summary 缺省为空串；小数计数向下取整
+  assert.deepEqual(resolveSidebarItemBadge(TASK_BADGE_SPEC, { attentionCount: 2.9, badgeTone: 'bogus' }, 'en'), {
+    count: 2,
+    tone: 'warn',
+    dot: false,
+    summary: '',
+  })
+  // LocalizedText summary 按 locale 解析
+  assert.deepEqual(
+    resolveSidebarItemBadge(TASK_BADGE_SPEC, { attentionCount: 1, badgeSummary: { en: '1 needs you', 'zh-CN': '1 待处理' } }, 'zh-CN'),
+    { count: 1, tone: 'warn', dot: false, summary: '1 待处理' },
+  )
+  // count 为 0 且 dotField 为 true：静默灯点（tone 回落 accent）
+  assert.deepEqual(resolveSidebarItemBadge(TASK_BADGE_SPEC, { attentionCount: 0, hasRunning: true }, 'en'), {
+    count: 0,
+    tone: 'accent',
+    dot: true,
+    summary: '',
+  })
+  // dot 模式下 doc 提供合法 tone 时尊重之
+  assert.deepEqual(resolveSidebarItemBadge(TASK_BADGE_SPEC, { attentionCount: 0, hasRunning: true, badgeTone: 'ok' }, 'en'), {
+    count: 0,
+    tone: 'ok',
+    dot: true,
+    summary: '',
+  })
+  // 全部无信号：null（含 doc 未加载 undefined、空对象、非对象、数组、负数/NaN 计数、dotField false）
+  for (const docValue of [undefined, null, {}, [], 5, 'text', { attentionCount: 0 }, { attentionCount: -1 }, { attentionCount: Number.NaN }, { hasRunning: false }, { attentionCount: '3' }]) {
+    assert.equal(
+      resolveSidebarItemBadge(TASK_BADGE_SPEC, docValue, 'en'),
+      null,
+      `docValue=${JSON.stringify(docValue) ?? String(docValue)}`,
+    )
+  }
+  // 未声明 dotField 时 count 为 0 一律 null（无灯点通道）
+  assert.equal(resolveSidebarItemBadge({ doc: 'd', countField: 'c' }, { c: 0, d: true }, 'en'), null)
+  // 未声明 toneField/summaryField 时只读计数
+  assert.deepEqual(resolveSidebarItemBadge({ doc: 'd', countField: 'c' }, { c: 4 }, 'en'), { count: 4, tone: 'warn', dot: false, summary: '' })
+  // 99+ 上限折叠为文本标签（纯展示层，不造假计数）
+  assert.equal(sidebarBadgeCountLabel(99), '99')
+  assert.equal(sidebarBadgeCountLabel(100), '99+')
+  assert.equal(sidebarBadgeCountLabel(1000), '99+')
+  // tone -> badge 语义类映射
+  assert.equal(sidebarBadgeToneClass('error'), 'badge-err')
+  assert.equal(sidebarBadgeToneClass('warn'), 'badge-warn')
+  assert.equal(sidebarBadgeToneClass('accent'), 'badge-accent')
+  assert.equal(sidebarBadgeToneClass('ok'), 'badge-ok')
+  assert.equal(sidebarBadgeToneClass('neutral'), 'badge-neutral')
+  // label 与 summary 合成（summary 为空原样返回）
+  assert.equal(composeSidebarBadgeLabel('Task Board', { count: 2, tone: 'warn', dot: false, summary: '2 to review' }), 'Task Board · 2 to review')
+  assert.equal(composeSidebarBadgeLabel('Task Board', null), 'Task Board')
+  assert.equal(composeSidebarBadgeLabel('Task Board', { count: 0, tone: 'accent', dot: true, summary: '' }), 'Task Board')
+})
+
+test('collectSidebarBadgeDocs: dedupes plugin/doc refs and skips badge-less items', { timeout: 60_000 }, () => {
+  const refs = collectSidebarBadgeDocs([
+    viewItem(),
+    viewItem({ key: 'builtin:tasks/task-board-2' }), // 同插件同 doc：去重
+    viewItem({ key: 'other/view', pluginId: 'other' }),
+    viewItem({ key: 'plain/view', badge: undefined }),
+  ])
+  assert.deepEqual(
+    refs.map((r) => `${r.pluginId}/${r.doc}`),
+    ['builtin:tasks/task-board', 'other/task-board'],
+  )
+})
+
+function badgeScenarioStore(overrides: { doc?: Record<string, unknown>; specBadge?: Record<string, unknown> | null } = {}): HelmxExternalStore {
+  const spec: Record<string, unknown> = {}
+  if (overrides.specBadge !== null) {
+    spec.badge = overrides.specBadge ?? {
+      doc: 'task-board',
+      countField: 'attentionCount',
+      toneField: 'badgeTone',
+      dotField: 'hasRunning',
+      summaryField: 'badgeSummary',
+    }
+  }
+  return sidebarStore({
+    plugins: [{ id: 'builtin:tasks', name: 'Tasks', version: '0.0.0', enabled: true, locked: false, hooks: [], actions: [], tools: [] }],
+    conversations: [conv({ id: 50, title: '当前查看', profileId: 'coder' })],
+    primaryTarget: { kind: 'screen', pluginId: 'builtin:tasks', screenId: 'board' },
+    uiContributions: [sidebarItemContribution({ spec }), screenContribution()],
+    pluginDocs: overrides.doc !== undefined ? { 'builtin:tasks/task-board': overrides.doc } : {},
+  })
+}
+
+test('Sidebar renders sidebar.item badge on the rail quick entry and the views row with honest summary', { timeout: 60_000 }, () => {
+  const html = renderSidebar(
+    badgeScenarioStore({ doc: { attentionCount: 3, badgeTone: 'error', badgeSummary: '2 awaiting review · 1 needs attention' } }),
+  )
+  // Rail 快捷入口：计数徽标 + tone + summary 进 aria/tooltip
+  const quickBtn = html.match(/<button[^>]*class="rail-btn rail-quick-btn[^"]*"[^>]*>/)?.[0] ?? ''
+  assert.ok(quickBtn.includes('aria-label="Task Board · 2 awaiting review · 1 needs attention"'), `rail quick button carries the badge summary (got: ${quickBtn})`)
+  assert.ok(
+    html.includes('class="rail-quick-badge" data-tone="error"') && html.includes('>3</span>'),
+    'the rail quick entry renders the count badge with the doc-provided tone',
+  )
+  // 视图行（views 空间）：紧凑语义徽标 + summary aria
+  const viewBtn = html.match(/<button[^>]*class="nav-item-main nav-open"[^>]*title="Task Board[^"]*"[^>]*>/)?.[0] ?? ''
+  assert.ok(viewBtn.includes('aria-label="Task Board · 2 awaiting review · 1 needs attention"'), `the views row button carries the badge summary (got: ${viewBtn})`)
+  assert.ok(html.includes('badge badge-err tabular-nums sidebar-view-badge'), 'the views row renders the compact semantic badge pill')
+})
+
+test('Sidebar renders the quiet dot when the count is zero and hasRunning is true; zero noise when the badge is silent', { timeout: 60_000 }, () => {
+  const dotHtml = renderSidebar(badgeScenarioStore({ doc: { attentionCount: 0, hasRunning: true, badgeTone: 'accent' } }))
+  assert.ok(dotHtml.includes('class="rail-quick-dot" data-tone="accent"'), 'the rail quick entry renders the quiet dot')
+  assert.ok(dotHtml.includes('class="sidebar-view-badge-dot" data-tone="accent"'), 'the views row renders the quiet dot')
+  assert.ok(!dotHtml.includes('rail-quick-badge" data-tone'), 'no count badge when the count is zero')
+
+  const silentHtml = renderSidebar(badgeScenarioStore({ doc: { attentionCount: 0, hasRunning: false } }))
+  assert.ok(!silentHtml.includes('rail-quick-dot'), 'no dot when the doc is silent')
+  assert.ok(!silentHtml.includes('sidebar-view-badge'), 'no badge pill when the doc is silent')
+  assert.ok(!silentHtml.includes('rail-quick-badge'), 'no rail badge when the doc is silent')
+
+  // 无 badge 声明的项：完全零徽标渲染
+  const noBadgeHtml = renderSidebar(badgeScenarioStore({ specBadge: null }))
+  assert.ok(!noBadgeHtml.includes('sidebar-view-badge'), 'a badge-less item renders no badge residue')
+})
+
+test('useSidebarBadges discovers and loads the badge doc itself; plugin disable zeroes the residue', { timeout: 60_000 }, async () => {
+  const docUrls: string[] = []
+  const originalFetch = globalThis.fetch
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = String(input)
+    docUrls.push(url)
+    return new Response(JSON.stringify({ key: 'stub', value: { attentionCount: 2, badgeTone: 'warn' } }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    })
+  }) as typeof fetch
+  const store = badgeScenarioStore({ doc: undefined }) // doc 未预置：Hook 需自行发现并加载
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
+    })
+    assert.deepEqual(docUrls, ['/api/plugins/builtin%3Atasks/docs/task-board'], 'the sidebar hook loads the declared badge doc on demand')
+    assert.ok(container.querySelector('.rail-quick-badge') !== null, 'the fetched doc drives the rendered badge')
+
+    // Simulate the SSE path of a disabled plugin: contributions vanish -> badge residue zeroed.
+    await act(async () => {
+      store.updateLive((state) => ({ ...state, uiContributions: [] }))
+    })
+    assert.equal(container.querySelectorAll('.rail-quick-badge').length, 0, 'a disabled plugin leaves no phantom badge')
+    assert.equal(container.querySelectorAll('.sidebar-view-badge').length, 0, 'a disabled plugin leaves no phantom view badge')
+  } finally {
+    globalThis.fetch = originalFetch
+    await act(async () => {
+      root?.unmount()
+    })
+    container.remove()
+  }
 })

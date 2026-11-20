@@ -8,7 +8,10 @@
  * 5) 依赖阻塞 / 环拒绝 / 并发上限；
  * 6) 静止未交卷零投递诚实标记 stalled（turn_settled 纯事件驱动，无自动轻推）、
  *    Workflow 在途不误标、conversation.deleted 诚实标记与 rework 重建；
- * 7) 停用后工具 / UI / 受管技能即时消失且已有执行会话完整保留。
+ * 7) 停用后工具 / UI / 受管技能即时消失且已有执行会话完整保留；
+ * 8) 看板徽标投影全生命周期实时跟踪（planFirst 待答 Ask 纯会话事件驱动 warn →
+ *    in_review 验收计数 → approve 归零 neutral）、交卷进 in_review 发 info 通知、
+ *    徽标无关会话扰动零 board doc 重写（脏检查零 SSE 写放大）。
  */
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -32,6 +35,7 @@ import {
   TASKS_SKILL_ID,
   TASK_ACTIVE_TAG,
   TASK_ARCHIVED_TAG,
+  TASK_BOARD_SIDEBAR_BADGE,
   type TaskBoardDoc,
   type TaskRecord,
 } from '../src/tasks.js'
@@ -195,6 +199,19 @@ test('tasks-int1: default-enabled boot, zero residents, workflow-disable freedom
       'sidebar.section:task-conversations',
       'tool.view:task-tool-card',
     ])
+
+    // End-to-end badge wiring: the live plugin's sidebar.item contribution carries
+    // the declared badge verbatim — protocol SidebarItemBadgeSpec + kernel boundary
+    // validator + plugin registration all agreeing on one contract.
+    const sidebarItem = kernel.plugins
+      .listUi()
+      .find((u) => u.pluginId === TASKS_PLUGIN_ID && u.surface === 'sidebar.item' && (u.spec as { id?: string }).id === 'task-board')
+    assert.ok(sidebarItem, 'sidebar.item:task-board contribution must exist')
+    assert.deepEqual(
+      (sidebarItem.spec as { badge?: unknown }).badge,
+      { ...TASK_BOARD_SIDEBAR_BADGE },
+      'task-board sidebarItem badge must match TASK_BOARD_SIDEBAR_BADGE (protocol -> kernel validator -> plugin registration)',
+    )
   } finally {
     await env.close()
   }
@@ -1041,6 +1058,177 @@ test('tasks-int10: create idempotency key, explicit merged declaration for merge
     const survivor = kernel.listConversations().find((c) => c.id === convId)
     assert.ok(survivor, 'bound execution conversation untouched by orphan recovery')
     assert.equal(survivor!.tags.includes('task-archived'), true, 'bound done conversation keeps its archived tag')
+  } finally {
+    await env.close()
+  }
+})
+
+test('tasks-int11: board badge projection tracks the lifecycle live; submit notifies; badge-neutral churn writes nothing', { timeout: 60_000 }, async (t) => {
+  const env = await openTasksEnv(useTempDir(t, 'helmx-tasks-int11-'))
+  try {
+    const { kernel } = env.app
+
+    // Collect notifications and per-frame board doc updates from the durable event stream
+    const notifications: Array<{ level: string; title: string; body?: string; conversationId?: number }> = []
+    const boardDocFrames: number[] = []
+    const plannerUpserts: number[] = []
+    let plannerConvId = 0
+    const unsubscribe = kernel.events.subscribe((frame) => {
+      const event = frame.event
+      if (event.type === 'notification' && 'title' in event) {
+        notifications.push({
+          level: event.level,
+          title: event.title,
+          body: event.body,
+          conversationId: event.conversationId,
+        })
+      } else if (event.type === 'plugin.doc.updated' && 'doc' in event) {
+        if (event.doc.pluginId === TASKS_PLUGIN_ID && event.doc.name === 'board') boardDocFrames.push(frame.seq)
+      } else if (event.type === 'conversation.upsert' && 'conversation' in event) {
+        if (plannerConvId !== 0 && event.conversation.id === plannerConvId) plannerUpserts.push(frame.seq)
+      }
+    })
+
+    // Fresh boot: board badge starts fully quiet (declared initial value + empty projection agree)
+    const initial = boardDoc(env)
+    assert.equal(initial.tasks.length, 0)
+    assert.equal(initial.attentionCount, 0)
+    assert.equal(initial.reviewCount, 0)
+    assert.equal(initial.runningCount, 0)
+    assert.equal(initial.hasRunning, false)
+    assert.equal(initial.badgeTone, 'neutral')
+    assert.equal(initial.badgeSummary, undefined)
+
+    setRoutedResponses(env.faux, {
+      assignee: [
+        (ctx) =>
+          fauxAssistantMessage([fauxToolCall('task_request_plan_approval', { plan: '1) probe 2) fix 3) verify' })], {
+            stopReason: 'toolUse',
+          }),
+        (ctx) => fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'First draft' })], { stopReason: 'toolUse' }),
+        fauxAssistantMessage('Handed in.'),
+        (ctx) => {
+          const meta = captureRequestMeta(ctx.messages as unknown as Record<string, unknown>[])
+          assert.match(meta.lastUserText, /<task_rework id="T-1">/)
+          return fauxAssistantMessage([fauxToolCall('task_submit', { summary: 'Second draft' })], {
+            stopReason: 'toolUse',
+          })
+        },
+        fauxAssistantMessage('Handed in again.'),
+      ],
+      planner: [fauxAssistantMessage('planner idle'), fauxAssistantMessage('planner idle again')],
+      // The only child-route turn is the deliberate subtree-error probe below (pure conversation-event path)
+      child: [
+        async () => {
+          throw new Error('child probe exploded')
+        },
+      ],
+    })
+
+    // planFirst task: the pending approval Ask drives the badge purely via conversation events
+    const created = (await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'create', {
+      title: 'Badge lifecycle probe',
+      brief: 'Drive the board badge across the lifecycle. Acceptance: badge fields stay honest.',
+      planFirst: true,
+    })) as { conversationId?: number }
+    const convId = created.conversationId!
+
+    let askId = ''
+    await waitFor(async () => {
+      const pending = kernel.listAsks('pending').find((a) => a.conversationId === convId)
+      if (pending === undefined) return false
+      askId = pending.id
+      return true
+    })
+    await waitFor(() => {
+      const board = boardDoc(env)
+      return (
+        board.attentionCount === 1 &&
+        board.reviewCount === 0 &&
+        board.runningCount === 0 &&
+        board.badgeTone === 'warn' &&
+        board.tasks.some((entry) => entry.id === 'T-1' && entry.column === 'in_progress')
+      )
+    })
+    assert.deepEqual(boardDoc(env).badgeSummary, { en: '1 needs attention', 'zh-CN': '1 个需处理' })
+
+    // Badge-neutral churn: a planner conversation turn fires conversation.upsert frames but must NOT
+    // rewrite the board doc (badge tuple unchanged -> zero SSE plugin.doc write amplification)
+    const boardFramesBeforeChurn = boardDocFrames.length
+    plannerConvId = (await kernel.createConversation({ title: 'Planner', profileId: 'assistant' })).id
+    await kernel.submitInput(plannerConvId, 'Chatter while a review-waiting task sits on the board')
+    await kernel.waitForIdle(plannerConvId)
+    await waitFor(() => plannerUpserts.length >= 2)
+    assert.ok(boardDocFrames.length > 0, 'board doc must have been written during the lifecycle so far')
+    assert.equal(
+      boardDocFrames.length,
+      boardFramesBeforeChurn,
+      'badge-neutral conversation churn must not rewrite the board doc',
+    )
+
+    // Approve the plan; the assignee turn resumes and hands in -> in_review badge + notification
+    await kernel.answerAsk(askId, { approve: 'true' })
+    await kernel.waitForIdle(convId)
+    await waitFor(() => {
+      const board = boardDoc(env)
+      return board.attentionCount === 1 && board.reviewCount === 1 && board.runningCount === 0 && board.badgeTone === 'warn'
+    })
+    assert.deepEqual(boardDoc(env).badgeSummary, { en: '1 awaiting review', 'zh-CN': '1 个待验收' })
+    await waitFor(() => notifications.some((n) => n.conversationId === convId && n.level === 'info'))
+    const firstNotice = notifications.find((n) => n.conversationId === convId)!
+    assert.match(firstNotice.title, /T-1/)
+    assert.match(firstNotice.title, /验收/)
+    assert.match(firstNotice.body ?? '', /First draft/)
+
+    // Rework -> resubmit: a second honest notification for the new review round
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'rework', { taskId: 'T-1', feedback: 'Tighten the summary.' })
+    await kernel.waitForIdle(convId)
+    await waitFor(() => notifications.filter((n) => n.conversationId === convId && n.level === 'info').length >= 2)
+    await waitFor(() => {
+      const board = boardDoc(env)
+      return board.attentionCount === 1 && board.reviewCount === 1 && board.badgeTone === 'warn'
+    })
+
+    // Pure conversation-event proof: a descendant of the task conversation enters error state
+    // (no task record mutation involved) -> the event subscription alone must escalate the
+    // badge tone warn -> error while the review counts stay honest
+    const childConv = await kernel.createConversation({
+      title: 'Subtree error probe',
+      profileId: 'assistant',
+      parentConversationId: convId,
+    })
+    await kernel.submitInput(childConv.id, 'Explode please')
+    await kernel.waitForIdle(childConv.id).catch(() => undefined)
+    await waitFor(() => {
+      const board = boardDoc(env)
+      return board.attentionCount === 1 && board.reviewCount === 1 && board.runningCount === 0 && board.badgeTone === 'error'
+    })
+    assert.deepEqual(boardDoc(env).badgeSummary, { en: '1 awaiting review', 'zh-CN': '1 个待验收' })
+    const childSummary = kernel.listConversations().find((c) => c.id === childConv.id)
+    assert.equal(childSummary?.status, 'error', 'the probe child conversation must really be in error state')
+
+    // Approve close_only: board goes fully quiet (done cards carry no badge weight)
+    await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'approve', { taskId: 'T-1', mergeAction: 'close_only' })
+    await waitFor(() => {
+      const board = boardDoc(env)
+      return (
+        board.attentionCount === 0 &&
+        board.reviewCount === 0 &&
+        board.runningCount === 0 &&
+        board.hasRunning === false &&
+        board.badgeTone === 'neutral' &&
+        board.badgeSummary === undefined &&
+        board.tasks.some((entry) => entry.id === 'T-1' && entry.column === 'done')
+      )
+    })
+
+    // Only the two submit-into-review moments ever notified; approve/rework stayed calm (zero noise)
+    assert.equal(
+      notifications.filter((n) => n.conversationId === convId).length,
+      2,
+      'exactly one info notification per submit into in_review',
+    )
+    unsubscribe()
   } finally {
     await env.close()
   }

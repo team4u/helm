@@ -91,6 +91,36 @@
   box-shadow: var(--seg-edge);
 }
 
+/* 快捷入口计数徽标（sidebar.item 通用 badge 声明驱动）：紧凑计数 + 灯色，
+ * 只呈现插件公开 doc 的真实聚合事实，无信号时不渲染；专用类与对话空间
+ * 按钮解耦（态势感知统一走 rail-overview-dot tone 灯点）。
+ * tone 词汇 = SidebarBadgeTone 五值。 */
+.rail-quick-badge {
+  position: absolute;
+  top: 0;
+  right: 0;
+  min-width: 13px;
+  height: 13px;
+  padding: 0 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 600;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+  color: #fff;
+  box-sizing: border-box;
+  pointer-events: none;
+}
+
+.rail-quick-badge[data-tone='error'] { background: var(--err); }
+.rail-quick-badge[data-tone='warn'] { background: var(--warn); }
+.rail-quick-badge[data-tone='accent'] { background: var(--accent); }
+.rail-quick-badge[data-tone='ok'] { background: var(--ok); }
+.rail-quick-badge[data-tone='neutral'] { background: var(--fg-muted); }
+
 /* 插件全局快捷入口（sidebar.item quickEntry）：紧随空间按钮，细分隔线隔离；
  * 按钮复用 rail-btn 形态（含激活态），插件停用后贡献消失即零残留。 */
 .activity-rail-quick {
@@ -104,6 +134,29 @@
   border-top: 1px solid var(--border);
   box-sizing: border-box;
 }
+
+/* 快捷入口按钮锚定计数徽标 / 静默灯点（badge 绝对定位于右上角）。 */
+.rail-quick-btn {
+  position: relative;
+}
+
+/* 快捷入口静默灯点（sidebar.item badge dotField：计数为 0 时的安静后台活动提示，
+ * 无数字、不抢焦点；tone 词汇同 .rail-quick-badge）。 */
+.rail-quick-dot {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  pointer-events: none;
+}
+
+.rail-quick-dot[data-tone='error'] { background: var(--err); }
+.rail-quick-dot[data-tone='warn'] { background: var(--warn); }
+.rail-quick-dot[data-tone='accent'] { background: var(--accent); }
+.rail-quick-dot[data-tone='ok'] { background: var(--ok); }
+.rail-quick-dot[data-tone='neutral'] { background: var(--fg-muted); }
 
 .activity-rail-footer {
   display: flex;

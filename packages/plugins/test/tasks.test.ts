@@ -3,7 +3,8 @@
  * - 插件契约：TASKS_PLUGIN_ID / 受管技能 ID / 标签常量 / 无静态 dependencies / 双语元数据；
  * - 配置边界（maxConcurrentTasks 0..50）与 doc / record / id 强校验；
  * - 依赖环 DFS 检测与 assertDependenciesValid 全拒绝面；
- * - board 投影截断（未归档全量 + 最近 50 条历史）；
+ * - board 投影截断（未归档全量 + 最近 50 条历史）与徽标聚合全状态判定
+ *   （attention / review / running / tone 阶梯 / 双语摘要 / 子树会话事实 / 脏检查键）；
  * - <active_task> 段落 100% 字节恒定与 kickoff 任务书内容（planFirst 走真实 Ask 指令）；
  * - before_turn 工具过滤纯函数（规划/执行隔离、子会话与自动化会话）；
  * - 子树忙碌检查与停滞判定纯函数（含 Workflow 在途 'unknown' 保守分支）；
@@ -20,6 +21,7 @@ import {
   TASK_ARCHIVED_TAG,
   TASK_BOARD_DOC,
   TASK_BOARD_DONE_HISTORY_LIMIT,
+  TASK_BOARD_SIDEBAR_BADGE,
   TASK_RECORDS_DOC,
   assertTaskId,
   assertTaskRecord,
@@ -29,6 +31,8 @@ import {
   detectDependencyCycle,
   projectBoardDoc,
   resolveTasksConfig,
+  subtreeAttentionFlags,
+  taskBoardBadgeKey,
   type TaskRecord,
 } from '../src/tasks.js'
 import { assertDependenciesValid, recoverInterruptedStartups, recoverKickoffMarkers } from '../src/tasks/store.js'
@@ -328,4 +332,244 @@ test('tasks-unit8: HelmxError contract sanity for store validators', { timeout: 
     assert.ok(err instanceof HelmxError)
     assert.equal((err as HelmxError).code, 'tasks_doc_corrupt')
   }
+})
+
+test('tasks-unit9: board badge projection — honest attention counts, tone ladder, bilingual summary', { timeout: 60_000 }, () => {
+  const conv = (id: number, over: Record<string, unknown> = {}) =>
+    ({
+      id,
+      title: `c${id}`,
+      profileId: 'assistant',
+      tags: [],
+      cwd: '/repo',
+      model: 'faux/faux-1',
+      thinkingLevel: '',
+      status: 'idle',
+      stateChangeSeq: 1,
+      completionSeq: 0,
+      unread: false,
+      pinned: false,
+      pendingAskCount: 0,
+      createdAt: 1,
+      updatedAt: 1,
+      ...over,
+    }) as never as import('@helmx/protocol').ConversationSummary
+
+  const board = (tasks: Record<string, TaskRecord>, conversations?: import('@helmx/protocol').ConversationSummary[]) =>
+    projectBoardDoc({ nextSeq: 100, tasks }, conversations)
+
+  // Empty board: fully quiet neutral
+  const empty = board({})
+  assert.equal(empty.attentionCount, 0)
+  assert.equal(empty.reviewCount, 0)
+  assert.equal(empty.runningCount, 0)
+  assert.equal(empty.hasRunning, false)
+  assert.equal(empty.badgeTone, 'neutral')
+  assert.equal(empty.badgeSummary, undefined)
+
+  // Backlog-only: still neutral
+  const backlog = board({ 'T-1': makeTask(), 'T-2': makeTask({ id: 'T-2' }) })
+  assert.equal(backlog.badgeTone, 'neutral')
+  assert.equal(backlog.attentionCount, 0)
+  assert.equal(backlog.badgeSummary, undefined)
+
+  // Healthy running (no conversation facts provided): quiet accent dot, running summary
+  const running = board({
+    'T-1': makeTask({ column: 'in_progress', conversationId: 7, startedAt: 2_000 }),
+    'T-2': makeTask({ id: 'T-2', column: 'in_progress', conversationId: 8, startedAt: 2_000 }),
+  })
+  assert.equal(running.attentionCount, 0)
+  assert.equal(running.runningCount, 2)
+  assert.equal(running.hasRunning, true)
+  assert.equal(running.badgeTone, 'accent')
+  assert.deepEqual(running.badgeSummary, { en: '2 running', 'zh-CN': '2 个进行中' })
+
+  // in_review: attention + review counts, warn tone, review-only summary
+  const review = board({
+    'T-1': makeTask({ column: 'in_review', conversationId: 7, submission: { summary: 'done', submittedAt: 3 } }),
+  })
+  assert.equal(review.attentionCount, 1)
+  assert.equal(review.reviewCount, 1)
+  assert.equal(review.runningCount, 0)
+  assert.equal(review.hasRunning, false)
+  assert.equal(review.badgeTone, 'warn')
+  assert.deepEqual(review.badgeSummary, { en: '1 awaiting review', 'zh-CN': '1 个待验收' })
+
+  // Persisted record signals (no conversation facts needed): stalled / lastError / kickoffUndelivered / plan ask
+  const stalled = board({
+    'T-1': makeTask({ column: 'in_progress', conversationId: 7, silenceState: { stalledAt: 5 } }),
+  })
+  assert.equal(stalled.attentionCount, 1)
+  assert.equal(stalled.runningCount, 0)
+  assert.equal(stalled.badgeTone, 'warn')
+  assert.deepEqual(stalled.badgeSummary, { en: '1 needs attention', 'zh-CN': '1 个需处理' })
+
+  const lastError = board({
+    'T-1': makeTask({ column: 'in_progress', conversationId: 7, silenceState: { lastError: 'boom' } }),
+  })
+  assert.equal(lastError.attentionCount, 1)
+  assert.equal(lastError.badgeTone, 'warn')
+
+  const undelivered = board({
+    'T-1': makeTask({ column: 'in_progress', conversationId: 7, kickoffUndelivered: true }),
+  })
+  assert.equal(undelivered.attentionCount, 1)
+  assert.equal(undelivered.badgeTone, 'warn')
+
+  const planAsk = board({
+    'T-1': makeTask({ column: 'in_progress', conversationId: 7, pendingPlanAskId: 'ask-1' }),
+  })
+  assert.equal(planAsk.attentionCount, 1)
+  assert.equal(planAsk.badgeTone, 'warn')
+  // Decided plan (even rejected) is not an attention signal by itself
+  const planDecided = board({
+    'T-1': makeTask({
+      column: 'in_progress',
+      conversationId: 7,
+      pendingPlanAskId: 'ask-1',
+      planApproval: { decision: 'approved', askedAt: 1, decidedAt: 2, askId: 'ask-1' },
+    }),
+  })
+  assert.equal(planDecided.attentionCount, 0)
+  assert.equal(planDecided.runningCount, 1)
+  assert.equal(planDecided.badgeTone, 'accent')
+
+  // conversationMissing flag (persisted by conversation.deleted): error severity
+  const missingFlag = board({
+    'T-1': makeTask({ column: 'in_progress', conversationId: 7, conversationMissing: true }),
+  })
+  assert.equal(missingFlag.attentionCount, 1)
+  assert.equal(missingFlag.badgeTone, 'error')
+  assert.deepEqual(missingFlag.badgeSummary, { en: '1 needs attention', 'zh-CN': '1 个需处理' })
+
+  // Live conversation facts: bound conversation absent from the provided list -> error
+  const absent = board(
+    { 'T-1': makeTask({ column: 'in_progress', conversationId: 7 }) },
+    [conv(8)],
+  )
+  assert.equal(absent.attentionCount, 1)
+  assert.equal(absent.badgeTone, 'error')
+
+  // Descendant error in the bound conversation subtree -> attention at error severity (subtree traversal)
+  const descendantError = board(
+    { 'T-1': makeTask({ column: 'in_progress', conversationId: 7 }) },
+    [conv(7), conv(8, { parentConversationId: 7 }), conv(9, { parentConversationId: 8, status: 'error' })],
+  )
+  assert.equal(descendantError.attentionCount, 1)
+  assert.equal(descendantError.badgeTone, 'error')
+
+  // Blocked descendant / pending ask on the bound conversation -> warn attention (not error, not running)
+  const descendantBlocked = board(
+    { 'T-1': makeTask({ column: 'in_progress', conversationId: 7 }) },
+    [conv(7), conv(9, { parentConversationId: 7, status: 'blocked' })],
+  )
+  assert.equal(descendantBlocked.attentionCount, 1)
+  assert.equal(descendantBlocked.runningCount, 0)
+  assert.equal(descendantBlocked.badgeTone, 'warn')
+
+  const pendingAsk = board(
+    { 'T-1': makeTask({ column: 'in_progress', conversationId: 7 }) },
+    [conv(7, { status: 'blocked', pendingAskCount: 1 })],
+  )
+  assert.equal(pendingAsk.attentionCount, 1)
+  assert.equal(pendingAsk.badgeTone, 'warn')
+
+  // In-review card with a missing conversation: review attention at error severity
+  const reviewMissing = board(
+    { 'T-1': makeTask({ column: 'in_review', conversationId: 7, conversationMissing: true }) },
+    [],
+  )
+  assert.equal(reviewMissing.attentionCount, 1)
+  assert.equal(reviewMissing.reviewCount, 1)
+  assert.equal(reviewMissing.badgeTone, 'error')
+
+  // Mixed review + healthy running: attention wins, hasRunning false, summary carries review part only
+  const mixed = board({
+    'T-1': makeTask({ column: 'in_review', conversationId: 7, submission: { summary: 'done', submittedAt: 3 } }),
+    'T-2': makeTask({ id: 'T-2', column: 'in_progress', conversationId: 8 }),
+  })
+  assert.equal(mixed.attentionCount, 1)
+  assert.equal(mixed.reviewCount, 1)
+  assert.equal(mixed.runningCount, 1)
+  assert.equal(mixed.hasRunning, false)
+  assert.equal(mixed.badgeTone, 'warn')
+  assert.deepEqual(mixed.badgeSummary, { en: '1 awaiting review', 'zh-CN': '1 个待验收' })
+
+  // Review + other attention: combined summary with both parts (EN pluralization included)
+  const combined = board({
+    'T-1': makeTask({ column: 'in_review', conversationId: 7, submission: { summary: 'done', submittedAt: 3 } }),
+    'T-2': makeTask({ id: 'T-2', column: 'in_progress', conversationId: 8, silenceState: { stalledAt: 5 } }),
+    'T-3': makeTask({ id: 'T-3', column: 'in_progress', conversationId: 9, silenceState: { stalledAt: 6 } }),
+  })
+  assert.equal(combined.attentionCount, 3)
+  assert.equal(combined.reviewCount, 1)
+  assert.equal(combined.badgeTone, 'warn')
+  assert.deepEqual(combined.badgeSummary, { en: '1 awaiting review · 2 need attention', 'zh-CN': '1 个待验收 · 2 个需处理' })
+
+  // Archived cards are excluded from every badge count even in active-ish columns
+  const archived = board({
+    'T-1': makeTask({ column: 'in_review', archived: true, conversationId: 7 }),
+    'T-2': makeTask({ id: 'T-2', column: 'in_progress', archived: true, conversationId: 8 }),
+  })
+  assert.equal(archived.attentionCount, 0)
+  assert.equal(archived.reviewCount, 0)
+  assert.equal(archived.runningCount, 0)
+  assert.equal(archived.badgeTone, 'neutral')
+  assert.equal(archived.badgeSummary, undefined)
+})
+
+test('tasks-unit10: subtreeAttentionFlags collects error and blocked/ask facts in one cycle-safe walk', { timeout: 60_000 }, () => {
+  const conv = (id: number, over: Record<string, unknown> = {}) =>
+    ({
+      id,
+      title: `c${id}`,
+      profileId: 'assistant',
+      tags: [],
+      cwd: '/repo',
+      model: 'faux/faux-1',
+      thinkingLevel: '',
+      status: 'idle',
+      stateChangeSeq: 1,
+      completionSeq: 0,
+      unread: false,
+      pinned: false,
+      pendingAskCount: 0,
+      createdAt: 1,
+      updatedAt: 1,
+      ...over,
+    }) as never as import('@helmx/protocol').ConversationSummary
+
+  const quiet = subtreeAttentionFlags(1, [conv(1), conv(2, { parentConversationId: 1 })])
+  assert.deepEqual({ ...quiet }, { error: false, blockedOrAsk: false })
+
+  const errored = subtreeAttentionFlags(1, [conv(1), conv(2, { parentConversationId: 1, status: 'error' })])
+  assert.deepEqual({ ...errored }, { error: true, blockedOrAsk: false })
+
+  const asked = subtreeAttentionFlags(1, [conv(1, { pendingAskCount: 2 })])
+  assert.deepEqual({ ...asked }, { error: false, blockedOrAsk: true })
+
+  // Root itself counts; cycle defense terminates
+  const rootBlocked = subtreeAttentionFlags(1, [conv(1, { status: 'blocked' })])
+  assert.deepEqual({ ...rootBlocked }, { error: false, blockedOrAsk: true })
+  const cyclic = [conv(1), conv(2, { parentConversationId: 3 }), conv(3, { parentConversationId: 2, status: 'error' })]
+  assert.deepEqual({ ...subtreeAttentionFlags(1, cyclic) }, { error: false, blockedOrAsk: false })
+
+  // Dirty-check key: stable serialization of the badge tuple
+  assert.equal(
+    taskBoardBadgeKey({ attentionCount: 1, reviewCount: 1, runningCount: 0, hasRunning: false, badgeTone: 'warn' }),
+    taskBoardBadgeKey({ attentionCount: 1, reviewCount: 1, runningCount: 0, hasRunning: false, badgeTone: 'warn' }),
+  )
+  assert.notEqual(
+    taskBoardBadgeKey({ attentionCount: 1, reviewCount: 1, runningCount: 0, hasRunning: false, badgeTone: 'warn' }),
+    taskBoardBadgeKey({ attentionCount: 1, reviewCount: 1, runningCount: 0, hasRunning: false, badgeTone: 'error' }),
+  )
+
+  // Sidebar badge declaration constant: exact Contract A field names against the board doc fields
+  assert.deepEqual({ ...TASK_BOARD_SIDEBAR_BADGE }, {
+    doc: 'board',
+    countField: 'attentionCount',
+    toneField: 'badgeTone',
+    dotField: 'hasRunning',
+    summaryField: 'badgeSummary',
+  })
 })

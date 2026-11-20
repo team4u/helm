@@ -15,7 +15,7 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { renderToString } from 'react-dom/server'
 import type { ConversationSummary } from '@helmx/protocol'
-import { ARCHIVED_TAG } from '../src/shell/sidebar-model.js'
+import { ARCHIVED_TAG, type ResolvedSidebarBadge, type SidebarViewItem } from '../src/shell/sidebar-model.js'
 import type { ConversationBackgroundIndex } from '../src/shell/background-activity-model.js'
 import {
   buildOverviewCards,
@@ -578,5 +578,103 @@ test('ConversationOverview data-ready gate: loading state before the first snaps
       root?.unmount()
     })
     container.remove()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// 移动端快捷导航簇徽标（sidebar.item badge：计数徽标 / 静默灯点 / 摘要 aria）
+// ---------------------------------------------------------------------------
+
+function quickNavItem(badge?: SidebarViewItem['badge']): SidebarViewItem {
+  return {
+    key: 'builtin:tasks/task-board',
+    pluginId: 'builtin:tasks',
+    label: 'Task Board',
+    icon: 'check-square',
+    order: 5,
+    target: { kind: 'screen', pluginId: 'builtin:tasks', screenId: 'board' },
+    badge,
+  }
+}
+
+const QUIET_INDICATOR = {
+  needsAttentionCount: 0,
+  runningCount: 0,
+  unreadDoneCount: 0,
+  totalCount: 0,
+  tone: null,
+} as unknown as Parameters<typeof MobileQuickNav>[0]['indicator']
+
+interface QuickNavMount {
+  container: HTMLDivElement
+  unmount(): Promise<void>
+}
+
+async function mountQuickNav(
+  item: SidebarViewItem | null,
+  badge: ResolvedSidebarBadge | null,
+): Promise<QuickNavMount> {
+  const store = overviewStore({ conversations: [conv({ id: 50 })] })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  await act(async () => {
+    root = createRoot(container)
+    root.render(
+      e(
+        HelmxExternalStoreContext.Provider,
+        { value: store },
+        e(MobileQuickNav, { indicator: QUIET_INDICATOR, quickEntry: item, quickEntryBadge: badge }),
+      ),
+    )
+  })
+  return {
+    container,
+    unmount: async () => {
+      await act(async () => {
+        root?.unmount()
+      })
+      container.remove()
+    },
+  }
+}
+
+test('MobileQuickNav: numeric badge, quiet dot, summary aria-label and zero noise', { timeout: 60_000 }, async () => {
+  const restore = stubMatchMedia(true)
+  const mounts: QuickNavMount[] = []
+  try {
+    // 计数徽标：tone 上色 + 计数 + 摘要进 title/aria
+    const numeric = await mountQuickNav(quickNavItem(), { count: 4, tone: 'error', dot: false, summary: '2 awaiting review · 2 blocked' })
+    mounts.push(numeric)
+    const numericBtn = numeric.container.querySelector<HTMLButtonElement>('.mobile-quick-btn')
+    assert.ok(numericBtn !== null, 'the mobile quick entry button renders')
+    assert.equal(numericBtn.getAttribute('aria-label'), 'Task Board · 2 awaiting review · 2 blocked', 'the badge summary is appended to the accessible label')
+    const badgeEl = numeric.container.querySelector<HTMLElement>('.mobile-quick-badge')
+    assert.ok(badgeEl !== null, 'the numeric badge renders')
+    assert.equal(badgeEl.getAttribute('data-tone'), 'error')
+    assert.equal(badgeEl.textContent, '4')
+    assert.ok(numeric.container.querySelector('.mobile-quick-dot') === null, 'no dot alongside a count badge')
+
+    // 99+ 上限折叠
+    const capped = await mountQuickNav(quickNavItem(), { count: 120, tone: 'warn', dot: false, summary: '' })
+    mounts.push(capped)
+    assert.equal(capped.container.querySelector('.mobile-quick-badge')?.textContent, '99+')
+
+    // 静默灯点：无数字、tone accent、摘要仍进 aria
+    const dotted = await mountQuickNav(quickNavItem(), { count: 0, tone: 'accent', dot: true, summary: '2 running quietly' })
+    mounts.push(dotted)
+    assert.ok(dotted.container.querySelector('.mobile-quick-dot') !== null, 'the quiet dot renders')
+    assert.equal(dotted.container.querySelector('.mobile-quick-dot')?.getAttribute('data-tone'), 'accent')
+    assert.ok(dotted.container.querySelector('.mobile-quick-badge') === null, 'no count badge in dot mode')
+    assert.equal(dotted.container.querySelector<HTMLButtonElement>('.mobile-quick-btn')?.getAttribute('aria-label'), 'Task Board · 2 running quietly')
+
+    // 无信号（null）：零徽标残留，label 原样
+    const silent = await mountQuickNav(quickNavItem(), null)
+    mounts.push(silent)
+    assert.ok(silent.container.querySelector('.mobile-quick-badge') === null && silent.container.querySelector('.mobile-quick-dot') === null, 'zero badge residue when the badge is silent')
+    assert.equal(silent.container.querySelector<HTMLButtonElement>('.mobile-quick-btn')?.getAttribute('aria-label'), 'Task Board')
+  } finally {
+    for (const mount of mounts.reverse()) await mount.unmount()
+    restore()
   }
 })

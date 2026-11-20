@@ -8,19 +8,23 @@
  * mobile tab and the selected task drawer persist in ScreenProps.params
  * (sp.* / ssp.* deep-link namespaces) — the only navigation mechanism.
  *
- * Layout: desktop four-column board (needsAttention pinned to the top, stable
- * createdAt ordering so streaming never jumps cards) + a mobile <=680px
- * clear-down flow with four count capsules (attention / review / running /
- * backlog, done switchable). Card bodies of started tasks open the live
- * conversation drawer (720px) in place; the card corner keeps detail and
- * split-view affordances.
+ * Layout (Notion-board alignment):
+ * - desktop: calm column tracks (subtle surface + semantic dot + tabular
+ *   count), a compact command bar (the host ScreenHost already renders the
+ *   pane title — no duplicated big header) and a tight filter strip;
+ * - mobile (<=680px): a horizontal scrollable status pill strip plus a
+ *   grouped collapsible `all` view (attention first, done collapsed by
+ *   default) so the board never lands on an empty bucket; property selects
+ *   collapse behind a filter toggle to keep cards above the fold;
+ * - card bodies of started tasks open the live conversation drawer in place;
+ *   the card corner keeps detail and split-view (desktop) affordances.
  */
 import { useMemo, useState } from 'react'
+import { useId } from 'react'
 import type { ReactNode } from 'react'
 import type { ScreenProps } from '@helmx/protocol'
 import {
   HelmxIcon,
-  SegmentedControl,
   Select,
   StatusLight,
   formatDurationMs,
@@ -37,13 +41,17 @@ import {
   bucketByColumn,
   bucketMobile,
   collectFilterOptions,
+  countActivePropertyFilters,
   deriveBoardItems,
   filterTaskItems,
   parseTaskBoardDoc,
   parseTaskRecordLenient,
   parseTaskScreenParams,
   TASK_COLUMNS,
+  TASK_COLUMN_TONE,
+  TASK_MOBILE_GROUP_ORDER,
   TASK_MOBILE_TABS,
+  TASK_MOBILE_TAB_TONE,
   type TaskColumn,
   type TaskFilterState,
   type TaskItem,
@@ -69,23 +77,25 @@ import {
   TASK_ACTION_SPLIT_LABEL,
   TASK_ACTION_START,
   TASK_ACTION_START_TITLE,
+  TASK_ARCHIVE_ALL,
+  TASK_ARCHIVE_ALL_TITLE,
+  TASK_ARCHIVING,
   TASK_BOARD_INVALID,
   TASK_BOARD_INVALID_HINT,
   TASK_BOARD_RELOADING,
   TASK_BOARD_RETRY,
-  TASK_BOARD_TITLE,
   TASK_CHAT_TASK,
   TASK_CHAT_TASK_TITLE,
   TASK_DEPS_READY,
   TASK_DEPS_UNKNOWN,
   TASK_DEPS_UNKNOWN_TITLE,
   TASK_DEP_OFF_BOARD_TITLE,
-  TASK_KICKOFF_UNDELIVERED,
-  TASK_KICKOFF_UNDELIVERED_TITLE,
   TASK_ACTION_RESUME_KICKOFF_TITLE,
   TASK_MERGE_AWAIT_REVIEW,
   TASK_ACTION_MERGE_RETRY,
   TASK_ACTION_MERGE_RETRY_TITLE,
+  TASK_MOBILE_PILLS_ARIA,
+  TASK_MOBILE_GROUP_ARIA,
   TASK_PLAN_APPROVED,
   TASK_PLAN_ASK_PENDING,
   TASK_PLAN_REJECTED,
@@ -94,7 +104,9 @@ import {
   TASK_OFF_BOARD_INSPECTING,
   TASK_OFF_BOARD_INSPECT_FAILED,
   TASK_CONTINUE_PROMPT,
+  taskArtifactCount,
   taskCardReworkLine,
+  taskFilterActiveCount,
   taskOffBoardDeps,
   taskOffBoardNotice,
   TASK_EMPTY_HINT,
@@ -107,10 +119,10 @@ import {
   TASK_FILTER_NODE,
   TASK_FILTER_PROJECT,
   TASK_FILTER_RESET,
-  TASK_FLAG_ISOLATED_BRANCH,
-  TASK_FLAG_MERGE_PENDING,
+  TASK_FILTER_TOGGLE_LABEL,
+  TASK_FILTER_TOGGLE_TITLE,
   TASK_FLAG_PLAN_FIRST,
-  TASK_MOBILE_TABS_ARIA,
+  TASK_FLAG_MERGE_PENDING,
   TASK_NEW_TASK,
   TASK_NEW_TASK_TITLE,
   TASK_SEARCH_CLEAR,
@@ -138,7 +150,6 @@ function lightWord(status: TaskLightStatus): string {
 
 function TaskCard(props: {
   item: TaskItem
-  compact?: boolean
   nowMs: number | undefined
   busy: string | undefined
   onOpenConversation: (item: TaskItem) => void
@@ -170,10 +181,164 @@ function TaskCard(props: {
 
   const submission = task.submission
   const hasMergeMaterial = submission?.branch !== undefined || submission?.worktreePath !== undefined
+  const isSevere = live.lightStatus === 'error'
+
+  const showContinue =
+    task.column === 'in_progress' &&
+    (live.kickoffUndelivered ||
+      live.stalled ||
+      (task.reworkCount > 0 && (live.lightStatus === 'idle' || live.lightStatus === 'done')))
+  const showConversation = hasConversation && task.column !== 'backlog' && !showContinue
+  const showStart = task.column === 'backlog' && live.isReadyToStart
+
+  const statePills: ReactNode[] = []
+  if (task.column === 'backlog' && task.planFirst === true) {
+    statePills.push(
+      <span key="plan-first" className="badge badge-neutral">{t(TASK_FLAG_PLAN_FIRST)}</span>,
+    )
+  }
+  if (task.column === 'in_progress' && live.planAskPending) {
+    statePills.push(<span key="plan-ask" className="badge badge-warn">{t(TASK_PLAN_ASK_PENDING)}</span>)
+  }
+  if (task.column === 'in_progress' && live.planApproval !== undefined) {
+    statePills.push(
+      <span key="plan-approval" className={`badge ${live.planApproval === 'approved' ? 'badge-ok' : 'badge-warn'}`}>
+        {t(live.planApproval === 'approved' ? TASK_PLAN_APPROVED : TASK_PLAN_REJECTED)}
+      </span>,
+    )
+  }
+  if (task.mergePending === true && (task.column === 'in_progress' || task.column === 'in_review')) {
+    statePills.push(
+      <span key="merge" className="badge badge-accent">
+        {t(task.column === 'in_review' ? TASK_MERGE_AWAIT_REVIEW : TASK_FLAG_MERGE_PENDING)}
+      </span>,
+    )
+  }
+  if (task.reworkCount > 0 && task.column !== 'done') {
+    statePills.push(
+      <span key="reworked" className="badge badge-neutral" title={task.lastReworkFeedback}>
+        {taskReworkedTimes(task.reworkCount, locale)}
+      </span>,
+    )
+  }
+
+  const footerActions: ReactNode[] = []
+  if (showContinue) {
+    footerActions.push(
+      <button
+        key="continue"
+        type="button"
+        className="btn btn-xs btn-primary"
+        disabled={props.busy !== undefined}
+        title={
+          live.kickoffUndelivered
+            ? t(TASK_ACTION_RESUME_KICKOFF_TITLE)
+            : live.stalled
+              ? t(TASK_ACTION_CONTINUE_TITLE)
+              : t(TASK_ACTION_CONTINUE_REWORK_TITLE)
+        }
+        onClick={(e) => {
+          e.stopPropagation()
+          props.onContinue(item)
+        }}
+      >
+        <HelmxIcon name="play" size={11} />
+        <span>{t(TASK_ACTION_CONTINUE)}</span>
+      </button>,
+    )
+  }
+  if (showConversation) {
+    footerActions.push(
+      <button
+        key="conversation"
+        type="button"
+        className="btn btn-xs btn-ghost"
+        disabled={props.busy !== undefined}
+        title={t(TASK_ACTION_OPEN_CONV_BTN_TITLE)}
+        onClick={(e) => {
+          e.stopPropagation()
+          props.onOpenConversation(item)
+        }}
+      >
+        <HelmxIcon name="message-square" size={11} />
+        <span>{t(TASK_ACTION_OPEN_CONV_BTN)}</span>
+      </button>,
+    )
+  }
+  if (showStart) {
+    footerActions.push(
+      <button
+        key="start"
+        type="button"
+        className="btn btn-xs btn-primary"
+        disabled={props.busy !== undefined}
+        title={t(TASK_ACTION_START_TITLE)}
+        onClick={(e) => {
+          e.stopPropagation()
+          props.onStart(task.id)
+        }}
+      >
+        <HelmxIcon name="play" size={11} />
+        <span>{t(TASK_ACTION_START)}</span>
+      </button>,
+    )
+  }
+  if (task.column === 'in_review') {
+    footerActions.push(
+      <button
+        key="approve"
+        type="button"
+        className="btn btn-xs btn-primary"
+        disabled={props.busy !== undefined}
+        title={t(TASK_ACTION_APPROVE_TITLE)}
+        onClick={(e) => {
+          e.stopPropagation()
+          props.onApprove(task.id, 'close_only')
+        }}
+      >
+        <HelmxIcon name="check" size={11} />
+        <span>{t(TASK_ACTION_APPROVE)}</span>
+      </button>,
+    )
+    if (hasMergeMaterial) {
+      footerActions.push(
+        <button
+          key="merge"
+          type="button"
+          className="btn btn-xs"
+          disabled={props.busy !== undefined}
+          title={t(task.mergePending === true ? TASK_ACTION_MERGE_RETRY_TITLE : TASK_ACTION_MERGE_CLOSE_TITLE)}
+          onClick={(e) => {
+            e.stopPropagation()
+            props.onApprove(task.id, 'merge_and_close')
+          }}
+        >
+          <HelmxIcon name="git-pull-request" size={11} />
+          <span>{t(task.mergePending === true ? TASK_ACTION_MERGE_RETRY : TASK_ACTION_MERGE_CLOSE)}</span>
+        </button>,
+      )
+    }
+    footerActions.push(
+      <button
+        key="rework"
+        type="button"
+        className="btn btn-xs btn-ghost"
+        disabled={props.busy !== undefined}
+        title={t(TASK_ACTION_REWORK_TITLE)}
+        onClick={(e) => {
+          e.stopPropagation()
+          props.onRework(task.id)
+        }}
+      >
+        <HelmxIcon name="rotate-ccw" size={11} />
+        <span>{t(TASK_ACTION_REWORK)}</span>
+      </button>,
+    )
+  }
 
   return (
     <div
-      className={`task-card${live.needsAttention ? ' is-attention' : ''}${hasConversation ? '' : ' is-clickless'}`}
+      className={`task-card${live.needsAttention ? ' is-attention' : ''}${isSevere ? ' is-severe' : ''}${hasConversation ? '' : ' is-clickless'}`}
       data-task-id={task.id}
       data-column={task.column}
       role="button"
@@ -189,18 +354,8 @@ function TaskCard(props: {
     >
       <div className="task-card-header">
         <StatusLight status={lightWord(live.lightStatus)} label={taskCardLightLabel(live.lightStatus, live.approvalPending, locale)} />
-        <div className="task-card-main">
-          <div className="task-card-title-row">
-            <span className="task-card-title" title={task.title}>{task.title}</span>
-            <span className="task-card-id">{task.id}</span>
-          </div>
-          <div className="task-card-meta">
-            <span className="mono">{task.assigneeProfileId}</span>
-            {task.nodeId !== undefined ? <span className="mono">@{task.nodeId}</span> : null}
-            {live.projectLabel !== '' ? <span title={task.cwd ?? undefined}>{live.projectLabel}</span> : null}
-          </div>
-        </div>
-        <div className="task-card-tools">
+        <span className="task-card-title" title={task.title}>{task.title}</span>
+        <span className="task-card-tools">
           <button
             type="button"
             className="btn btn-xs btn-icon-xs"
@@ -216,7 +371,7 @@ function TaskCard(props: {
           {hasConversation ? (
             <button
               type="button"
-              className="btn btn-xs btn-icon-xs"
+              className="btn btn-xs btn-icon-xs task-card-split"
               title={t(TASK_ACTION_SPLIT)}
               aria-label={t(TASK_ACTION_SPLIT_LABEL)}
               onClick={(e) => {
@@ -227,17 +382,37 @@ function TaskCard(props: {
               <HelmxIcon name="columns" size={11} />
             </button>
           ) : null}
-        </div>
+        </span>
       </div>
 
+      <div className="task-card-props">
+        <span className="task-card-id mono">{task.id}</span>
+        <span className="mono">{task.assigneeProfileId}</span>
+        {task.nodeId !== undefined ? <span className="mono">@{task.nodeId}</span> : null}
+        {live.projectLabel !== '' ? (
+          <span className="task-card-project" title={task.cwd ?? undefined}>{live.projectLabel}</span>
+        ) : null}
+        {elapsed !== undefined ? <span className="task-card-elapsed mono tabular-nums">{elapsed}</span> : null}
+      </div>
+
+      {statePills.length > 0 ? <div className="task-card-flags">{statePills}</div> : null}
+
       {live.liveSummary !== '' ? (
-        <div className={`task-card-live${live.lightStatus === 'error' ? ' is-error' : live.needsAttention ? ' is-attention' : ''}`}>
-          <span className="task-card-live-text" title={live.liveSummary}>{live.liveSummary}</span>
-          {elapsed !== undefined ? <span className="task-card-elapsed tabular-nums">{elapsed}</span> : null}
+        <div
+          className={`task-card-live${isSevere ? ' is-error' : live.needsAttention ? ' is-attention' : ''}`}
+          title={live.liveSummary}
+        >
+          <span className="task-card-live-text">{live.liveSummary}</span>
         </div>
-      ) : elapsed !== undefined ? (
-        <div className="task-card-live">
-          <span className="task-card-elapsed tabular-nums">{elapsed}</span>
+      ) : null}
+
+      {task.column === 'in_progress' &&
+      task.reworkCount > 0 &&
+      task.lastReworkFeedback !== undefined &&
+      task.lastReworkFeedback !== '' ? (
+        <div className="task-card-rework" title={taskCardReworkLine(task.lastReworkFeedback, locale)}>
+          <HelmxIcon name="rotate-ccw" size={11} />
+          <span className="task-card-rework-text">{taskCardReworkLine(task.lastReworkFeedback, locale)}</span>
         </div>
       ) : null}
 
@@ -245,7 +420,7 @@ function TaskCard(props: {
         <div className="task-card-deps">
           {live.depsUnknown ? (
             <span className="task-card-deps-waiting" title={t(TASK_DEPS_UNKNOWN_TITLE)}>
-              <HelmxIcon name="help-circle" size={11} />
+              <HelmxIcon name="alert-circle" size={11} />
               <span>{t(TASK_DEPS_UNKNOWN)}</span>
             </span>
           ) : live.blockedBy.length > 0 ? (
@@ -261,187 +436,39 @@ function TaskCard(props: {
               {taskOffBoardDeps(live.offBoardDeps.length, locale)}
             </span>
           ) : null}
-          {task.planFirst === true ? <span className="badge badge-neutral">{t(TASK_FLAG_PLAN_FIRST)}</span> : null}
         </div>
       ) : null}
 
-      {task.column === 'in_progress' && live.planAskPending ? (
-        <div className="task-card-flags">
-          <span className="badge badge-warn">{t(TASK_PLAN_ASK_PENDING)}</span>
-        </div>
-      ) : null}
-      {task.column === 'in_progress' && live.planApproval !== undefined ? (
-        <div className="task-card-flags">
-          <span className={`badge ${live.planApproval === 'approved' ? 'badge-ok' : 'badge-warn'}`}>
-            {t(live.planApproval === 'approved' ? TASK_PLAN_APPROVED : TASK_PLAN_REJECTED)}
-          </span>
-        </div>
-      ) : null}
-
-      {task.mergePending === true && (task.column === 'in_progress' || task.column === 'in_review') ? (
-        <div className="task-card-flags">
-          <span className="badge badge-accent">
-            {t(task.column === 'in_review' ? TASK_MERGE_AWAIT_REVIEW : TASK_FLAG_MERGE_PENDING)}
-          </span>
-        </div>
-      ) : null}
-
-      {task.column === 'in_progress' && live.activeChildCount > 0 ? (
-        <div className="task-card-flags">
-          <span className="badge badge-neutral">{taskLightLabel('background', locale)}</span>
-        </div>
-      ) : null}
-
-      {task.column === 'in_progress' && live.kickoffUndelivered ? (
-        <div className="task-card-rework task-card-deps-waiting" title={t(TASK_KICKOFF_UNDELIVERED_TITLE)}>
-          <HelmxIcon name="alert-triangle" size={11} />
-          <span className="task-card-rework-text">{t(TASK_KICKOFF_UNDELIVERED)}</span>
-        </div>
-      ) : null}
-
-      {task.column === 'in_progress' &&
-      task.reworkCount > 0 &&
-      task.lastReworkFeedback !== undefined &&
-      task.lastReworkFeedback !== '' ? (
-        <div className="task-card-rework" title={taskCardReworkLine(task.lastReworkFeedback, locale)}>
-          <HelmxIcon name="rotate-ccw" size={11} />
-          <span className="task-card-rework-text">{taskCardReworkLine(task.lastReworkFeedback, locale)}</span>
-        </div>
-      ) : null}
-
-      {submission !== undefined && (task.column === 'in_review' || task.column === 'done') ? (
+      {task.column === 'in_review' && submission !== undefined ? (
         <div className="task-card-submission">
-          <div className="task-card-submission-title">
-            <HelmxIcon name="check-circle" size={11} />
-            <span>{submission.summary}</span>
-          </div>
-          {submission.verification !== undefined ? (
-            <div className="task-card-submission-facts" title={submission.verification}>
-              <HelmxIcon name="shield" size={11} />
-              <span>{submission.verification}</span>
-            </div>
-          ) : null}
+          <div className="task-card-submission-summary" title={submission.summary}>{submission.summary}</div>
           <div className="task-card-submission-facts">
+            {submission.verification !== undefined ? (
+              <span className="task-card-fact" title={submission.verification}>
+                <HelmxIcon name="shield" size={11} />
+                <span>{submission.verification}</span>
+              </span>
+            ) : null}
             {submission.branch !== undefined ? <span className="mono">{submission.branch}</span> : null}
-            {submission.changedFiles !== undefined && submission.changedFiles.length > 0
-              ? <span>{taskChangedFiles(submission.changedFiles.length, locale)}</span>
-              : null}
+            {submission.changedFiles !== undefined && submission.changedFiles.length > 0 ? (
+              <span>{taskChangedFiles(submission.changedFiles.length, locale)}</span>
+            ) : null}
+            {submission.artifactIds !== undefined && submission.artifactIds.length > 0 ? (
+              <span>{taskArtifactCount(submission.artifactIds.length, locale)}</span>
+            ) : null}
           </div>
         </div>
       ) : null}
 
-      {task.reworkCount > 0 && task.column !== 'done' ? (
-        <div className="task-card-flags">
-          <span className="badge badge-neutral" title={task.lastReworkFeedback}>{taskReworkedTimes(task.reworkCount, locale)}</span>
-        </div>
+      {task.column === 'done' && submission !== undefined ? (
+        <div className="task-card-done-line" title={submission.summary}>{submission.summary}</div>
       ) : null}
 
-      <div className="task-card-footer">
-        <div className="task-card-footer-actions">
-          {task.column === 'in_progress' &&
-          (live.kickoffUndelivered ||
-            live.stalled ||
-            (task.reworkCount > 0 && (live.lightStatus === 'idle' || live.lightStatus === 'done'))) ? (
-            <button
-              type="button"
-              className="btn btn-xs"
-              disabled={props.busy !== undefined}
-              title={
-                live.kickoffUndelivered
-                  ? t(TASK_ACTION_RESUME_KICKOFF_TITLE)
-                  : live.stalled
-                    ? t(TASK_ACTION_CONTINUE_TITLE)
-                    : t(TASK_ACTION_CONTINUE_REWORK_TITLE)
-              }
-              onClick={(e) => {
-                e.stopPropagation()
-                props.onContinue(item)
-              }}
-            >
-              <HelmxIcon name="play" size={11} />
-              <span>{t(TASK_ACTION_CONTINUE)}</span>
-            </button>
-          ) : null}
-          {hasConversation && task.column !== 'backlog' ? (
-            <button
-              type="button"
-              className="btn btn-xs btn-ghost"
-              disabled={props.busy !== undefined}
-              title={t(TASK_ACTION_OPEN_CONV_BTN_TITLE)}
-              onClick={(e) => {
-                e.stopPropagation()
-                props.onOpenConversation(item)
-              }}
-            >
-              <HelmxIcon name="message-square" size={11} />
-              <span>{t(TASK_ACTION_OPEN_CONV_BTN)}</span>
-            </button>
-          ) : null}
-          {task.column === 'backlog' && live.isReadyToStart ? (
-            <button
-              type="button"
-              className="btn btn-xs"
-              disabled={props.busy !== undefined}
-              title={t(TASK_ACTION_START_TITLE)}
-              onClick={(e) => {
-                e.stopPropagation()
-                props.onStart(task.id)
-              }}
-            >
-              <HelmxIcon name="play" size={11} />
-              <span>{t(TASK_ACTION_START)}</span>
-            </button>
-          ) : null}
-          {task.column === 'in_review' ? (
-            <>
-              <button
-                type="button"
-                className="btn btn-xs"
-                disabled={props.busy !== undefined}
-                title={t(TASK_ACTION_APPROVE_TITLE)}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  props.onApprove(task.id, 'close_only')
-                }}
-              >
-                <HelmxIcon name="check" size={11} />
-                <span>{t(TASK_ACTION_APPROVE)}</span>
-              </button>
-              {hasMergeMaterial ? (
-                <button
-                  type="button"
-                  className="btn btn-xs btn-ghost"
-                  disabled={props.busy !== undefined}
-                  title={t(task.mergePending === true ? TASK_ACTION_MERGE_RETRY_TITLE : TASK_ACTION_MERGE_CLOSE_TITLE)}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    props.onApprove(task.id, 'merge_and_close')
-                  }}
-                >
-                  <HelmxIcon name="git-pull-request" size={11} />
-                  <span>{t(task.mergePending === true ? TASK_ACTION_MERGE_RETRY : TASK_ACTION_MERGE_CLOSE)}</span>
-                </button>
-              ) : null}
-              <button
-                type="button"
-                className="btn btn-xs btn-ghost"
-                disabled={props.busy !== undefined}
-                title={t(TASK_ACTION_REWORK_TITLE)}
-                onClick={(e) => {
-                  e.stopPropagation()
-                  props.onRework(task.id)
-                }}
-              >
-                <HelmxIcon name="rotate-ccw" size={11} />
-                <span>{t(TASK_ACTION_REWORK)}</span>
-              </button>
-            </>
-          ) : null}
-          {task.autoMerge !== true && task.column !== 'done' && task.column !== 'backlog' ? (
-            <span className="badge badge-neutral">{t(TASK_FLAG_ISOLATED_BRANCH)}</span>
-          ) : null}
+      {footerActions.length > 0 ? (
+        <div className="task-card-footer">
+          <div className="task-card-footer-actions">{footerActions}</div>
         </div>
-      </div>
+      ) : null}
     </div>
   )
 }
@@ -534,6 +561,7 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
   const ctx = usePluginContext()
   const locale = usePluginLocale()
   const t = usePluginTranslator()
+  const filtersId = useId()
 
   const rawBoard = usePluginDoc<unknown>('board')
   const board = useMemo(() => parseTaskBoardDoc(rawBoard), [rawBoard])
@@ -546,6 +574,7 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
 
   const params = parseTaskScreenParams(props.params)
   const filter = params.filter
+  const activeTab = params.tab
 
   const [queryDraft, setQueryDraft] = useState(params.filter.query)
   const [createOpen, setCreateOpen] = useState(false)
@@ -553,6 +582,11 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
   const [mergeConfirmId, setMergeConfirmId] = useState<string | undefined>(undefined)
   const [busyTaskId, setBusyTaskId] = useState<string | undefined>(undefined)
   const [actionError, setActionError] = useState<string | null>(null)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const [archivingDone, setArchivingDone] = useState(false)
+  // Collapsed mobile `all` groups (done starts collapsed so finished work never
+  // buries active cards; every group is one tap away).
+  const [collapsedGroups, setCollapsedGroups] = useState<ReadonlySet<string>>(() => new Set(['done']))
 
   const tasksById = useMemo(() => new Map((board?.tasks ?? []).map((task) => [task.id, task])), [board])
   const items = useMemo(
@@ -583,6 +617,11 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
     props.setParams({ [key]: value === '' ? undefined : value })
   }
 
+  const resetFilters = (): void => {
+    setQueryDraft('')
+    props.setParams({ q: undefined, project: undefined, assignee: undefined, node: undefined })
+  }
+
   const runTaskAction = (taskId: string, action: () => Promise<unknown>): void => {
     if (busyTaskId !== undefined) return
     setBusyTaskId(taskId)
@@ -594,6 +633,28 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
       })
       .finally(() => {
         setBusyTaskId(undefined)
+      })
+  }
+
+  /** Sequential batch archive of every visible done card; stops and surfaces the first failure honestly. */
+  const archiveAllDone = (): void => {
+    if (archivingDone || busyTaskId !== undefined) return
+    const ids = columns.done.map((item) => item.task.id)
+    if (ids.length === 0) return
+    setArchivingDone(true)
+    setActionError(null)
+    void (async () => {
+      for (const taskId of ids) {
+        await ctx.callAction('archive', { taskId })
+      }
+    })()
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err)
+        setActionError(message)
+        ctx.notify(message, 'error')
+      })
+      .finally(() => {
+        setArchivingDone(false)
       })
   }
 
@@ -679,40 +740,146 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
 
   const hasActiveFilter =
     filter.query !== '' || filter.project !== '' || filter.assignee !== '' || filter.node !== ''
+  const activeFilterCount = countActivePropertyFilters(filter)
+  const doneCount = columns.done.length
+  const openCreate = (): void => setCreateOpen(true)
+
+  const selectMobileTab = (tab: TaskMobileTab): void => {
+    // `all` is the default grouped view: clear the param so the canonical URL
+    // stays minimal; every concrete bucket persists tab=<id> for deep links.
+    props.setParams({ tab: tab === 'all' ? undefined : tab })
+  }
+
+  const toggleGroup = (tab: Exclude<TaskMobileTab, 'all'>): void => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev)
+      if (next.has(tab)) next.delete(tab)
+      else next.add(tab)
+      return next
+    })
+  }
+
+  const planButton = (
+    <button
+      type="button"
+      className="btn btn-sm btn-ghost"
+      title={t(TASK_CHAT_TASK_TITLE)}
+      onClick={() => ctx.openScreen(`agent:${config.defaultPlannerProfile || 'assistant'}`)}
+    >
+      <HelmxIcon name="message-square" size={12} />
+      <span>{t(TASK_CHAT_TASK)}</span>
+    </button>
+  )
+  const newTaskButton = (
+    <button
+      type="button"
+      className="btn btn-sm btn-primary"
+      title={t(TASK_NEW_TASK_TITLE)}
+      onClick={openCreate}
+    >
+      <HelmxIcon name="plus" size={12} />
+      <span>{t(TASK_NEW_TASK)}</span>
+    </button>
+  )
+
+  const mobilePill = (tab: TaskMobileTab): ReactNode => {
+    const count = tab === 'all' ? filtered.length : mobileBuckets[tab].length
+    const isActive = activeTab === tab
+    return (
+      <button
+        key={tab}
+        type="button"
+        role="tab"
+        aria-selected={isActive}
+        className={`task-mobile-pill${isActive ? ' is-active' : ''}${count === 0 && !isActive ? ' is-muted' : ''}`}
+        onClick={() => selectMobileTab(tab)}
+      >
+        {tab !== 'all' ? <span className="task-tone-dot" data-tone={TASK_MOBILE_TAB_TONE[tab]} /> : null}
+        <span className="task-mobile-pill-label">{taskMobileTabLabel(tab, locale)}</span>
+        <span className="task-mobile-pill-count tabular-nums">{count}</span>
+      </button>
+    )
+  }
+
+  /** One grouped section of the mobile `all` view (Notion-style collapsible status group). */
+  const mobileGroup = (tab: Exclude<TaskMobileTab, 'all'>): ReactNode => {
+    const groupItems = mobileBuckets[tab]
+    if (groupItems.length === 0) return null
+    const collapsed = collapsedGroups.has(tab)
+    return (
+      <div key={tab} className="task-mobile-group" data-group={tab}>
+        <div className="task-mobile-group-header">
+          <button
+            type="button"
+            className="task-mobile-group-toggle"
+            aria-expanded={!collapsed}
+            aria-label={`${t(TASK_MOBILE_GROUP_ARIA)}: ${taskMobileTabLabel(tab, locale)}`}
+            onClick={() => toggleGroup(tab)}
+          >
+            <span className="task-tone-dot" data-tone={TASK_MOBILE_TAB_TONE[tab]} />
+            <span className="task-mobile-group-label">{taskMobileTabLabel(tab, locale)}</span>
+            <span className="task-mobile-group-count tabular-nums">{groupItems.length}</span>
+            <HelmxIcon name={collapsed ? 'chevron-right' : 'chevron-down'} size={12} className="task-mobile-group-chevron" />
+          </button>
+          {tab === 'backlog' ? (
+            <button
+              type="button"
+              className="btn btn-xs btn-icon-xs task-mobile-group-add"
+              title={t(TASK_NEW_TASK_TITLE)}
+              aria-label={t(TASK_NEW_TASK)}
+              onClick={openCreate}
+            >
+              <HelmxIcon name="plus" size={11} />
+            </button>
+          ) : null}
+          {tab === 'done' ? (
+            <button
+              type="button"
+              className="btn btn-xs btn-icon-xs task-mobile-group-archive"
+              disabled={archivingDone}
+              title={t(TASK_ARCHIVE_ALL_TITLE)}
+              aria-label={t(TASK_ARCHIVE_ALL)}
+              onClick={archiveAllDone}
+            >
+              <HelmxIcon name="archive" size={11} />
+            </button>
+          ) : null}
+        </div>
+        {collapsed ? null : (
+          <div className="task-mobile-group-body">
+            {groupItems.map(renderCard)}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // 移动端列表：筛选清空（filtered.length === 0）时统一由底部带 Reset 的
+  // filtered-empty 面板兜底，这里不再叠一块内嵌空态；单 tab 空块仅在
+  // 「有筛选结果但该桶为空」时渲染（如 review 桶 0 卡）。
+  const mobileList = activeTab === 'all' ? (
+    <>{TASK_MOBILE_GROUP_ORDER.map(mobileGroup)}</>
+  ) : mobileBuckets[activeTab].length > 0 ? (
+    mobileBuckets[activeTab].map(renderCard)
+  ) : filtered.length > 0 ? (
+    <div className="task-board-empty">
+      <div className="task-board-empty-title">{t(TASK_EMPTY_NO_MATCH)}</div>
+      <div className="task-board-empty-hint text-subtle">{t(TASK_EMPTY_HINT_NO_MATCH)}</div>
+    </div>
+  ) : null
 
   return (
     <div className="task-board" data-view="task-board">
+      {/* Compact command bar — the host ScreenHost already renders the pane title. */}
       <div className="task-board-topbar">
-        <div className="task-board-title-wrap">
-          <div className="task-board-title">
-            <HelmxIcon name="check-square" size={16} />
-            <span>{t(TASK_BOARD_TITLE)}</span>
-          </div>
-          <span className="task-board-subtitle text-subtle">
-            {boardLoaded && board !== undefined
-              ? taskBoardStats(board.tasks.length, inFlightCount, columns.in_review.length, locale)
-              : t(TASK_EMPTY_LOADING)}
-          </span>
-        </div>
+        <span className="task-board-subtitle text-subtle">
+          {boardLoaded && board !== undefined
+            ? taskBoardStats(board.tasks.length, inFlightCount, columns.in_review.length, locale)
+            : t(TASK_EMPTY_LOADING)}
+        </span>
         <div className="task-board-actions">
-          <button
-            type="button"
-            className="btn btn-sm btn-ghost"
-            title={t(TASK_CHAT_TASK_TITLE)}
-            onClick={() => ctx.openScreen(`agent:${config.defaultPlannerProfile || 'assistant'}`)}
-          >
-            <HelmxIcon name="message-square" size={12} />
-            <span>{t(TASK_CHAT_TASK)}</span>
-          </button>
-          <button
-            type="button"
-            className="btn btn-sm"
-            title={t(TASK_NEW_TASK_TITLE)}
-            onClick={() => setCreateOpen(true)}
-          >
-            <HelmxIcon name="plus" size={12} />
-            <span>{t(TASK_NEW_TASK)}</span>
-          </button>
+          {planButton}
+          {newTaskButton}
         </div>
       </div>
 
@@ -738,24 +905,35 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
             </button>
           ) : null}
         </div>
-        <div className="task-board-filters">
-          {filterSelect('project', t(TASK_FILTER_PROJECT), options.projects)}
-          {filterSelect('assignee', t(TASK_FILTER_ASSIGNEE), options.assignees)}
-          {filterSelect('node', t(TASK_FILTER_NODE), options.nodes)}
-          {hasActiveFilter ? (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm"
-              onClick={() => {
-                setQueryDraft('')
-                props.setParams({ q: undefined, project: undefined, assignee: undefined, node: undefined })
-              }}
-            >
-              <HelmxIcon name="rotate-ccw" size={11} />
-              <span>{t(TASK_FILTER_RESET)}</span>
-            </button>
+        <button
+          type="button"
+          className="task-board-filter-toggle"
+          aria-expanded={filtersOpen}
+          aria-controls={filtersId}
+          title={t(TASK_FILTER_TOGGLE_TITLE)}
+          onClick={() => setFiltersOpen((open) => !open)}
+        >
+          <HelmxIcon name="list-filter" size={13} />
+          <span>{t(TASK_FILTER_TOGGLE_LABEL)}</span>
+          {activeFilterCount > 0 ? (
+            <span className="task-filter-count badge badge-accent tabular-nums" title={taskFilterActiveCount(activeFilterCount, locale)}>
+              {activeFilterCount}
+            </span>
           ) : null}
-        </div>
+        </button>
+      </div>
+
+      {/* Property filters: always visible on desktop, collapsible tray on mobile. */}
+      <div id={filtersId} className="task-board-filters" data-open={filtersOpen}>
+        {filterSelect('project', t(TASK_FILTER_PROJECT), options.projects)}
+        {filterSelect('assignee', t(TASK_FILTER_ASSIGNEE), options.assignees)}
+        {filterSelect('node', t(TASK_FILTER_NODE), options.nodes)}
+        {hasActiveFilter ? (
+          <button type="button" className="btn btn-ghost btn-sm" onClick={resetFilters}>
+            <HelmxIcon name="rotate-ccw" size={11} />
+            <span>{t(TASK_FILTER_RESET)}</span>
+          </button>
+        ) : null}
       </div>
 
       {actionError !== null ? <div className="task-modal-error">{actionError}</div> : null}
@@ -795,36 +973,44 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
           <div className="task-board-empty-title">{t(TASK_EMPTY_NO_TASKS)}</div>
           <div className="task-board-empty-hint text-subtle">{t(TASK_EMPTY_HINT)}</div>
           <div className="task-board-actions" style={{ justifyContent: 'center' }}>
-            <button
-              type="button"
-              className="btn btn-sm btn-ghost"
-              title={t(TASK_CHAT_TASK_TITLE)}
-              onClick={() => ctx.openScreen(`agent:${config.defaultPlannerProfile || 'assistant'}`)}
-            >
-              <HelmxIcon name="message-square" size={12} />
-              <span>{t(TASK_CHAT_TASK)}</span>
-            </button>
-            <button
-              type="button"
-              className="btn btn-sm"
-              title={t(TASK_NEW_TASK_TITLE)}
-              onClick={() => setCreateOpen(true)}
-            >
-              <HelmxIcon name="plus" size={12} />
-              <span>{t(TASK_NEW_TASK)}</span>
-            </button>
+            {planButton}
+            {newTaskButton}
           </div>
         </div>
       ) : (
         <>
-          {/* Desktop four-column board */}
+          {/* Desktop four-column board (Notion-style calm column tracks) */}
           <div className="task-board-desktop">
             <div className="task-board-columns">
               {TASK_COLUMNS.map((column: TaskColumn) => (
                 <div key={column} className="task-column" data-task-column={column}>
                   <div className="task-column-header">
+                    <span className="task-tone-dot" data-tone={TASK_COLUMN_TONE[column]} />
                     <span className="task-column-title">{taskColumnLabel(column, locale)}</span>
-                    <span className="badge badge-neutral tabular-nums">{columns[column].length}</span>
+                    <span className="task-column-count tabular-nums">{columns[column].length}</span>
+                    {column === 'backlog' ? (
+                      <button
+                        type="button"
+                        className="btn btn-xs btn-icon-xs task-column-add"
+                        title={t(TASK_NEW_TASK_TITLE)}
+                        aria-label={t(TASK_NEW_TASK)}
+                        onClick={openCreate}
+                      >
+                        <HelmxIcon name="plus" size={11} />
+                      </button>
+                    ) : null}
+                    {column === 'done' && doneCount > 0 ? (
+                      <button
+                        type="button"
+                        className="btn btn-xs task-column-archive"
+                        disabled={archivingDone}
+                        title={t(TASK_ARCHIVE_ALL_TITLE)}
+                        onClick={archiveAllDone}
+                      >
+                        <HelmxIcon name="archive" size={11} />
+                        <span>{archivingDone ? t(TASK_ARCHIVING) : t(TASK_ARCHIVE_ALL)}</span>
+                      </button>
+                    ) : null}
                   </div>
                   <div className="task-column-list">
                     {columns[column].length > 0 ? (
@@ -832,37 +1018,24 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
                     ) : (
                       <div className="task-column-empty">{taskColumnLabel(column, locale)}</div>
                     )}
+                    {column === 'backlog' ? (
+                      <button type="button" className="task-column-new-row" onClick={openCreate}>
+                        <HelmxIcon name="plus" size={12} />
+                        <span>{t(TASK_NEW_TASK)}</span>
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               ))}
             </div>
           </div>
 
-          {/* Mobile clear-down flow: four capsules + single column */}
+          {/* Mobile: horizontal status pills + grouped collapsible list */}
           <div className="task-board-mobile">
-            <div className="task-board-mobile-tabs">
-              <SegmentedControl
-                value={params.tab}
-                onValueChange={(tab: TaskMobileTab) => props.setParams({ tab })}
-                aria-label={t(TASK_MOBILE_TABS_ARIA)}
-                className="task-mobile-tabs"
-                items={TASK_MOBILE_TABS.map((tab) => ({
-                  value: tab,
-                  label: taskMobileTabLabel(tab, locale),
-                  badge: <span className="badge badge-neutral tabular-nums">{mobileBuckets[tab].length}</span>,
-                }))}
-              />
+            <div className="task-mobile-pills" role="tablist" aria-label={t(TASK_MOBILE_PILLS_ARIA)}>
+              {TASK_MOBILE_TABS.map(mobilePill)}
             </div>
-            <div className="task-board-mobile-list">
-              {mobileBuckets[params.tab].length > 0 ? (
-                mobileBuckets[params.tab].map(renderCard)
-              ) : (
-                <div className="task-board-empty">
-                  <div className="task-board-empty-title">{t(TASK_EMPTY_NO_MATCH)}</div>
-                  <div className="task-board-empty-hint text-subtle">{t(TASK_EMPTY_HINT_NO_MATCH)}</div>
-                </div>
-              )}
-            </div>
+            <div className="task-board-mobile-list">{mobileList}</div>
           </div>
 
           {filtered.length === 0 && items.length > 0 ? (
@@ -870,14 +1043,7 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
               <HelmxIcon name="search" size={26} />
               <div className="task-board-empty-title">{t(TASK_EMPTY_NO_MATCH)}</div>
               <div className="task-board-empty-hint text-subtle">{t(TASK_EMPTY_HINT_NO_MATCH)}</div>
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => {
-                  setQueryDraft('')
-                  props.setParams({ q: undefined, project: undefined, assignee: undefined, node: undefined })
-                }}
-              >
+              <button type="button" className="btn btn-sm" onClick={resetFilters}>
                 <HelmxIcon name="rotate-ccw" size={11} />
                 <span>{t(TASK_FILTER_RESET)}</span>
               </button>
@@ -894,7 +1060,9 @@ export function TaskBoardScreen(props: TaskBoardScreenProps): ReactNode {
         <TaskCreateDialog
           open={createOpen}
           onClose={() => setCreateOpen(false)}
-          dependencyOptions={(board?.tasks ?? []).filter((task) => task.column !== 'done').map((task) => task.id)}
+          dependencyCandidates={(board?.tasks ?? [])
+            .filter((task) => task.column !== 'done')
+            .map((task) => ({ id: task.id, title: task.title }))}
         />
       ) : null}
 

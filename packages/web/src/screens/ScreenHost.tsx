@@ -121,7 +121,7 @@ export function ScreenHost({ pluginId, screenId, isSplit, onCloseSplit }: Screen
         </div>
       </div>
       <div className="timeline-scroll">
-        <div className="timeline-inner screen-host-stage" data-screen-host="true" style={{ maxWidth: 1100 }}>
+        <div className="timeline-inner screen-host-stage" data-screen-host="true">
           <PluginUiView
             pluginId={pluginId}
             spec={spec}

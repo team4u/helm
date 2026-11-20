@@ -22,6 +22,7 @@ import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarg
 import { readBrowserNotificationPermission } from '../lib/browser-notification.js'
 import { formatModShortcut } from './shortcuts-model.js'
 import {
+  composeSidebarBadgeLabel,
   extractRailQuickEntries,
   extractSidebarViews,
   filterConversationsByTag,
@@ -30,6 +31,8 @@ import {
   presenceNavClassSuffix,
   resolveSidebarTargetPresence,
   shouldSkipNavRowClick,
+  sidebarBadgeCountLabel,
+  sidebarBadgeToneClass,
   type SidebarStoreView,
   type SidebarTargetPresence,
   type SidebarViewItem,
@@ -39,6 +42,7 @@ import { AgentStandingsGroup } from './SidebarAgentStandings.js'
 import { ArchivedConversationsGroup } from './SidebarArchivedConversations.js'
 import { SidebarAttentionGroup } from './SidebarAttentionGroup.js'
 import { useGlobalAttention } from './use-attention-indicator.js'
+import { useSidebarBadges } from './use-sidebar-badges.js'
 import { composeAttentionSummary, type GlobalAttentionIndicator } from './attention-model.js'
 import {
   ConversationStatusDot,
@@ -196,6 +200,9 @@ function ViewNavGroup({ store }: { store: SidebarStoreView }) {
     () => extractSidebarViews(store.groupedUi.sidebarItems, store.conversations, locale),
     [store.groupedUi.sidebarItems, store.conversations, locale],
   )
+  // 视图项徽标（sidebar.item badge 声明）：doc 发现与按需加载内聚在 Hook，
+  // 无信号不进映射；插件停用后贡献消失即归零，零插件 ID 特判。
+  const viewBadges = useSidebarBadges(viewItems)
   const clientItems = store.groupedUi.sidebarItems.filter(
     (item) => item.spec.client !== undefined && resolveTargetString(item.spec.target ?? '', store.conversations) === null,
   )
@@ -211,6 +218,8 @@ function ViewNavGroup({ store }: { store: SidebarStoreView }) {
       ))}
       {viewItems.map((view) => {
         const presence = resolveSidebarTargetPresence(store, (t) => isSameResolvedTarget(t, view.target))
+        const badge = viewBadges.get(view.key) ?? null
+        const viewLabel = composeSidebarBadgeLabel(view.label, badge)
         return (
           <div
             key={view.key}
@@ -224,6 +233,8 @@ function ViewNavGroup({ store }: { store: SidebarStoreView }) {
             <button
               type="button"
               className="nav-item-main nav-open"
+              title={viewLabel}
+              aria-label={viewLabel}
               onClick={() => store.openTarget(view.target)}
               aria-current={presence.active ? 'page' : undefined}
             >
@@ -232,6 +243,14 @@ function ViewNavGroup({ store }: { store: SidebarStoreView }) {
             </button>
             <span className="nav-item-meta">
               <SidebarPaneTag paneTag={presence.paneTag} />
+              {badge !== null && !badge.dot && badge.count > 0 && (
+                <span className={`badge ${sidebarBadgeToneClass(badge.tone)} tabular-nums sidebar-view-badge`}>
+                  {sidebarBadgeCountLabel(badge.count)}
+                </span>
+              )}
+              {badge !== null && badge.dot && (
+                <span className="sidebar-view-badge-dot" data-tone={badge.tone} aria-hidden="true" />
+              )}
               <span className="sidebar-split-action">
                 <HoverIconButton
                   className="split-toggle-btn sidebar-split-btn"
@@ -324,6 +343,9 @@ function ActivityRail({
   onNavigate?: () => void
 }) {
   const { t } = useWebLocale()
+  // 快捷入口徽标（sidebar.item badge 声明）：与移动端快捷簇 / 视图行同源
+  // 解析；doc 按需加载内聚在 Hook（ensurePluginDoc 幂等）。
+  const quickEntryBadges = useSidebarBadges(quickEntries)
   const expandWithShortcut = t('shell.sidebar.expandNavWithShortcut', { shortcut: formatModShortcut('B') })
   const themeTooltip =
     themePreference === 'system'
@@ -404,13 +426,15 @@ function ActivityRail({
         <div className="activity-rail-quick">
           {quickEntries.map((entry) => {
             const presence = resolveSidebarTargetPresence(store, (t) => isSameResolvedTarget(t, entry.target))
+            const badge = quickEntryBadges.get(entry.key) ?? null
+            const entryLabel = composeSidebarBadgeLabel(entry.label, badge)
             return (
-              <Tooltip content={entry.label} side="right" key={entry.key}>
+              <Tooltip content={entryLabel} side="right" key={entry.key}>
                 <button
                   type="button"
                   className={`rail-btn rail-quick-btn${presence.active ? ' rail-btn-active' : ''}`}
-                  title={entry.label}
-                  aria-label={entry.label}
+                  title={entryLabel}
+                  aria-label={entryLabel}
                   aria-current={presence.active ? 'page' : undefined}
                   onClick={() => {
                     store.openTarget(entry.target)
@@ -418,6 +442,12 @@ function ActivityRail({
                   }}
                 >
                   <HelmxIcon name={entry.icon} size={16} />
+                  {badge !== null && !badge.dot && badge.count > 0 && (
+                    <span className="rail-quick-badge" data-tone={badge.tone}>
+                      {sidebarBadgeCountLabel(badge.count)}
+                    </span>
+                  )}
+                  {badge !== null && badge.dot && <span className="rail-quick-dot" data-tone={badge.tone} />}
                 </button>
               </Tooltip>
             )

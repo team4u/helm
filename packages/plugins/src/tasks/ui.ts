@@ -6,6 +6,7 @@
  * - toolView 接管 5 个 task_* 工具的时间线回执卡（Slice 3 实现 TaskToolView）。
  */
 import type { HelmxPluginContext } from '@helmx/protocol'
+import { TASK_BOARD_SIDEBAR_BADGE } from './contracts.js'
 
 /** Model-facing task tool names (single source for the toolView trace registration). */
 const TASK_TOOL_NAMES = [
@@ -24,6 +25,10 @@ export function registerTasksUi(ctx: HelmxPluginContext): void {
     target: 'screen:builtin:tasks/board',
     order: 5,
     quickEntry: true,
+    // 通用徽标声明（宿主零插件 ID 特判）：订阅本插件公开 doc `board`，
+    // 由 attentionCount / badgeTone / hasRunning / badgeSummary 派生
+    // Rail、MobileQuickNav 与侧栏视图行的计数徽标 / 安静圆点 / tooltip。
+    badge: TASK_BOARD_SIDEBAR_BADGE,
   })
 
   ctx.ui.screen({

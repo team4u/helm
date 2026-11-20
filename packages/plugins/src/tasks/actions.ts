@@ -13,7 +13,9 @@
  *   subagent / SubagentWorkflow / Swarm 决策权）；
  * - 规划动作（create/start/approve/rework/update/archive/delete）在会话上下文中
  *   拒绝任务执行会话 / 子会话 / 自动化会话调用（防执行者自建看板卡或自审自批）；
- * - `task_submit` 仅允许交卷当前会话绑定的任务（防串单）。
+ * - `task_submit` 仅允许交卷当前会话绑定的任务（防串单）；
+ * - submit 进入 in_review 时发一条 info 级 `notification` 事件（全局 Toast 即时可见，
+ *   通知失败仅记日志绝不影响交卷）；mergePending 授权一步结单保持安静零噪音。
  */
 import {
   HelmxError,
@@ -1123,8 +1125,30 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         const finalized = await finalizeTaskDone(submitted.task.id)
         return { task: finalized.task }
       }
+      // 进入 in_review 等待人工验收：发一条 info 通知（用户在任意会话聊天也能立刻看到交卷）；
+      // mergePending 授权一步结单（autoFinalized）保持安静零噪音。通知失败仅记日志，绝不影响交卷。
+      notifyReviewRequested(submitted.task)
       return { task: submitted.task }
     })
+  }
+
+  /** in_review 交卷通知（payload 契约对齐 protocol NotificationEvent / Web ToastOverlay）。 */
+  const notifyReviewRequested = (task: TaskRecord): void => {
+    try {
+      // summary 为空 / 纯空白时只报标题，不留尾随冒号（正常路径 summary 恒非空，防御观感）。
+      const summary = task.submission?.summary?.trim() ?? ''
+      ctx.host.emitEvent('notification', {
+        type: 'notification',
+        level: 'info',
+        title: ctx.host.redact(`任务 ${task.id} 已提交验收`),
+        body: ctx.host.redact(summary !== '' ? `${task.title}：${summary}` : task.title),
+        ...(task.conversationId !== undefined ? { conversationId: task.conversationId } : {}),
+      })
+    } catch (err) {
+      console.error(
+        `[tasks] 任务 ${task.id} 交卷通知发送失败（不影响交卷结果）：${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
   }
 
   /**
