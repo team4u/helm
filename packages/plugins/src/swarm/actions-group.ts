@@ -272,6 +272,7 @@ export function createGroupHandlers(ctx: HelmxPluginContext, coordinator: SwarmC
       groupId?: string
       keepWorktree?: boolean
       abortRunning?: boolean
+      force?: boolean
       summary?: string
     },
     conversationId: number | undefined,
@@ -333,7 +334,9 @@ export function createGroupHandlers(ctx: HelmxPluginContext, coordinator: SwarmC
       }
 
       const keepWorktree = input.keepWorktree === true
-      if (!keepWorktree) {
+      // force 只放开脏/未合入守卫（cleanup_worktree 同语义透传）；占用、归属、
+      // 锁定与 swarm_worker_busy 校验不因此绕过。
+      if (!keepWorktree && input.force !== true) {
         const unmerged = worktreeChecks.filter(
           (item) => item.inspected.exists && (item.isDirty || item.unmergedCommits > 0),
         )
@@ -343,7 +346,7 @@ export function createGroupHandlers(ctx: HelmxPluginContext, coordinator: SwarmC
             .join(', ')
           throw new HelmxError(
             'swarm_worktree_unmerged',
-            `协作组 '${freshGroup.id}' 含未合入或脏工作树分支（${branchList}）；请传 keepWorktree: true 解锁主控合入收尾后再清理`,
+            `协作组 '${freshGroup.id}' 含未合入或脏工作树分支（${branchList}）；请传 keepWorktree: true 解锁主控合入收尾后再清理，或显式传 force: true 放弃未合入内容直接收尾`,
             409,
             {
               pluginId: SWARM_PLUGIN_ID,
@@ -374,7 +377,7 @@ export function createGroupHandlers(ctx: HelmxPluginContext, coordinator: SwarmC
             commitsAhead: item.unmergedCommits,
           })
         } else {
-          await cleanupManagedWorktree(ctx, item.worktreeId, false, signal)
+          await cleanupManagedWorktree(ctx, item.worktreeId, input.force === true, signal)
         }
       }
 

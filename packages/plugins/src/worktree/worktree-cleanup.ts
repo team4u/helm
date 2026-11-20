@@ -14,6 +14,7 @@ import {
   gitExec,
   matchWorktreeEntry,
   normalizePathValue,
+  pruneWorktreeRegistrations,
   resolveMergeReferenceHead,
   resolveRepoAuthority,
   type RepoAuthority,
@@ -139,6 +140,120 @@ async function assertPathUnusedByProcesses(
         diagnostics: usage.diagnostics.map((d) => redact(d)),
       },
     )
+  }
+}
+
+/**
+ * 目录缺失下的 force 登记清除（保守恢复路径）：
+ * - 二次复核目录确不存在（复核期间目录重现则显式拒绝，请改走常规清理）；
+ * - 分支按 mergedInto/merged 规则处置（默认保留分支只清登记；deleteBranch 才删且沿用 force 语义，
+ *   删除失败不阻断登记清除——如实留 branchDeleteError 供后续重试）；
+ * - 在主仓执行 `git worktree prune` 收敛 git 侧残留登记（结果如实上报，不静默吞掉）；
+ * - 记录置 removed 并留 `removedReason: 'directory_missing_forced'`。
+ * 占用（hold/在途会话/进程）与受管分支前缀校验已在上游 cleanupWorktree 主流程完成，此处不重复。
+ */
+async function forceClearMissingRegistration(
+  deps: WorktreeAllocatorDeps,
+  store: WorktreeStore,
+  redact: (text: string) => string,
+  withRepoLock: <T>(nodeId: string, canonicalCommonDir: string, fn: () => Promise<T>) => Promise<T>,
+  record: ManagedWorktreeRecord,
+  input: CleanupInput,
+): Promise<CleanupResult> {
+  // 二次复核：与外部操作竞争时如实拒绝，绝不基于过期事实清登记。
+  if (await dirExistsOnNode(deps, record.nodeId, record.path)) {
+    throw new HelmxError(
+      'worktree_missing',
+      `受管 worktree '${record.path}'（节点 ${record.nodeId}）目录在二次复核时重新出现（可能与外部操作竞争）；请重试常规清理（不带 force）`,
+      409,
+      { worktreeId: record.id, path: record.path, branch: record.branch, nodeId: record.nodeId },
+    )
+  }
+
+  let branchDeleted = record.branchDeleted === true
+  let alreadyRemoved = false
+  let prune: CleanupResult['prune'] | undefined
+  if (record.repoRoot !== '') {
+    const authority = await resolveRepoAuthority(deps, record.nodeId, record.repoRoot, input.signal)
+    await withRepoLock(record.nodeId, authority.canonicalCommonDir, async () => {
+      const fresh = store.findById(record.id)
+      if (fresh === undefined) {
+        throw new HelmxError('not_found', `受管 worktree 记录 ${record.id} 不存在（文档状态不一致）`, 404, { id: record.id })
+      }
+      if (fresh.status === 'removed') {
+        alreadyRemoved = true
+        branchDeleted = fresh.branchDeleted === true
+        return
+      }
+      // 先 prune 收敛 git 侧残留登记：残留登记会让分支保持「已检出」状态，
+      // git branch -d/-D 均拒绝删除；prune 后分支处置才能按规则执行。
+      const pruned = await pruneWorktreeRegistrations(deps, fresh.nodeId, authority.mainPath, input.signal)
+      prune = {
+        ran: true,
+        ok: pruned.ok,
+        ...(pruned.output !== '' ? { output: redact(pruned.output) } : {}),
+      }
+      if (input.deleteBranch === true && !branchDeleted) {
+        const referenceHead = await resolveMergeReferenceHead(
+          deps,
+          fresh.nodeId,
+          authority.mainPath,
+          authority.entries[0]!.head,
+          input.mergedInto,
+          fresh.baseBranch,
+          input.signal,
+        )
+        const mergedIntoReference =
+          (await countUnmergedCommits(deps, fresh.nodeId, authority.mainPath, referenceHead, fresh.branch, input.signal)) === 0
+        const del = await deleteManagedBranch(
+          deps,
+          fresh.nodeId,
+          authority.mainPath,
+          fresh.branch,
+          input.force === true || mergedIntoReference,
+          input.signal,
+        )
+        branchDeleted = del.deleted
+        if (!del.deleted) {
+          // 分支删除失败：不阻断登记清除（目录已确证缺失），但如实留诊断供重试。
+          store.updateRecord(fresh.id, (r) => ({
+            ...r,
+            branchDeleted: false,
+            branchDeleteError: (del.failureOutput ?? '').slice(0, 2000),
+          }))
+        }
+      }
+      store.updateRecord(fresh.id, (r) => {
+        const base = { ...r, status: 'removed' as const, removedAt: Date.now(), removedReason: 'directory_missing_forced' as const }
+        if (input.deleteBranch !== true) return base
+        if (!branchDeleted) return { ...base, branchDeleted: false }
+        const { branchDeleteError: _previousError, ...clean } = r
+        return { ...clean, status: 'removed' as const, removedAt: Date.now(), removedReason: 'directory_missing_forced' as const, branchDeleted: true }
+      })
+    })
+  } else {
+    // external 记录未解析过主仓（repoRoot 为空）：无锚点不执行 prune 与分支处置，仅清登记并如实报告。
+    store.updateRecord(record.id, (r) => ({
+      ...r,
+      status: 'removed' as const,
+      removedAt: Date.now(),
+      removedReason: 'directory_missing_forced' as const,
+    }))
+    prune = {
+      ran: false,
+      ok: false,
+      output: '记录未登记主仓路径（repoRoot 为空），未执行 git worktree prune 与分支处置；git 侧残留请人工核对',
+    }
+  }
+  return {
+    removed: !alreadyRemoved,
+    worktreeId: record.id,
+    path: record.path,
+    branch: record.branch,
+    nodeId: record.nodeId,
+    branchDeleted,
+    ...(alreadyRemoved ? {} : { removedReason: 'directory_missing_forced' as const }),
+    ...(prune !== undefined ? { prune } : {}),
   }
 }
 
@@ -268,12 +383,15 @@ export async function cleanupWorktree(
   }
 
   if (!(await dirExistsOnNode(deps, record.nodeId, record.path))) {
-    throw new HelmxError(
-      'worktree_missing',
-      `受管 worktree '${record.path}'（节点 ${record.nodeId}）目录已不存在（节点真实 fs 探测证实）；登记保留，请人工核对后处理（不自动 prune）`,
-      409,
-      { worktreeId: record.id, path: record.path, branch: record.branch, nodeId: record.nodeId },
-    )
+    if (input.force !== true) {
+      throw new HelmxError(
+        'worktree_missing',
+        `受管 worktree '${record.path}'（节点 ${record.nodeId}）目录已不存在（节点真实 fs 探测证实）；登记保留，请人工核对后处理（不自动 prune）；确认无需保留时可显式传 force: true 走登记清除（二次复核缺失后清登记，分支按 mergedInto/merged 规则处置，并在主仓执行 git worktree prune 收敛 git 侧残留）`,
+        409,
+        { worktreeId: record.id, path: record.path, branch: record.branch, nodeId: record.nodeId },
+      )
+    }
+    return forceClearMissingRegistration(deps, store, redact, withRepoLock, record, input)
   }
 
   let authority: RepoAuthority
@@ -378,11 +496,13 @@ export async function cleanupWorktree(
     let dirtyFiles: string[] = []
     let unmergedCommits = 0
     if (input.force !== true) {
+      // 口径与 git worktree remove 对齐：gitignored 产物按定义可弃、不计入阻断；
+      // 阻断性脏判定只覆盖未提交修改与未跟踪（非 ignored）文件。
       const status = await gitExec(
         deps,
         fresh.nodeId,
         fresh.path,
-        ['status', '--porcelain', '--untracked-files=all', '--ignored=matching'],
+        ['status', '--porcelain', '--untracked-files=all'],
         input.signal,
       )
       if (!status.ok) {
@@ -411,7 +531,7 @@ export async function cleanupWorktree(
       if (dirtyFiles.length > 0 || unmergedCommits > 0) {
         throw new HelmxError(
           'worktree_dirty',
-          `worktree '${fresh.path}' (branch: ${fresh.branch}) 含未提交修改、未跟踪/被忽略文件或未合入提交（相对参考提交 ${referenceHead}）；请先检视/合入，或显式传 force: true 强制清理`,
+          `worktree '${fresh.path}' (branch: ${fresh.branch}) 含未提交修改、未跟踪文件或未合入提交（相对参考提交 ${referenceHead}）；请先检视/合入，或显式传 force: true 强制清理`,
           409,
           { worktreeId: fresh.id, path: fresh.path, branch: fresh.branch, dirtyFiles: dirtyFiles.slice(0, 200), unmergedCommits, referenceHead },
         )

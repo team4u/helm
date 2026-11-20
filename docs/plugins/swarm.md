@@ -29,7 +29,7 @@ helmx swarm create-group --conversation-id 42 --title '检查导出模块' --jso
 
 ## 结单和清理
 
-默认结单会先确认成员已停止，再检查工作树。发现未提交改动或未合入提交时，返回 `swarm_worktree_unmerged`。用 `keepWorktree: true` 结单会释放租约，保留有改动或尚未合入的工作树，并在 `retainedWorktrees` 里列出路径和分支。通过清理检查的其他工作树仍会被清理。结单后可以在同一会话开始新组。
+默认结单会先确认成员已停止，再检查工作树。发现未提交改动或未合入提交时，返回 `swarm_worktree_unmerged`。用 `keepWorktree: true` 结单会释放租约，保留有改动或尚未合入的工作树，并在 `retainedWorktrees` 里列出路径和分支。通过清理检查的其他工作树仍会被清理。`force: true` 结单只放开脏/未合入守卫（放弃未合入内容直接收尾）；占用（租约、在跑成员、进程扫描）、归属与锁定校验依旧拒绝。结单后可以在同一会话开始新组。
 
 需要停止整个协作组时，用 `--abort-running` 中止在跑的成员。把环境变量 `group_id` 设为建组命令返回的 `groupId`。
 
