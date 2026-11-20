@@ -46,6 +46,7 @@ import {
 } from '@helmx/plugin-client'
 import type { TaskSubmission } from './models.ts'
 import type { TaskItem, TaskRecord } from './models.ts'
+import { taskLightWord } from './models.ts'
 import {
   TASK_ACTION_APPROVE,
   TASK_ACTION_APPROVE_TITLE,
@@ -61,6 +62,7 @@ import {
   TASK_ACTION_EDIT,
   TASK_ACTION_FAILED,
   TASK_ACTION_MERGE_CLOSE,
+  TASK_ACTION_MERGE_CLOSE_TITLE,
   TASK_ACTION_REWORK,
   TASK_ACTION_REWORK_TITLE,
   TASK_ACTION_SAVE,
@@ -88,7 +90,6 @@ import {
   TASK_ACTION_RESUME_KICKOFF_TITLE,
   TASK_KV_MERGE_MODE,
   TASK_KV_PLAN_APPROVAL,
-  TASK_MERGE_AWAIT_REVIEW,
   TASK_PLAN_APPROVED,
   TASK_PLAN_ASK_PENDING,
   TASK_PLAN_REJECTED,
@@ -660,6 +661,8 @@ export interface TaskDetailDrawerProps {
   onClose: () => void
   /** Open the rework dialog for this task (owned by the screen). */
   onRework: (taskId: string) => void
+  /** Open the merge-and-close confirmation for this task (owned by the screen — never a one-tap dispatch). */
+  onMerge: (taskId: string) => void
   /** Explicit resume of a kickoff-undelivered task (resume_kickoff action; user-driven only). */
   onResumeKickoff: (taskId: string) => void
   busy: boolean
@@ -786,6 +789,22 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
       })
   }
 
+  // 进入编辑时从**当前**任务事实重新同步表单（抽屉打开期间 board 投影可能已更新——
+  // 只在开抽屉时初始化一次会让编辑态携带陈旧快照覆盖他人改动）。
+  const beginEdit = (): void => {
+    setEditTitle(task.title)
+    setEditBrief(task.brief)
+    setEditProject(task.project ?? '')
+    setEditAdvancedOpen(false)
+    setEditAssignee(task.assigneeProfileId)
+    setEditNodeId(task.nodeId ?? '')
+    setEditCwd(task.cwd ?? '')
+    setEditDependsOn(task.dependsOn)
+    setEditPlanFirst(task.planFirst === true)
+    setEditAutoMerge(task.autoMerge === true)
+    setEditing(true)
+  }
+
   const submission = task.submission
   const depRows = useMemo(() => {
     const authoritative = Array.isArray(task.blockedBy) ? (task.blockedBy ?? []) : undefined
@@ -883,7 +902,7 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                 <div className="primary-drawer-title-row">
                   <DialogTitle className="primary-drawer-title">{task.title}</DialogTitle>
                   <span className="badge badge-neutral mono">{task.id}</span>
-                  <StatusLight status={live.lightStatus} label={taskLightLabel(live.lightStatus, locale)} />
+                  <StatusLight status={taskLightWord(live.lightStatus)} label={taskLightLabel(live.lightStatus, locale)} />
                 </div>
                 <div className="primary-drawer-id mono">{taskColumnLabel(task.column, locale)}</div>
               </div>
@@ -903,7 +922,7 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
             ) : null}
             {live.liveSummary !== '' ? (
               <div className={`task-card-live${live.lightStatus === 'error' ? ' is-error' : live.needsAttention ? ' is-attention' : ''}`}>
-                <StatusLight status={live.lightStatus} label={taskLightLabel(live.lightStatus, locale)} />
+                <StatusLight status={taskLightWord(live.lightStatus)} label={taskLightLabel(live.lightStatus, locale)} />
                 <span className="task-card-live-text" title={live.liveSummary}>{live.liveSummary}</span>
               </div>
             ) : null}
@@ -1205,7 +1224,7 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                   <button
                     type="button"
                     className="btn btn-sm btn-primary"
-                    disabled={props.busy}
+                    disabled={busy || props.busy}
                     title={t(TASK_ACTION_RESUME_KICKOFF_TITLE)}
                     onClick={() => props.onResumeKickoff(task.id)}
                   >
@@ -1254,8 +1273,8 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                             type="button"
                             className="btn btn-sm"
                             disabled={busy}
-                            title={t(TASK_MERGE_AWAIT_REVIEW)}
-                            onClick={() => runAction(() => ctx.callAction('approve', { taskId: task.id, mergeAction: 'merge_and_close' }))}
+                            title={t(TASK_ACTION_MERGE_CLOSE_TITLE)}
+                            onClick={() => props.onMerge(task.id)}
                           >
                             <HelmxIcon name="git-pull-request" size={12} />
                             <span>{t(TASK_ACTION_MERGE_CLOSE)}</span>
@@ -1298,7 +1317,7 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                         className="btn btn-sm btn-ghost"
                         disabled={busy}
                         title={t(TASK_ACTION_EDIT)}
-                        onClick={() => setEditing(true)}
+                        onClick={beginEdit}
                       >
                         <HelmxIcon name="edit-3" size={12} />
                         <span>{t(TASK_ACTION_EDIT)}</span>

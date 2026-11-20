@@ -48,6 +48,7 @@ const {
   deriveTaskLiveView,
   parseTaskBoardDoc,
   parseTaskToolFacts,
+  taskLightWord,
 } = await import('../../plugins/src/tasks/client/models.ts')
 type TaskRecord = import('../../plugins/src/tasks/client/models.ts').TaskRecord
 
@@ -457,7 +458,7 @@ test('deriveTaskLiveView：error > blocked > 主 working > 后代在途 > done >
   assert.equal(missing.needsAttention, true)
 
   // 未交卷停滞
-  const stalled = mk({ conversationId: 10, silenceState: { nudgedAt: 100, stalledAt: 200 } }, [conv(10, 'main')])
+  const stalled = mk({ conversationId: 10, silenceState: { stalledAt: 200 } }, [conv(10, 'main')])
   assert.equal(stalled.needsAttention, true)
   assert.equal(stalled.liveSummary, 'Turn settled, not submitted yet')
 
@@ -495,7 +496,7 @@ test('deriveTaskLiveView：error > blocked > 主 working > 后代在途 > done >
   // 共享 SDK 后台快照（web-awareness 契约）：主会话空闲但后台 run 在途 →
   // background 灯 + 真实摘要，停滞不被误报
   const withBackground = deriveTaskLiveView(
-    task('T-8', { column: 'in_progress', conversationId: 10, silenceState: { nudgedAt: 1, stalledAt: 2 } }),
+    task('T-8', { column: 'in_progress', conversationId: 10, silenceState: { stalledAt: 2 } }),
     [conv(10, 'main', { status: 'idle' })],
     undefined,
     byId,
@@ -510,7 +511,7 @@ test('deriveTaskLiveView：error > blocked > 主 working > 后代在途 > done >
   // unknown 门（badge doc 未首载/宿主未聚合）：事实不可知 → 零推断，不伪造
   // 在途也不宣称「无后台任务」，停滞保持后端记录的真实语义
   const unknownFacts = deriveTaskLiveView(
-    task('T-9', { column: 'in_progress', conversationId: 10, silenceState: { nudgedAt: 1, stalledAt: 2 } }),
+    task('T-9', { column: 'in_progress', conversationId: 10, silenceState: { stalledAt: 2 } }),
     [conv(10, 'main', { status: 'idle' })],
     undefined,
     byId,
@@ -522,7 +523,7 @@ test('deriveTaskLiveView：error > blocked > 主 working > 后代在途 > done >
   assert.equal(unknownFacts.liveSummary, 'Turn settled, not submitted yet')
   // 未接线（undefined）时同样零推断
   const noFacts = deriveTaskLiveView(
-    task('T-10', { column: 'in_progress', conversationId: 10, silenceState: { nudgedAt: 1, stalledAt: 2 } }),
+    task('T-10', { column: 'in_progress', conversationId: 10, silenceState: { stalledAt: 2 } }),
     [conv(10, 'main', { status: 'idle' })],
   )
   assert.equal(noFacts.stalled, true)
@@ -611,7 +612,7 @@ test('诚实实时事实：报错、未交卷停滞、会话缺失、子会话�
     board: {
       tasks: [
         task('T-7', { column: 'in_progress', conversationId: 50, createdAt: 700 }),
-        task('T-8', { column: 'in_progress', conversationId: 60, silenceState: { nudgedAt: 1, stalledAt: 2 }, createdAt: 800 }),
+        task('T-8', { column: 'in_progress', conversationId: 60, silenceState: { stalledAt: 2 }, createdAt: 800 }),
         task('T-9', { column: 'in_progress', conversationId: 999, createdAt: 900 }),
         task('T-10', { column: 'in_progress', conversationId: 70, createdAt: 1000 }),
       ],
@@ -1439,7 +1440,7 @@ test('后台 run 在途：通用徽标事实驱动 background 灯与真实摘要
   setStubState({
     conversations: [conv(10, 'T-1 exec', { status: 'idle' })],
     board: {
-      tasks: [task('T-1', { column: 'in_progress', conversationId: 10, silenceState: { nudgedAt: 1, stalledAt: 2 }, createdAt: 100 })],
+      tasks: [task('T-1', { column: 'in_progress', conversationId: 10, silenceState: { stalledAt: 2 }, createdAt: 100 })],
       updatedAt: 1,
     },
     background: { unknown: false, byConversation: new Map([[10, { active: true, summary: '2 Running' }]]) },
@@ -1486,7 +1487,7 @@ test('停滞任务显式继续：按钮触发 submitInput 到执行会话（人�
   setStubState({
     conversations: [conv(10, 'T-1 exec', { status: 'idle' })],
     board: {
-      tasks: [task('T-1', { column: 'in_progress', conversationId: 10, silenceState: { nudgedAt: 1, stalledAt: 2 }, createdAt: 100 })],
+      tasks: [task('T-1', { column: 'in_progress', conversationId: 10, silenceState: { stalledAt: 2 }, createdAt: 100 })],
       updatedAt: 1,
     },
   })
@@ -2096,4 +2097,85 @@ test('实际输出铁律：渲染 DOM 无原生 select/无 Emoji、导出仅 Pas
     assert.ok(/^[A-Z][A-Za-z0-9]*$/.test(name), `客户端应仅导出 PascalCase 组件，发现：${name}`)
     assert.equal(typeof value, 'function', `导出 ${name} 应为组件函数`)
   }
+})
+
+// ---------------------------------------------------------------------------
+// 9. Bugfix round regressions（update null / 抽屉合并确认 / 灯位映射 / 统计口径）
+// ---------------------------------------------------------------------------
+
+test('taskLightWord 共享映射：background 归一为 working（卡片/回执/抽屉同源灯位）', { timeout: 60_000 }, async () => {
+  assert.equal(taskLightWord('background'), 'working', "SDK 词表无 'background'，必须先归一否则降级成 pending 灰环")
+  assert.equal(taskLightWord('running'), 'working')
+  assert.equal(taskLightWord('error'), 'error')
+  assert.equal(taskLightWord('blocked'), 'blocked')
+  assert.equal(taskLightWord('done'), 'done')
+  assert.equal(taskLightWord('idle'), 'idle')
+})
+
+test('详情抽屉合并结单：先确认再派发（与卡片同律），title 用合并指令文案', { timeout: 60_000 }, async (t) => {
+  setStubState({ conversations: standardConversations(), board: standardBoard() })
+  const ctx = makeSpyCtx()
+  const { props } = mutableScreenProps({ task: 'T-3' }, { inlineDrawer: true })
+  const { host, unmount, reRender } = await mountBoard(ctx, props)
+  t.after(unmount)
+  await reRender()
+  const drawer = host.querySelector('.task-detail-drawer')
+  assert.ok(drawer, '任务详情抽屉应渲染')
+
+  const mergeBtn = [...drawer.querySelectorAll<HTMLButtonElement>('button')].find((b) =>
+    b.textContent?.includes('Merge & close'),
+  )
+  assert.ok(mergeBtn, 'in_review 有交付分支的抽屉应呈现合并结单按钮')
+  assert.match(mergeBtn.getAttribute('title') ?? '', /Ask the executor to merge/, 'title 必须是合并指令文案而非「合并待复核」')
+
+  // 抽屉路径同样不得一键直发：先弹确认、未确认前零派发
+  await click(mergeBtn)
+  assert.deepEqual(ctx.actionCalls.map(({ actionId }) => actionId), [], '抽屉合并按钮点击后、确认前不得派发 approve')
+  const confirmModal = document.querySelector('.task-modal')
+  assert.ok(confirmModal, '合并确认弹窗应挂载')
+  assert.match(confirmModal.textContent ?? '', /feat\/auth/, '确认弹窗展示交付分支')
+
+  await click([...confirmModal.querySelectorAll<HTMLButtonElement>('button')].find((b) => b.textContent?.includes('Merge & close task')) ?? null)
+  assert.deepEqual(
+    ctx.actionCalls.map(({ actionId, input }) => ({ actionId, input })),
+    [{ actionId: 'approve', input: { taskId: 'T-3', mergeAction: 'merge_and_close' } }],
+  )
+  unmount()
+})
+
+test('详情抽屉后台在途灯位：background 经共享映射显示 working（不再降级灰环）', { timeout: 60_000 }, async (t) => {
+  // 主会话 idle + 一个 working 子会话 → live.lightStatus = 'background'；抽屉灯必须呈 working
+  setStubState({
+    conversations: [conv(10, 'T-1 exec'), conv(11, 'child worker', { parentConversationId: 10, status: 'working', createdAt: 5000 })],
+    board: { tasks: [task('T-1', { column: 'in_progress', conversationId: 10, createdAt: 100 })], updatedAt: 1 },
+  })
+  const ctx = makeSpyCtx()
+  const { props } = mutableScreenProps({ task: 'T-1' }, { inlineDrawer: true })
+  const { host, unmount, reRender } = await mountBoard(ctx, props)
+  t.after(unmount)
+  await reRender()
+  const drawer = host.querySelector('.task-detail-drawer')
+  assert.ok(drawer)
+  const tone = drawer.querySelector('.helmx-status-light')?.getAttribute('data-tone')
+  assert.equal(tone, 'working', 'background 状态在抽屉必须归一为 working 灯')
+  unmount()
+})
+
+test('看板统计口径：计数只含当前可见卡（隐藏的归档历史不进总数）', { timeout: 60_000 }, async (t) => {
+  setStubState({
+    conversations: standardConversations(),
+    board: {
+      tasks: [
+        ...(standardBoard().tasks as TaskRecord[]),
+        task('T-7', { column: 'done', archived: true, createdAt: 50 }),
+        task('T-8', { column: 'done', archived: true, createdAt: 60 }),
+      ],
+      updatedAt: 1000,
+    },
+  })
+  const ctx = makeSpyCtx()
+  const { host, unmount } = await mountBoard(ctx, mutableScreenProps().props)
+  t.after(unmount)
+  assert.match(host.textContent ?? '', /6 tasks · 2 in flight · 1 awaiting review/, '统计只数未归档可见卡（不为隐藏的 T-7/T-8 抬总数）')
+  unmount()
 })

@@ -33,15 +33,15 @@
 | `create` | `helmx tasks create` | `task_create` | 建卡（仅用户明确要求建单/委派时调用，裸 go-ahead 不构成委派）；可选 `idempotencyKey` 幂等键（同键重复 create 返回已建任务，双击防抖兜底）；无阻塞且 `autoStart`（默认 true）时经两阶段启动起独立执行会话并投递任务书 |
 | `list` | `helmx tasks list` | `task_list` | 按 `column / project / assigneeProfileId / nodeId / includeArchived` 过滤，附实时会话状态与 `blockedBy` |
 | `inspect` | `helmx tasks inspect <id>` | `task_inspect` | 单卡全量：依赖状态、会话实况、近期摘要（脱敏）、产物列表 |
-| `update` | `helmx tasks update <id>` | — | 改标题/简报/项目/依赖等；已启动任务锁死执行角色/节点/目录；依赖图必须无环 |
+| `update` | `helmx tasks update <id>` | — | 改标题/简报/项目/依赖等；`project` / `nodeId` / `cwd` / `model` / `thinkingLevel` 传 null 或空串显式清空回默认链；已启动任务锁死执行角色/节点/目录（执行角色修改与 create 同口径校验可指派性）；依赖图必须无环 |
 | `start` | `helmx tasks start <id>` | `task_start` | 启动 backlog 卡（依赖未全 done 拒 `409 task_blocked_by_dependencies`；并发超限拒 `409 task_concurrency_limit`） |
 | `submit` | `helmx tasks submit` | `task_submit` | 执行者交卷（`scope: tags ['task']`——仅任务执行会话可见可调；会话内按 `conversationId` 反查绑定卡，显式 `taskId` 时校验归属防串单）。进入 `in_review` 等待人工验收时发一条 `info` 级 `notification` 事件（全局 Toast 即时可见、附会话跳转；通知失败仅记日志绝不影响交卷）；`mergePending` 授权下 `merged: true` 一步结单保持安静零噪音 |
-| `approve` | `helmx tasks approve <id>` | `task_approve` | `close_only`（默认）置 done + 会话换归档标签 + 自动解锁下游依赖；`merge_and_close` 置 `mergePending` 并向执行会话投递合并收尾指令 |
+| `approve` | `helmx tasks approve <id>` | `task_approve` | `close_only`（默认）置 done + 会话换归档标签 + 自动解锁下游依赖（对已完成任务重复调用幂等返回当前事实，不重复触发下游）；`merge_and_close` 置 `mergePending` 并向执行会话投递合并收尾指令 |
 | `rework` | `helmx tasks rework <id>` | `task_rework` | 打回返工：回 `in_progress`、`reworkCount + 1`、意见投回原会话（保留上下文与分支）；原会话被删时显式 `409 task_conversation_missing`（或 `recreateConversation: true` 重建，新会话收到**单条合成任务书**：原 brief + 返工意见） |
 | `request_plan_approval` | `helmx tasks request-plan-approval` | `task_request_plan_approval` | planFirst 方案审批（真实 AskDoc confirm 卡片，阻塞至用户作答）；批准决定持久化到 `planApproval` 后 `task_submit` 才放行 |
 | `resume_kickoff` | `helmx tasks resume-kickoff <id>` | — | 显式继续「开工未送达」的任务：向绑定会话重投任务书（requestId 幂等），清除标记；唯一重投路径，绝不自动触发 |
 | `archive` | `helmx tasks archive <id>` | — | 归档 backlog/done 卡即收离看板主视图（进行中拒 `409 task_in_progress`；重复归档幂等返回 `alreadyArchived`，历史经看板「已归档」开关或 `list --include-archived` 查看） |
-| `delete` | `helmx tasks delete <id>` | — | 删除任务记录（进行中且会话忙碌拒 `409 task_in_progress`；仍被其他任务 `dependsOn` 引用时拒 `409 task_dependency_referenced`，先解除引用）；绝不删除会话历史 |
+| `delete` | `helmx tasks delete <id>` | — | 删除任务记录（执行中且会话忙碌拒 `409 task_in_progress`；启动占位态拒删；**绑定会话已被删除的死卡允许直接删除**；仍被其他任务 `dependsOn` 引用时拒 `409 task_dependency_referenced`，先解除引用）；绝不删除会话历史 |
 
 模型工具用独立 `ctx.tool` 注册以获得契约约定的精确短名（`exposeAsTool` 派生名带哈希后缀，不满足）。
 
@@ -143,7 +143,7 @@
 ## 生命周期与诚实边界
 
 - `inUse()`：存在 in_progress / in_review 任务时报告占用——停用被 `409 plugin_in_use` 拒绝（防静默丢看板）；验收/归档/删除全部活跃卡后方可停用。
-- `liveTasks()`：在途任务写（`task:create` 等）与轻推投递（`task:nudge`）。
+- `liveTasks()`：在途任务写（`task:create` / `task:start` / `task:submit` / `task:approve` / `task:rework` 等动作标签）。
 - 停用后：工具、动作、UI 贡献与受管技能即时消失（零幻影提示词）；`records` 持久 doc 与执行会话完整保留，重新启用即恢复看板。
 - 远端节点目标必须有显式 `cwd`（或执行角色 Profile 绑定默认目录），缺省显式拒绝——绝不盲执行远端默认目录。
 - 建卡/启动的会话创建或任务书投递失败时干净回滚：已建会话换 `task-archived` 标签保留现场，任务卡回 `backlog` 可重试，错误显式上抛。

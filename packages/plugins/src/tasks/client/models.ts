@@ -51,7 +51,6 @@ export interface TaskSubmission {
 }
 
 export interface TaskSilenceState {
-  nudgedAt?: number
   stalledAt?: number
   lastError?: string
 }
@@ -170,7 +169,6 @@ function parsePlanApproval(value: unknown): TaskPlanApproval | undefined {
 function parseSilenceState(value: unknown): TaskSilenceState | undefined {
   if (!isRecord(value)) return undefined
   const parsed = pruneUndefined({
-    nudgedAt: parseNumber(value['nudgedAt']),
     stalledAt: parseNumber(value['stalledAt']),
     lastError: parseString(value['lastError']),
   })
@@ -362,6 +360,20 @@ function collectConversationSubtree(
 
 /** Light vocabulary for a task card: subtree error > blocked/pending ask > main working > descendants-or-background active > main done > idle. */
 export type TaskLightStatus = 'error' | 'blocked' | 'running' | 'background' | 'done' | 'idle'
+
+/**
+ * Shared StatusLight word mapping (tone normalization lives in the SDK):
+ * 'background' MUST map to 'working' — the SDK alias table has no 'background'
+ * entry, so passing it raw degrades to the neutral pending ring (cards and
+ * receipts light up while the drawer goes gray). All client surfaces use this.
+ */
+export function taskLightWord(status: TaskLightStatus): string {
+  if (status === 'error') return 'error'
+  if (status === 'blocked') return 'blocked'
+  if (status === 'running' || status === 'background') return 'working'
+  if (status === 'done') return 'done'
+  return 'idle'
+}
 
 /**
  * Background in-flight facts parameter: the shared SDK

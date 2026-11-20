@@ -34,7 +34,7 @@ import {
   parseTaskBoardDoc,
   parseTaskToolFacts,
   parseTaskToolVerb,
-  type TaskLightStatus,
+  taskLightWord,
   type TaskRecord,
 } from './models.ts'
 import {
@@ -53,17 +53,8 @@ import {
   taskToolUnblocked,
 } from './copy.ts'
 
-/** Light word for the shared StatusLight (tone normalization lives in the SDK). */
-function lightWord(status: TaskLightStatus): string {
-  if (status === 'error') return 'error'
-  if (status === 'blocked') return 'blocked'
-  if (status === 'running' || status === 'background') return 'working'
-  if (status === 'done') return 'done'
-  return 'idle'
-}
-
 /** Column badge tone from the real live state (drives the badge-* class). */
-function columnBadgeTone(task: TaskRecord | undefined, lightStatus: TaskLightStatus | undefined): string {
+function columnBadgeTone(task: TaskRecord | undefined, lightStatus: ReturnType<typeof taskLightWord> | undefined): string {
   if (task === undefined) return 'badge-neutral'
   if (task.column === 'in_review') return 'badge-warn'
   if (task.column === 'done') return 'badge-ok'
@@ -118,7 +109,7 @@ export function TaskToolView(props: ToolViewProps): ReactNode {
   const summary =
     isError && errorFirstLine !== undefined && errorFirstLine !== '' ? errorFirstLine : summaryParts.join(' · ')
 
-  const liveLight = live !== undefined ? lightWord(live.lightStatus) : undefined
+  const liveLight = live !== undefined ? taskLightWord(live.lightStatus) : undefined
   const lightStatus = isRunning ? 'running' : isError ? 'error' : liveLight !== undefined ? liveLight : 'done'
   const lightLabel = isRunning
     ? resolveLocalizedText(TASK_TOOL_STATUS_RUNNING, locale)
