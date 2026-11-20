@@ -302,6 +302,7 @@ const NOTIFICATION_CHECKER = Compile(
     title: NonEmptyString,
     body: Type.Optional(Type.String()),
     conversationId: Type.Optional(Type.Integer()),
+    view: Type.Optional(NonEmptyString),
   }),
 )
 
@@ -415,7 +416,7 @@ const CORE_EVENT_ASSEMBLERS: Readonly<Record<string, CoreEventAssembler>> = {
     const parsed = parseEventShape(
       NOTIFICATION_CHECKER,
       source,
-      "notification requires { level: 'info' | 'warning' | 'error'; title: non-empty string; body?: string; conversationId?: integer }",
+      "notification requires { level: 'info' | 'warning' | 'error'; title: non-empty string; body?: string; conversationId?: integer; view?: non-empty string }",
     )
     return {
       type: 'notification',
@@ -423,6 +424,7 @@ const CORE_EVENT_ASSEMBLERS: Readonly<Record<string, CoreEventAssembler>> = {
       title: parsed.title,
       ...(parsed.body !== undefined ? { body: parsed.body } : {}),
       ...(parsed.conversationId !== undefined ? { conversationId: parsed.conversationId } : {}),
+      ...(parsed.view !== undefined ? { view: parsed.view } : {}),
     }
   },
 }

@@ -1143,6 +1143,8 @@ export function registerTasksActions(ctx: HelmxPluginContext, runtime: TasksRunt
         title: ctx.host.redact(`任务 ${task.id} 已提交验收`),
         body: ctx.host.redact(summary !== '' ? `${task.title}：${summary}` : task.title),
         ...(task.conversationId !== undefined ? { conversationId: task.conversationId } : {}),
+        // 标准「查看」按钮直达看板详情抽屉（验收动作所在地）；会话入口由抽屉内「打开会话」承接
+        view: `screen:${TASKS_PLUGIN_ID}/board?task=${encodeURIComponent(task.id)}`,
       })
     } catch (err) {
       console.error(

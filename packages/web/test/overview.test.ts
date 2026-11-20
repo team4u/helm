@@ -1016,3 +1016,334 @@ test('MobileQuickNav: numeric badge, quiet dot, summary aria-label and zero nois
     restore()
   }
 })
+
+// ---------------------------------------------------------------------------
+// 交互：批量管理（勾选/保护口径/归档/删除）、卡面操作菜单与紧凑元信息行
+// ---------------------------------------------------------------------------
+
+/** 总览批量/菜单交互的 fetch 桩：记录会话 PATCH（归档 tag）与 DELETE。 */
+function installConversationMutationStub(): {
+  patches: Array<{ id: number; tags?: string[] }>
+  deletes: number[]
+  restore: () => void
+} {
+  const original = globalThis.fetch
+  const patches: Array<{ id: number; tags?: string[] }> = []
+  const deletes: number[] = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input)
+    const match = /^\/api\/conversations\/(\d+)$/.exec(url)
+    const method = init?.method ?? 'GET'
+    if (match !== null && method === 'PATCH') {
+      const body = init?.body === undefined ? {} : (JSON.parse(String(init.body)) as { tags?: string[] })
+      patches.push({ id: Number(match[1]), tags: body.tags })
+      return new Response(JSON.stringify({ id: Number(match[1]), tags: body.tags ?? [] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    if (match !== null && method === 'DELETE') {
+      deletes.push(Number(match[1]))
+      return new Response(JSON.stringify({ ok: true }), { status: 200 })
+    }
+    return new Response(JSON.stringify({}), { status: 200 })
+  })
+  return { patches, deletes, restore: () => { globalThis.fetch = original } }
+}
+
+async function mountOverview(store: HelmxExternalStore): Promise<{
+  container: HTMLElement
+  unmount: () => Promise<void>
+}> {
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  await act(async () => {
+    root = createRoot(container)
+    root.render(e(HostStoreProviders, { value: store }, e(ConversationOverview)))
+  })
+  return {
+    container,
+    unmount: async () => {
+      await act(async () => {
+        root?.unmount()
+      })
+      container.remove()
+    },
+  }
+}
+
+async function overviewSettle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 25))
+  })
+}
+
+/** 批量场景：常规根 x2 + 托管根（sidebarSection filterTag 接管）+ bot 根。 */
+function batchScenarioStore(): HelmxExternalStore {
+  return overviewStore({
+    conversations: [
+      conv({ id: 1, title: '常规根 A', profileId: 'assistant', createdAt: 9000, updatedAt: 9000 }),
+      conv({ id: 2, title: '常规根 B', profileId: 'coder', createdAt: 8000, updatedAt: 8000 }),
+      conv({ id: 3, title: '托管任务根', tags: ['task'], createdAt: 7000, updatedAt: 7000 }),
+      conv({ id: 4, title: 'bot 会话根', ownedBy: 'bot', createdAt: 6000, updatedAt: 6000 }),
+    ],
+    primaryTarget: { kind: 'overview' },
+    uiContributions: [
+      {
+        pluginId: 'builtin:tasks',
+        surface: 'sidebar.section' as const,
+        spec: { id: 'task-conversations', label: { en: 'Tasks' }, filterTag: 'task' },
+      },
+    ],
+  })
+}
+
+function cardById(container: HTMLElement, id: number): HTMLElement | undefined {
+  return [...container.querySelectorAll<HTMLElement>('.overview-card')].find((card) =>
+    card.textContent?.includes(`#${id}`),
+  )
+}
+
+test('ConversationOverview batch mode: card click toggles selection, managed/bot roots stay protected, exit clears', { timeout: 60_000 }, async () => {
+  const store = batchScenarioStore()
+  const mount = await mountOverview(store)
+  try {
+    const toggle = mount.container.querySelector<HTMLButtonElement>('.overview-batch-toggle')
+    assert.ok(toggle !== null, 'the toolbar renders the batch toggle')
+    assert.ok(mount.container.querySelector('.overview-batch-bar') === null, 'no batch bar before entering batch mode')
+    await act(async () => {
+      toggle.click()
+    })
+    assert.ok(mount.container.querySelector('.overview-batch-bar') !== null, 'entering batch mode renders the batch bar')
+
+    const cards = [...mount.container.querySelectorAll<HTMLElement>('.overview-card')]
+    assert.equal(cards.length, 4)
+    for (const card of cards) {
+      assert.ok(card.querySelector('.overview-card-batch-check') !== null, 'every card carries a batch checkbox')
+    }
+    // 保护口径与侧栏批量模式同界：托管（sidebarSection 接管）与 bot 根不可勾选。
+    assert.equal(cardById(mount.container, 1)?.querySelector<HTMLInputElement>('[role="checkbox"], input[type="checkbox"]')?.disabled, false)
+    assert.equal(cardById(mount.container, 3)?.querySelector<HTMLInputElement>('[role="checkbox"], input[type="checkbox"]')?.disabled, true, 'the managed root is not selectable')
+    assert.equal(cardById(mount.container, 4)?.querySelector<HTMLInputElement>('[role="checkbox"], input[type="checkbox"]')?.disabled, true, 'the bot root is not selectable')
+
+    // 批量模式点击卡片 = 勾选（不打开会话抽屉）
+    await act(async () => {
+      cardById(mount.container, 1)?.click()
+    })
+    assert.ok(cardById(mount.container, 1)?.classList.contains('is-selected'), 'clicking the card selects it')
+    assert.equal(store.getNavSlice().activeModal, null, 'batch clicks never open the conversation drawer')
+    await act(async () => {
+      cardById(mount.container, 1)?.click()
+    })
+    assert.ok(cardById(mount.container, 1)?.classList.contains('is-selected') === false, 'clicking again deselects')
+
+    // 全选只覆盖可勾选卡片（常规根 A/B），托管与 bot 根保持未选。
+    const selectAll = [...mount.container.querySelectorAll<HTMLButtonElement>('.overview-batch-bar button')]
+      .find((btn) => btn.textContent === 'Select all')
+    assert.ok(selectAll !== null)
+    await act(async () => {
+      selectAll!.click()
+    })
+    assert.ok(cardById(mount.container, 1)?.classList.contains('is-selected'))
+    assert.ok(cardById(mount.container, 2)?.classList.contains('is-selected'))
+    assert.ok(cardById(mount.container, 3)?.classList.contains('is-selected') === false)
+    assert.ok(cardById(mount.container, 4)?.classList.contains('is-selected') === false)
+    assert.ok(mount.container.textContent?.includes('2 selected'), 'the bar states the honest selection count')
+
+    // 退出批量模式：清空勾选、恢复直达语义
+    const exit = [...mount.container.querySelectorAll<HTMLButtonElement>('.overview-batch-bar button')]
+      .find((btn) => btn.textContent === 'Exit')
+    assert.ok(exit !== null)
+    await act(async () => {
+      exit!.click()
+    })
+    assert.ok(mount.container.querySelector('.overview-batch-bar') === null, 'exit removes the batch bar')
+    assert.ok(mount.container.querySelector('.overview-card-batch-check') === null, 'checkboxes disappear with batch mode')
+    await act(async () => {
+      cardById(mount.container, 1)?.click()
+    })
+    assert.deepEqual(
+      store.getNavSlice().activeModal,
+      { kind: 'conversation-drawer', conversationId: 1 },
+      'normal mode restores the drawer navigation',
+    )
+  } finally {
+    await mount.unmount()
+  }
+})
+
+test('ConversationOverview batch archive PATCHes every selected root and exits batch mode', { timeout: 60_000 }, async () => {
+  const stub = installConversationMutationStub()
+  const store = batchScenarioStore()
+  const mount = await mountOverview(store)
+  try {
+    await act(async () => {
+      mount.container.querySelector<HTMLButtonElement>('.overview-batch-toggle')?.click()
+    })
+    const selectAll = [...mount.container.querySelectorAll<HTMLButtonElement>('.overview-batch-bar button')]
+      .find((btn) => btn.textContent === 'Select all')
+    await act(async () => {
+      selectAll?.click()
+    })
+    const archiveBtn = [...mount.container.querySelectorAll<HTMLButtonElement>('.overview-batch-bar button')]
+      .find((btn) => btn.textContent === 'Archive (2)')
+    assert.ok(archiveBtn !== null, 'the archive button reflects the selection count')
+    await act(async () => {
+      archiveBtn!.click()
+    })
+    await overviewSettle()
+    assert.deepEqual(
+      stub.patches.map((patch) => patch.id).sort(),
+      [1, 2],
+      'batch archive PATCHes exactly the selected human roots',
+    )
+    for (const patch of stub.patches) {
+      assert.ok(patch.tags?.includes(ARCHIVED_TAG), `archive PATCH for #${patch.id} appends the host archive tag`)
+    }
+    assert.ok(store.getNotices().some((notice) => notice.title === 'Bulk Archive completed'), 'the batch outcome lands as a notice')
+    assert.ok(mount.container.querySelector('.overview-batch-bar') === null, 'a successful batch archive exits batch mode')
+  } finally {
+    await mount.unmount()
+    stub.restore()
+  }
+})
+
+test('ConversationOverview batch delete requires confirmation and DELETEs each selected root', { timeout: 60_000 }, async () => {
+  const stub = installConversationMutationStub()
+  const store = batchScenarioStore()
+  const mount = await mountOverview(store)
+  try {
+    await act(async () => {
+      mount.container.querySelector<HTMLButtonElement>('.overview-batch-toggle')?.click()
+    })
+    const selectAll = [...mount.container.querySelectorAll<HTMLButtonElement>('.overview-batch-bar button')]
+      .find((btn) => btn.textContent === 'Select all')
+    await act(async () => {
+      selectAll?.click()
+    })
+    const deleteBtn = [...mount.container.querySelectorAll<HTMLButtonElement>('.overview-batch-bar button')]
+      .find((btn) => btn.textContent?.startsWith('Delete'))
+    assert.ok(deleteBtn !== null)
+
+    // 先取消：不发起任何 DELETE
+    await act(async () => {
+      deleteBtn!.click()
+    })
+    await overviewSettle()
+    const dialog = document.querySelector('[role="alertdialog"]')
+    assert.ok(dialog !== null, 'batch delete opens a confirmation dialog first')
+    assert.ok(dialog.textContent?.includes('Delete 2 selected conversations?'), 'the confirm copy carries the count')
+    const cancel = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find((btn) => btn.textContent?.trim() === 'Cancel')
+    await act(async () => {
+      cancel?.click()
+    })
+    await overviewSettle()
+    assert.deepEqual(stub.deletes, [], 'cancelling the dialog issues no deletes')
+
+    // 确认：逐会话 DELETE + 通知 + 退出批量模式
+    await act(async () => {
+      deleteBtn!.click()
+    })
+    await overviewSettle()
+    const confirm = [...document.querySelectorAll<HTMLButtonElement>('[role="alertdialog"] button')]
+      .find((btn) => btn.textContent?.trim() === 'Delete conversation')
+    assert.ok(confirm !== null)
+    await act(async () => {
+      confirm!.click()
+    })
+    await overviewSettle()
+    assert.deepEqual([...stub.deletes].sort(), [1, 2], 'confirming DELETEs every selected root')
+    assert.ok(store.getNotices().some((notice) => notice.title === 'Bulk delete completed'), 'the batch delete outcome lands as a notice')
+    assert.ok(mount.container.querySelector('.overview-batch-bar') === null, 'a successful batch delete exits batch mode')
+  } finally {
+    await mount.unmount()
+    stub.restore()
+  }
+})
+
+test('ConversationOverview card actions menu: archive and delete for human roots, none for protected roots', { timeout: 60_000 }, async () => {
+  const stub = installConversationMutationStub()
+  const store = batchScenarioStore()
+  const mount = await mountOverview(store)
+  try {
+    const humanCard = cardById(mount.container, 1)
+    const botCard = cardById(mount.container, 4)
+    const managedCard = cardById(mount.container, 3)
+    assert.ok(humanCard?.querySelector('.overview-card-actions button') !== null, 'the human root card renders the "..." menu trigger')
+    assert.ok(botCard?.querySelector('.overview-card-actions button') === null, 'the bot root card renders no menu (no eligible actions)')
+
+    // 菜单打开（Radix 挂 body）：归档 + 删除两项都在；托管根只有删除（面板同语义）。
+    const trigger = humanCard?.querySelector<HTMLButtonElement>('.overview-card-actions button')
+    assert.ok(trigger !== null)
+    await act(async () => {
+      trigger!.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
+    await overviewSettle()
+    const items = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].map((item) => item.textContent ?? '')
+    assert.ok(items.some((label) => label.includes('Archive conversation')), 'the card menu offers archive')
+    assert.ok(items.some((label) => label.includes('Delete conversation')), 'the card menu offers delete')
+    const archiveItem = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')]
+      .find((item) => item.textContent?.includes('Archive conversation'))
+    await act(async () => {
+      archiveItem?.click()
+    })
+    await overviewSettle()
+    assert.deepEqual(
+      stub.patches.map((patch) => patch.id),
+      [1],
+      'archiving from the card menu PATCHes that root conversation',
+    )
+    assert.ok(stub.patches[0]?.tags?.includes(ARCHIVED_TAG))
+
+    // 托管根：无归档项，仅删除项（人类自有可删除，与会话面板一致）
+    const managedTrigger = managedCard?.querySelector<HTMLButtonElement>('.overview-card-actions button')
+    assert.ok(managedTrigger !== null, 'the managed root still gets the menu (delete-only)')
+    await act(async () => {
+      managedTrigger!.dispatchEvent(new PointerEvent('pointerdown', { button: 0, bubbles: true, cancelable: true }))
+    })
+    await overviewSettle()
+    const managedItems = [...document.querySelectorAll<HTMLElement>('[role="menuitem"]')].map((item) => item.textContent ?? '')
+    assert.ok(managedItems.some((label) => label.includes('Delete conversation')), 'delete stays available for the managed root')
+    assert.ok(
+      managedItems.every((label) => !label.includes('Archive conversation')),
+      'archive is not offered for a managed root (no visible effect)',
+    )
+  } finally {
+    await mount.unmount()
+    stub.restore()
+  }
+})
+
+test('ConversationOverview compact meta line: profile, remote node and summary share one row', { timeout: 60_000 }, async () => {
+  const store = overviewStore({
+    conversations: [
+      conv({
+        id: 9,
+        title: '远端调研',
+        profileId: 'coder',
+        nodeId: 'remote-1',
+        status: 'working',
+        doing: 'researching docs',
+        createdAt: 9000,
+        updatedAt: 9000,
+      }),
+    ],
+    primaryTarget: { kind: 'overview' },
+  })
+  const mount = await mountOverview(store)
+  try {
+    const card = mount.container.querySelector<HTMLElement>('.overview-card')
+    assert.ok(card !== null)
+    const sub = card.querySelector<HTMLElement>('.overview-card-sub')
+    assert.ok(sub !== null, 'the meta line renders')
+    assert.ok(sub.textContent?.includes('编码专员'), 'the agent label rides the meta line')
+    assert.ok(sub.textContent?.includes('@remote-1'), 'the remote node folds into the same line (no dedicated row)')
+    assert.ok(sub.textContent?.includes('researching docs'), 'the honest summary still shares the line')
+    assert.ok(mount.container.querySelector('.overview-card-node') === null, 'the old dedicated node line is gone')
+    assert.equal(sub.querySelectorAll('.overview-card-sub > *').length, 5, 'profile + sep + node + sep + summary = five inline parts')
+  } finally {
+    await mount.unmount()
+  }
+})

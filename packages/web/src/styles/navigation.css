@@ -561,7 +561,8 @@
 
 /* 系统中心入口已收敛到「设置」空间，sidebar-footer 不再使用（保留类名仅供外部扩展降级）。 */
 .sidebar-theme-toggle,
-.sidebar-locale-toggle {
+.sidebar-locale-toggle,
+.sidebar-changelog-toggle {
   width: 28px;
   height: 28px;
   padding: 0 !important;

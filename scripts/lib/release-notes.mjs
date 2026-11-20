@@ -12,7 +12,7 @@
  * commit, with chore(release) commits and merge-commit subjects filtered out.
  */
 import { spawnSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -78,6 +78,32 @@ export function assembleReleaseNotes({ tag, prevTag, payloadStatus, cliStatus, n
     `- 节点守护进程：${nodeStatus.trim()}`,
     '',
   ].join('\n');
+}
+
+/**
+ * Prepend one version section to the repo's CHANGELOG.md (the shipped installed-version
+ * changelog): `## vX.Y.Z (date)` + the same filtered commit list the GitHub Release notes use.
+ * Creates the file (with its header) when absent; refuses to prepend a duplicate version.
+ */
+export function prependChangelogSection({ version, date, subjects, changelogPath }) {
+  if (!/^\d+\.\d+\.\d+/.test(version)) {
+    throw new Error(`version must look like semver, got: ${version}`);
+  }
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error(`date must be YYYY-MM-DD, got: ${date}`);
+  }
+  const body = subjects.trim() !== '' ? subjects.trim() : '-（无可列出的提交）';
+  const heading = `## v${version} (${date})`;
+  const existing = existsSync(changelogPath) ? readFileSync(changelogPath, 'utf8') : '# Changelog\n\n';
+  if (!existing.startsWith('# Changelog')) {
+    throw new Error(`${changelogPath} does not start with the "# Changelog" header; refusing to prepend`);
+  }
+  if (new RegExp(`^## v${version.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')} \\(\\d{4}-`, 'm').test(existing)) {
+    throw new Error(`CHANGELOG.md already has a section for v${version}; refusing to prepend a duplicate`);
+  }
+  const rest = existing.slice('# Changelog\n'.length).replace(/^\s+/, '');
+  const next = `# Changelog\n\n${heading}\n\n${body}\n\n${rest}`;
+  writeFileSync(changelogPath, next.endsWith('\n') ? next : `${next}\n`);
 }
 
 function printHelp() {

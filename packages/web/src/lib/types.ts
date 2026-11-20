@@ -67,6 +67,7 @@ export type ResolvedTarget =
 
 export type ActiveModal =
   | { kind: 'command-palette' }
+  | { kind: 'hub-changelog'; from?: string }
   | { kind: 'artifact-preview'; artifactId: string; conversationId?: number }
   | { kind: 'workspace-file'; conversationId: number; path: string; startLine?: number; endLine?: number }
   | { kind: 'conversation-drawer'; conversationId: number }

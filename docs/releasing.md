@@ -22,6 +22,10 @@
 
 依赖关系：`verify → build → npm-publish → notes`。npm 发布必须等全量测试通过；CLI 在同作业内晚于 payload 发布（其默认更新路径从 registry 解析 payload）；node 晚于 CLI 发布；发版记录最后落账。
 
+## 变更日志（CHANGELOG.md）
+
+`pnpm release` 在锁步 bump 的同时把新版本小节（`## vX.Y.Z (日期)` + 与流水线 notes 作业同一提炼逻辑的提交明细）**追加到仓库根 `CHANGELOG.md` 顶部**，随 `chore(release)` 提交一起进 tag。该文件随后打进 Hub payload 根（manifest `changelog` 条目），是 Web 端「版本与更新」界面（已安装版本变更日志，离线可读）的唯一数据源；GitHub Release 正文仍由流水线 notes 作业在 npm 发布后渲染，二者内容同源。
+
 ## npm 制品发布（每个制品一个 manifest 权威）
 
 发布依据**只有**各制品的构建产物 manifest：

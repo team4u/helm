@@ -163,6 +163,14 @@ export interface NotificationEvent {
   body?: string
   /** Related conversation, for click-through navigation. */
   conversationId?: number
+  /**
+   * Declarative deep-link target rendered as the host's standard "View" action
+   * (same vocabulary as plugin-client ctx.openScreen: `screen:<pluginId>/<screenId>?k=v`,
+   * `conversation:<id>`, `conversation:profile:<pid>`, `agent:<pid>`, ...). Takes
+   * precedence over conversationId for the action button; unresolvable targets
+   * render no button rather than a fake one.
+   */
+  view?: string
 }
 
 /**

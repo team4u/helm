@@ -3,7 +3,8 @@
  * selection state (real mount + Radix Popover interaction).
  *
  * Contract (pure entity levels, what you see is what you get):
- * - the badge and control authoritatively show the effective level;
+ * - the badge and the effective model row's inline level chips authoritatively
+ *   show the effective level;
  * - the fake "default" pseudo-level is removed; the selection is what you see;
  * - when the effective level is outside the catalog's supported list, it
  *   safely falls back to a valid level (off or the first).
@@ -66,9 +67,15 @@ function openModelPopover(host: HTMLElement): HTMLElement {
   return popover
 }
 
-/** Selected item text of the control (a concrete level; empty string when none). */
+/** The effective model's row (marked aria-current on its main button). */
+function activeRowOf(popover: HTMLElement): HTMLElement | null {
+  return Array.from(popover.querySelectorAll<HTMLElement>('.composer-model-row'))
+    .find((row) => row.querySelector('.composer-model-row-main')?.getAttribute('aria-current') === 'true') ?? null
+}
+
+/** Selected level chip text on the effective model's row (a concrete level; empty string when none). */
 function selectedLevel(popover: HTMLElement): string {
-  const active = popover.querySelector('.composer-thinking-row .segmented-control-btn.is-active')
+  const active = activeRowOf(popover)?.querySelector('.composer-model-level-chip[aria-pressed="true"]') ?? null
   return active?.textContent?.trim() ?? ''
 }
 
@@ -83,11 +90,11 @@ test('DOM: B=high, override=max, effective=high -> badge and control selection b
     // The badge is authoritative on the effective level; the override's max never shows.
     assert.equal(badgeOf(host), '· high')
     const popover = openModelPopover(host)
-    // The control highlights the effective level high directly.
+    // The effective model's inline chips highlight the effective level high directly.
     assert.equal(selectedLevel(popover), 'high')
-    const triggers = Array.from(popover.querySelectorAll('.composer-thinking-row .segmented-control-btn'))
-    assert.equal(triggers.length, 4, 'four levels minimal/low/medium/high (fake default removed)')
-    assert.equal(triggers.filter((b) => b.classList.contains('is-active')).length, 1, 'exactly one selected')
+    const chips = Array.from(activeRowOf(popover)!.querySelectorAll('.composer-model-level-chip'))
+    assert.equal(chips.length, 4, 'four inline level chips minimal/low/medium/high (fake default removed)')
+    assert.equal(chips.filter((b) => b.getAttribute('aria-pressed') === 'true').length, 1, 'exactly one selected chip')
   } finally {
     unmount()
   }

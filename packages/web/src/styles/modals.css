@@ -376,3 +376,35 @@
   color: var(--ok);
 }
 
+
+/* Hub 变更日志弹窗 */
+.hub-changelog-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.hub-changelog-section {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+}
+.hub-changelog-section:first-child {
+  border-top: none;
+  padding-top: 0;
+}
+.hub-changelog-section-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.hub-changelog-version {
+  font-weight: 600;
+  font-size: 14px;
+}
+.hub-changelog-date {
+  color: var(--text-muted, #8a8f98);
+  font-size: 12px;
+}
+.hub-upgraded-notice .hub-update-card-dismiss {
+  border-color: transparent;
+}

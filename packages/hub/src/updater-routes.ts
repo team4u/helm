@@ -14,12 +14,17 @@ import { readBlockedRelease } from '@helmx/env-io';
 import { readUpdateReady, type UpdateReadyRecord } from '@helmx/env-io/hub-payload';
 import { isBlockedVersionActive, type HubUpdaterHandle } from './updater.js';
 import { readHubControlRecord } from './control.js';
+import { sliceChangelog, type ChangelogSection, type LoadedChangelog } from './changelog.js';
 
 export interface HubUpdateRoutesDeps {
   updater: HubUpdaterHandle | null;
   kernel: { activitySnapshot(): HubActivityCounts; dataDir: string };
   /** Install root (payload-managed hubs only; null when running unmanaged e.g. docker/dev). */
   root: string | null;
+  /** Installed-version changelog (shipped CHANGELOG.md) plus the running Hub's version. */
+  changelog: LoadedChangelog & { version: string };
+  /** This boot's upgrade origin (`null` when the version did not change since the last run). */
+  upgrade: { upgradedFrom: string | null };
   /** Test seam replacing the detached handoff spawn. */
   spawnHandoff?: (ready: UpdateReadyRecord, control: { endpoint: string; instanceId: string } | null) => Promise<{ pid: number }>;
 }
@@ -58,10 +63,30 @@ export function createHubUpdateRoutes(deps: HubUpdateRoutesDeps): ProductRouteHa
   const spawnHandoff = deps.spawnHandoff ?? defaultSpawnHandoff;
   return async (request: Request): Promise<Response | undefined> => {
     const url = new URL(request.url);
-    if (url.pathname.replace(/\/+$/, '') !== '/api/hub-update/status' && url.pathname.replace(/\/+$/, '') !== '/api/hub-update/apply') {
+    const normalized = url.pathname.replace(/\/+$/, '');
+    if (normalized !== '/api/hub-update/status' && normalized !== '/api/hub-update/apply' && normalized !== '/api/hub-update/changelog') {
       return undefined;
     }
-    if (url.pathname.replace(/\/+$/, '') === '/api/hub-update/status') {
+    if (normalized === '/api/hub-update/changelog') {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        return errorResponse(undefined, 405, 'method_not_allowed', 'changelog is read-only; use GET');
+      }
+      const from = url.searchParams.get('from') ?? undefined;
+      if (from !== undefined && !/^\d+\.\d+\.\d+(?:[-+][\w.-]+)?$/.test(from)) {
+        return errorResponse(undefined, 400, 'invalid_from', 'from must be a strict SemVer version such as 1.2.3');
+      }
+      if (!deps.changelog.available) {
+        return jsonOk(undefined, { available: false, version: deps.changelog.version });
+      }
+      const sliced = sliceChangelog(deps.changelog.sections, from);
+      return jsonOk(undefined, {
+        available: true,
+        version: deps.changelog.version,
+        ...(from !== undefined ? { from, fromMatched: sliced.fromMatched } : {}),
+        sections: sliced.sections satisfies ChangelogSection[],
+      });
+    }
+    if (normalized === '/api/hub-update/status') {
       if (request.method !== 'GET' && request.method !== 'HEAD') {
         return errorResponse(undefined, 405, 'method_not_allowed', 'use GET for status and POST for apply');
       }
@@ -71,9 +96,11 @@ export function createHubUpdateRoutes(deps: HubUpdateRoutesDeps): ProductRouteHa
       return jsonOk(undefined, {
         active: deps.root !== null && updaterStatus !== null,
         ...(updaterStatus !== null ? { channel: updaterStatus.channel, intervalMs: updaterStatus.intervalMs, lastCheckAt: updaterStatus.lastCheckAt, lastError: updaterStatus.lastError } : {}),
-        currentVersion: updaterStatus?.currentVersion ?? null,
+        currentVersion: updaterStatus?.currentVersion ?? deps.changelog.version,
         readyVersion: updaterStatus?.readyVersion ?? ready?.version ?? null,
         blocked,
+        upgradedFrom: deps.upgrade.upgradedFrom,
+        changelogAvailable: deps.changelog.available,
       });
     }
 

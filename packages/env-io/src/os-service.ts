@@ -155,10 +155,13 @@ export function renderServiceSpec(options: ServiceSpecOptions): ServiceSpec {
   const nodePath = options.nodePath ?? process.execPath;
   const home = options.serviceHome ?? os.homedir();
   const { cliEntryPath, dataDir, profile } = options;
+  // Rendered paths go into the TARGET platform's spec (systemd unit, launchd plist, schtasks argv),
+  // so separators follow the injected platform, never the host (identical on real installations).
+  const join = platform === 'win32' ? path.win32.join : path.posix.join;
 
   if (platform === 'darwin') {
-    const configPath = path.join(dataDir, 'service', `${profile.darwinLabel}.plist`);
-    const targetPath = path.join(home, 'Library', 'LaunchAgents', `${profile.darwinLabel}.plist`);
+    const configPath = join(dataDir, 'service', `${profile.darwinLabel}.plist`);
+    const targetPath = join(home, 'Library', 'LaunchAgents', `${profile.darwinLabel}.plist`);
     const programArgs = [nodePath, cliEntryPath, ...profile.cliArgs];
     const content = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -193,8 +196,8 @@ export function renderServiceSpec(options: ServiceSpecOptions): ServiceSpec {
   }
 
   if (platform === 'win32') {
-    const configPath = path.join(dataDir, 'service', `${profile.winTask}.xml`);
-    const targetPath = path.join(home, `${profile.winTask}.xml`);
+    const configPath = join(dataDir, 'service', `${profile.winTask}.xml`);
+    const targetPath = join(home, `${profile.winTask}.xml`);
     const argumentsText = [cliEntryPath, ...profile.cliArgs].map(quoteWindowsArg).join(' ');
     const account = [process.env.USERDOMAIN, process.env.USERNAME ?? os.userInfo().username].filter(Boolean).join('\\');
     const content = `<?xml version="1.0" encoding="UTF-8"?>
@@ -214,8 +217,8 @@ export function renderServiceSpec(options: ServiceSpecOptions): ServiceSpec {
   }
 
   if (platform === 'linux') {
-    const configPath = path.join(dataDir, 'service', profile.linuxUnit);
-    const targetPath = path.join(home, '.config', 'systemd', 'user', profile.linuxUnit);
+    const configPath = join(dataDir, 'service', profile.linuxUnit);
+    const targetPath = join(home, '.config', 'systemd', 'user', profile.linuxUnit);
     const execStart = [nodePath, cliEntryPath, ...profile.cliArgs].map(quoteSystemdArg).join(' ');
     const content = `[Unit]
 Description=${profile.description}

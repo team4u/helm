@@ -110,7 +110,7 @@ test('hub-update routes: unmanaged hubs and missing candidates refuse honestly',
   const root = useTempDir(t, 'helmx-hub-routes-');
   const kernel = { activitySnapshot: () => emptyCounts(), dataDir: join(root, 'data') };
 
-  const unmanaged = createHubUpdateRoutes({ updater: null, kernel, root: null });
+  const unmanaged = createHubUpdateRoutes({ updater: null, kernel, root: null, changelog: { available: false, sourcePath: null, sections: [], version: '1.0.0' }, upgrade: { upgradedFrom: null } });
   const status = await unmanaged(new Request('http://x/api/hub-update/status'));
   assert.ok(status !== undefined && status.status === 200);
   assert.equal((await status.json()).active, false);
@@ -122,7 +122,7 @@ test('hub-update routes: unmanaged hubs and missing candidates refuse honestly',
   const updater = startHubUpdater({ root, pkgName: '@fake/hub', env: {}, dataDir: kernel.dataDir, core: fakeCore({ latest: '1.0.0' }), intervalMs: 3_600_000 });
   assert.ok(updater !== null);
   t.after(() => updater.stop());
-  const managed = createHubUpdateRoutes({ updater, kernel, root });
+  const managed = createHubUpdateRoutes({ updater, kernel, root, changelog: { available: false, sourcePath: null, sections: [], version: '1.0.0' }, upgrade: { upgradedFrom: null } });
   const noCandidate = await managed(makeApply());
   assert.ok(noCandidate !== undefined && noCandidate.status === 409);
   assert.equal((await noCandidate.json()).error.code, 'no_staged_update');
@@ -142,6 +142,8 @@ test('hub-update apply: busy gate defers, force bypasses, accepted switch answer
     updater,
     kernel,
     root,
+    changelog: { available: false, sourcePath: null, sections: [], version: '1.0.0' },
+    upgrade: { upgradedFrom: null },
     spawnHandoff: async (ready) => {
       spawned.push(ready.version);
       return { pid: 4242 };
@@ -177,14 +179,4 @@ test('hub-update apply: busy gate defers, force bypasses, accepted switch answer
   await clearUpdateReady(root);
 });
 
-function emptyCounts() {
-  return { activeConversations: 0, activeCompactions: 0, queuedConversations: 0, settlingConversations: 0 };
-}
-
-function makeApply(body?: Record<string, unknown>): Request {
-  return new Request('http://x/api/hub-update/apply', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(body ?? {}),
-  });
-}
+import { emptyCounts, makeApply } from './updater-helpers.js';

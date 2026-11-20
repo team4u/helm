@@ -8,19 +8,25 @@
 
 .toast-overlay {
   position: fixed;
-  right: 16px;
-  bottom: 16px;
+  /* 12px 内边距给盒阴影留渲染空间（overflow 裁切不剪影），负补偿保持视觉上 16px 贴角 */
+  right: 4px;
+  bottom: 4px;
+  padding: 12px;
   z-index: 90;
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-width: 360px;
+  max-width: min(384px, 100vw);
+  /* 多条叠加时保最新在屏内、旧的从顶部裁掉；单条超高由 toast-body 行数钳制兜底 */
+  max-height: calc(100dvh - 8px);
+  justify-content: flex-end;
+  overflow: hidden;
 }
 
 .toast-item {
   background: var(--bg-elevated);
   box-shadow: var(--shadow-md);
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
 }
 
@@ -36,18 +42,32 @@
   align-items: center;
   gap: 6px;
   font-weight: 600;
+  /* 标题与右上角关闭按钮同行留隙 */
+  padding-right: 4px;
 }
 
 .toast-body {
   font-size: 12px;
   color: var(--fg-secondary);
   word-break: break-word;
+  /* 通知是「提醒 + 预览」面，长交付说明全文在看板/会话里；行数钳制防撑破屏幕 */
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  overflow: hidden;
 }
 
 .toast-action-btn {
   width: fit-content;
   padding: 0 4px;
   margin-top: 2px;
+}
+
+/* 关闭按钮常驻右上角（与标题行对齐，单行/多行 toast 形态一致） */
+.toast-close-btn {
+  flex-shrink: 0;
+  margin: -2px -4px 0 0;
 }
 
 .composer-model-popover .input { width: 100%; }

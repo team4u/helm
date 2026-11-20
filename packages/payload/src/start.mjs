@@ -263,6 +263,11 @@ if (command === 'check') {
   if (childEnv.HELMX_WEB_DIST_DIR === undefined && existsSync(path.join(payloadRoot, 'web/dist'))) {
     childEnv.HELMX_WEB_DIST_DIR = path.resolve(payloadRoot, 'web/dist');
   }
+  // Installed-version changelog ships at the payload root; declare it explicitly (the hub's own
+  // sibling probe cannot reach the payload root under the node_modules install layout).
+  if (childEnv.HELMX_HUB_CHANGELOG === undefined && existsSync(path.join(payloadRoot, 'CHANGELOG.md'))) {
+    childEnv.HELMX_HUB_CHANGELOG = path.resolve(payloadRoot, 'CHANGELOG.md');
+  }
   const child = spawn(process.execPath, [hubEntry], { stdio: 'inherit', env: childEnv });
   const forward = (signal) => () => child.kill(signal);
   process.on('SIGINT', forward('SIGINT'));

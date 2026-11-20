@@ -18,9 +18,11 @@
  * - 移动端主舞台自适应：筛选折行、卡片网格单列化（responsive 断点）。
  */
 import { HubUpdateCard } from './HubUpdateCard.js'
+import { HubUpgradedNotice } from './HubUpgradedNotice.js'
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { HelmxIcon, PluginSlot, SegmentedControl, Select } from '@helmx/plugin-client'
+import type { ConversationSummary } from '@helmx/protocol/browser'
+import { HelmxIcon, Checkbox, PluginSlot, SegmentedControl, Select } from '@helmx/plugin-client'
 import { OVERVIEW_CARD_META_SLOT } from '@helmx/protocol/browser'
 import {
   useAuthConnection,
@@ -33,8 +35,13 @@ import {
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
+import { Tooltip } from '../ui/Tooltip.js'
+import { ConfirmDialog } from '../ui/AlertDialog.js'
+import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
+import { conversationsApi } from '../lib/api.js'
 import { ConversationStatusDot } from '../shell/SidebarPrimitives.js'
-import { partitionSidebarUi } from '../shell/sidebar-model.js'
+import { partitionSidebarUi, isConversationArchivable } from '../shell/sidebar-model.js'
+import { archiveBatchNotice, patchConversationsArchived } from '../shell/archive-ops.js'
 import { useGlobalAttention } from '../shell/use-attention-indicator.js'
 import {
   buildOverviewCards,
@@ -54,26 +61,77 @@ export interface ConversationOverviewProps {
 type BucketFilterValue = OverviewBucketFilter
 type SourceFilterValue = OverviewSourceFilter
 
-/** 单卡：根会话树聚合卡（只读）；卡面直达 target，芯片逐后代直达。 */
+/** 单卡：根会话树聚合卡（只读）；卡面直达 target，芯片逐后代直达。
+ * 批量模式下整卡变为勾选目标（含芯片点击），不再触发导航。 */
 function OverviewCardView({
   card,
   onOpenConversation,
   viewedConversationIds,
+  batchMode = false,
+  selectable = false,
+  selected = false,
+  onToggleSelect,
 }: {
   card: OverviewCard
   onOpenConversation: (conversationId: number) => void
   viewedConversationIds: ReadonlySet<number>
+  batchMode?: boolean
+  selectable?: boolean
+  selected?: boolean
+  onToggleSelect?: (conversationId: number) => void
 }): ReactNode {
   const { t } = useWebLocale()
-  const subParts = card.profileLabel === '' ? [] : [card.profileLabel]
-  if (card.summaryText !== '') subParts.push(card.summaryText)
+  const remoteNodeId = card.root.nodeId !== undefined && card.root.nodeId !== 'local' ? card.root.nodeId : null
+  // 紧凑元信息行：角色 · @节点 · 摘要 同一行（远端节点折叠进来，不再独占
+  // 一行）；摘要尾随弹性截断，角色/节点固定不丢事实。
+  const metaParts: ReactNode[] = []
+  if (card.profileLabel !== '') {
+    metaParts.push(
+      <span key="profile" className="overview-card-sub-profile">
+        {card.profileLabel}
+      </span>,
+    )
+  }
+  if (remoteNodeId !== null) {
+    metaParts.push(
+      <span key="node" className="overview-card-sub-node mono" title={t('shell.node.title', { id: remoteNodeId })}>
+        @{remoteNodeId}
+      </span>,
+    )
+  }
+  if (card.summaryText !== '') {
+    metaParts.push(
+      <span key="summary" className="overview-card-sub-summary" title={card.summaryText}>
+        {card.summaryText}
+      </span>,
+    )
+  }
+  const toggleCardSelect = (): void => {
+    if (selectable) onToggleSelect?.(card.root.id)
+  }
   return (
     <div
-      className={`overview-card overview-card-${card.bucket}`}
-      onClick={() => onOpenConversation(card.targetConversationId)}
+      className={`overview-card overview-card-${card.bucket}${selected ? ' is-selected' : ''}`}
+      onClick={() => {
+        if (batchMode) {
+          toggleCardSelect()
+          return
+        }
+        onOpenConversation(card.targetConversationId)
+      }}
       title={t('shell.attention.openConversation', { id: card.targetConversationId })}
     >
       <div className="overview-card-head">
+        {batchMode && (
+          <span className="overview-card-batch-check" onClick={(e) => e.stopPropagation()}>
+            <Checkbox
+              checked={selected}
+              disabled={!selectable}
+              title={selectable ? undefined : t('shell.overview.batchProtected')}
+              onChange={toggleCardSelect}
+            />
+          </span>
+        )}
         <span className="nav-status-slot">
           {/* 灯位与侧栏会话行完全同构（通用统一口径）：根会话自身状态 +
               树级后台在途聚合，经同一 resolveStatusLight 单灯裁决——根 idle
@@ -89,8 +147,26 @@ function OverviewCardView({
           {card.root.title || t('shell.conversationFallback', { id: card.root.id })}
         </span>
         <span className="overview-card-id tabular-nums">#{card.root.id}</span>
+        {!batchMode && (
+          <span className="overview-card-actions" onClick={(e) => e.stopPropagation()}>
+            <ConversationRowActionsMenu conversation={card.root} enableDelete />
+          </span>
+        )}
       </div>
-      {subParts.length > 0 && <div className="overview-card-sub">{subParts.join(' · ')}</div>}
+      {metaParts.length > 0 && (
+        <div className="overview-card-sub">
+          {metaParts.flatMap((part, index) =>
+            index === 0
+              ? [part]
+              : [
+                  <span key={`sep-${index}`} className="overview-card-sub-sep" aria-hidden="true">
+                    ·
+                  </span>,
+                  part,
+                ],
+          )}
+        </div>
+      )}
       {/* 卡片元信息只读插槽：外层不拦截冒泡（空白处点击仍直达卡片目标），
           插件可点元素自行 stopPropagation；无贡献时 PluginSlot 渲染 null 零占位。 */}
       <PluginSlot
@@ -100,11 +176,6 @@ function OverviewCardView({
         slotProps={{ rootConversation: card.root, memberIds: card.memberIds }}
         className="overview-card-meta-slot"
       />
-      {card.root.nodeId !== undefined && card.root.nodeId !== 'local' && (
-        <div className="overview-card-node mono" title={t('shell.node.title', { id: card.root.nodeId })}>
-          @{card.root.nodeId}
-        </div>
-      )}
       {card.descendants.length > 0 && (
         <div className="overview-chips">
           {card.descendants.map((descendant) => (
@@ -115,6 +186,10 @@ function OverviewCardView({
               title={t('shell.attention.openConversation', { id: descendant.conv.id })}
               onClick={(e) => {
                 e.stopPropagation()
+                if (batchMode) {
+                  toggleCardSelect()
+                  return
+                }
                 onOpenConversation(descendant.conv.id)
               }}
             >
@@ -140,7 +215,12 @@ function OverviewCardView({
 }
 
 export function ConversationOverview({ isSplit = false, onCloseSplit }: ConversationOverviewProps): ReactNode {
-  const hubUpdateCard = <HubUpdateCard />
+  const hubUpdateCard = (
+    <>
+      <HubUpgradedNotice />
+      <HubUpdateCard />
+    </>
+  )
   const { t } = useWebLocale()
   const { openTarget, closeSplit, setActiveModal } = useStoreActions()
   const { background, viewedConversationIds } = useGlobalAttention()
@@ -155,11 +235,17 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   const [profileFilter, setProfileFilter] = useState('')
   const [nodeFilter, setNodeFilter] = useState('')
   const [sourceFilter, setSourceFilter] = useState<SourceFilterValue>('all')
+  const [batchMode, setBatchMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set())
+  const [archiving, setArchiving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [batchDeleteConfirmOpen, setBatchDeleteConfirmOpen] = useState(false)
+  const { pushNotice } = useStoreActions()
 
   // 来源判定与侧栏同源（sidebarSection filterTag，零插件 ID 特判）：
   // 插件停用后其 section 贡献消失，卡片自然回到「常规对话」一侧。
-  const sectionTags = useMemo(
-    () => partitionSidebarUi(groupedUi.sidebarItems, groupedUi.sidebarSections).sectionTags,
+  const { sectionTags, keptAliveTags } = useMemo(
+    () => partitionSidebarUi(groupedUi.sidebarItems, groupedUi.sidebarSections),
     [groupedUi.sidebarItems, groupedUi.sidebarSections],
   )
   const cards = useMemo(
@@ -190,6 +276,99 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
     }
     return counts
   }, [cards])
+
+  // 批量管理口径与侧栏批量模式同界：仅人类自有、未被插件 sidebarSection
+  // 接管的根会话可勾选（isConversationArchivable ⇒ 可归档且可删除）；托管
+  // （任务执行等）与 bot 会话不参与批量，保护语义与侧栏勾选框一致。
+  const isCardSelectable = useMemo(
+    () => (conv: ConversationSummary) => isConversationArchivable(conv, sectionTags, keptAliveTags),
+    [sectionTags, keptAliveTags],
+  )
+  const selectableCardIds = useMemo(
+    () => visibleCards.filter((card) => isCardSelectable(card.root)).map((card) => card.root.id),
+    [visibleCards, isCardSelectable],
+  )
+  const isAllSelected = selectableCardIds.length > 0 && selectableCardIds.every((id) => selectedIds.has(id))
+
+  const toggleCardSelect = (conversationId: number): void => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(conversationId)) {
+        next.delete(conversationId)
+      } else {
+        next.add(conversationId)
+      }
+      return next
+    })
+  }
+
+  const exitBatchMode = (): void => {
+    setBatchMode(false)
+    setSelectedIds(new Set())
+  }
+
+  /** 批量归档：逐会话 PATCH 宿主归档 tag + allSettled 聚合（部分失败不掩盖
+   * 成功）；归档不删除会话、无导航，列表纯靠 conversation.upsert 更新
+   * （归档根树随即离开总览）。快照从全量 cards 解析（不随筛选丢失已选项）。 */
+  const executeBatchArchive = async (): Promise<void> => {
+    if (selectedIds.size === 0 || archiving || deleting) return
+    setArchiving(true)
+    try {
+      const convs = cards.filter((card) => selectedIds.has(card.root.id)).map((card) => card.root)
+      const outcome = await patchConversationsArchived(convs, true)
+      pushNotice(archiveBatchNotice(true, outcome, t))
+      exitBatchMode()
+    } finally {
+      setArchiving(false)
+    }
+  }
+
+  /** 批量删除：逐会话 DELETE + allSettled 聚合（与侧栏批量删除同语义）；
+   * 不做任何导航——若被删会话正被打开，由 conversation.deleted SSE 兜底
+   * 管道统一处理当前目标回退。 */
+  const executeBatchDelete = async (): Promise<void> => {
+    if (selectedIds.size === 0 || deleting) return
+    setBatchDeleteConfirmOpen(false)
+    setDeleting(true)
+    try {
+      const ids = Array.from(selectedIds)
+      const results = await Promise.allSettled(ids.map((id) => conversationsApi.remove(id)))
+      const fulfilled = results.filter((r) => r.status === 'fulfilled').length
+      const rejected = results.filter((r) => r.status === 'rejected').length
+      if (rejected === 0) {
+        pushNotice({
+          type: 'notification',
+          level: 'info',
+          title: t('shell.batch.bulkDeleteCompleted'),
+          body: t('shell.batch.bulkDeleteCompletedBody', { count: fulfilled }),
+        })
+      } else if (fulfilled === 0) {
+        pushNotice({
+          type: 'notification',
+          level: 'error',
+          title: t('shell.batch.bulkDeleteFailed'),
+          body: t('shell.batch.bulkDeleteFailedBody', { count: rejected }),
+        })
+      } else {
+        pushNotice({
+          type: 'notification',
+          level: 'warning',
+          title: t('shell.batch.bulkDeletePartial'),
+          body: t('shell.batch.bulkDeletePartialBody', { fulfilled, rejected }),
+        })
+      }
+      exitBatchMode()
+    } catch (err) {
+      pushNotice({
+        type: 'notification',
+        level: 'error',
+        title: t('shell.batch.bulkDeleteError'),
+        body: err instanceof Error ? err.message : String(err),
+      })
+    } finally {
+      setDeleting(false)
+    }
+  }
 
   const openConversationDrawer = (conversationId: number): void => {
     setActiveModal({ kind: 'conversation-drawer', conversationId })
@@ -280,7 +459,68 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
             />
           )}
         </div>
+        <Tooltip content={batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')} side="top">
+          <button
+            type="button"
+            className={`btn btn-ghost btn-icon-xs overview-batch-toggle${batchMode ? ' is-active' : ''}`}
+            title={batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
+            aria-label={batchMode ? t('shell.agents.exitBulk') : t('shell.agents.manageBulk')}
+            aria-pressed={batchMode}
+            onClick={() => {
+              if (batchMode) exitBatchMode()
+              else setBatchMode(true)
+            }}
+          >
+            <HelmxIcon name="check-square" size={12} />
+          </button>
+        </Tooltip>
       </div>
+
+      {batchMode && (
+        <div className="overview-batch-bar">
+          <span className="overview-batch-bar-count tabular-nums">
+            {t('shell.batch.selected', { count: selectedIds.size })}
+          </span>
+          <span className="overview-batch-bar-spacer" />
+          <div className="overview-batch-bar-actions">
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={selectableCardIds.length === 0 || deleting || archiving}
+              onClick={() => {
+                if (isAllSelected) {
+                  setSelectedIds(new Set())
+                } else {
+                  setSelectedIds(new Set(selectableCardIds))
+                }
+              }}
+            >
+              {isAllSelected ? t('shell.batch.clear') : t('shell.batch.selectAll')}
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              disabled={selectedIds.size === 0 || deleting || archiving}
+              onClick={() => {
+                void executeBatchArchive()
+              }}
+            >
+              {archiving ? t('shell.agents.archiving') : t('shell.agents.archiveCount', { count: selectedIds.size })}
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-danger-sm"
+              disabled={selectedIds.size === 0 || deleting || archiving}
+              onClick={() => setBatchDeleteConfirmOpen(true)}
+            >
+              {deleting ? t('shell.batch.deleting') : t('shell.batch.deleteCount', { count: selectedIds.size })}
+            </button>
+            <button type="button" className="btn btn-ghost btn-sm" disabled={deleting || archiving} onClick={exitBatchMode}>
+              {t('shell.batch.exit')}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="overview-grid">
         {dataReady === false ? (
@@ -294,10 +534,27 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
               card={card}
               onOpenConversation={openConversationDrawer}
               viewedConversationIds={viewedConversationIds}
+              batchMode={batchMode}
+              selectable={isCardSelectable(card.root)}
+              selected={selectedIds.has(card.root.id)}
+              onToggleSelect={toggleCardSelect}
             />
           ))
         )}
       </div>
+
+      <ConfirmDialog
+        open={batchDeleteConfirmOpen}
+        onOpenChange={setBatchDeleteConfirmOpen}
+        title={t('shell.batch.deleteConfirmTitle', { count: selectedIds.size })}
+        description={t('shell.batch.deleteConfirmDesc')}
+        confirmText={t('shell.batch.deleteConfirmButton')}
+        danger
+        onConfirm={() => {
+          void executeBatchDelete()
+        }}
+        onCancel={() => setBatchDeleteConfirmOpen(false)}
+      />
     </div>
   )
 }

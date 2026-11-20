@@ -141,7 +141,14 @@ export const composerMessages = {
   },
   'composer.model.noMatches': { en: 'No matching models', 'zh-CN': '没有匹配的模型' },
   'composer.model.thinkingHeader': { en: 'Thinking level', 'zh-CN': '思考档位' },
-  'composer.model.applyDefault': { en: 'Use default level', 'zh-CN': '使用默认档位' },
+  'composer.model.rowDefaultTitle': {
+    en: 'Use {model} (thinking level follows the default)',
+    'zh-CN': '使用 {model}（思考档位跟随默认）',
+  },
+  'composer.model.levelChipTitle': {
+    en: 'Use {model} · thinking {level}',
+    'zh-CN': '使用 {model} · 思考 {level}',
+  },
   'composer.model.catalogPartialFailure': { en: 'Some provider catalog refreshes failed', 'zh-CN': '部分供应商目录刷新失败' },
   'composer.model.catalogRefreshed': { en: 'Model catalog refreshed', 'zh-CN': '已刷新模型目录' },
   'composer.model.catalogCount': { en: '{count} models available', 'zh-CN': '共 {count} 个可用模型' },

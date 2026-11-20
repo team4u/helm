@@ -102,10 +102,10 @@ flowchart TD
 | `@helmx/plugins` | — | 官方插件、插件业务契约、客户端视图与技能资产 |
 | `@helmx/plugin-client` | — | 共享 UI 原语、上下文、Hooks 与宿主接入端口 |
 | `@helmx/plugin-build` | — | 插件源码构建实现，由产品组合根注入宿主 |
-| `@helmx/env-io` | — | 执行侧共享 I/O 与共享自更新引擎（路径进程占用扫描；更新引擎位于 `src/update/`，从包根导出） |
-| `@helmx/hub` | `helmx-hub` | 默认插件注册、构建实现接线、服务进程启动与关闭 |
+| `@helmx/env-io` | — | 执行侧共享 I/O 与共享自更新引擎（路径进程占用扫描；更新引擎位于 `src/update/`；控制通道与 OS 服务安装从包根导出；payload staging 经 `./hub-payload` 子路径导出，`tar` 依赖不进 node bundle 四外部契约） |
+| `@helmx/hub` | `helmx-hub` | 默认插件注册、构建实现接线、服务进程启动与关闭、进程内控制通道（`hub-control.json`）与后台更新检查器（静默备包 + `/api/hub-update` 一键切换） |
 | `@helmx/node` | `helmx-node` | 远端执行、文件系统操作与自升级 |
-| `@helmx/cli` | `helmx` | 静态核心命令表 + 动作清单动态命令（含 `src/launcher/` 的 `helmx update` 生命周期面） |
+| `@helmx/cli` | `helmx` | 静态核心命令表 + 动作清单动态命令（含 `src/launcher/` 的本机 Hub 生命周期面：`helmx start/stop/restart/service` 与主动更新 `helmx update`） |
 | `@helmx/web` | — | Web 应用（开发端口 3201，代理至 Hub 3202） |
 | `@helmx/payload` | — | npm 三制品组装器（Hub payload / CLI bundle / node 守护进程 bundle） |
 

@@ -12,14 +12,11 @@ export interface ThinkingLevelControlProps {
   disabled?: boolean
   className?: string
   'aria-label'?: string
-  /** Render no active chip for an empty/unmatched value (picker apply bar);
-   * the default falls back to the first supported level. */
-  allowEmpty?: boolean
 }
 
 /**
- * Thinking level segmented control (shared by the conversation model popover,
- * standby cards and the profile drawer):
+ * Thinking level segmented control (shared by the profile drawer and other
+ * level pickers):
  * - segmented-control built on the Radix Tabs primitive;
  * - plain entity levels only (aligned with Pi Agent, no fake "Default" level),
  *   what you see is what you get;
@@ -35,11 +32,10 @@ export function ThinkingLevelControl({
   disabled = false,
   className = 'composer-thinking-row',
   'aria-label': ariaLabel,
-  allowEmpty = false,
 }: ThinkingLevelControlProps): React.JSX.Element | null {
   const { t } = useWebLocale()
   if (levels.length === 0) return null
-  const safeValue = levels.includes(value) ? value : (allowEmpty ? '' : (levels[0] ?? ''))
+  const safeValue = levels.includes(value) ? value : (levels[0] ?? '')
   // Single pick channel: the Tabs root onValueChange (mouse clicks route through the SDK
   // trigger context; keyboard activation goes through the root). A per-trigger onClick would
   // double-fire onPick for every value-changing click.

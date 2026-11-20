@@ -19,32 +19,42 @@ import type { ConversationSummary } from '@helmx/protocol/browser'
 import { HelmxIcon } from '@helmx/plugin-client'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { useGroupedUi, useStoreActions } from '../lib/store-context.js'
+import { conversationsApi } from '../lib/api.js'
 import { PluginMicroAction } from './PluginMicroAction.js'
 import { matchConversationActions } from '../conversation/action-model.js'
 import { patchConversationArchived } from '../shell/archive-ops.js'
+import { ConfirmDialog } from './AlertDialog.js'
 import {
   DropdownMenu,
   DropdownMenuPortal,
   DropdownMenuTrigger,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
 } from './DropdownMenu.js'
 import {
   isConversationArchivable,
   isConversationArchived,
+  isConversationDeletable,
   partitionSidebarUi,
 } from '../shell/sidebar-model.js'
 
 export function ConversationRowActionsMenu({
   conversation,
+  enableDelete = false,
 }: {
   conversation: ConversationSummary
+  /** 额外提供「删除会话」项（带确认弹窗；仅对可人类删除的会话渲染）。
+   * 侧栏会话行保持默认 false（删除走会话面板），总览卡等大操作面开启。 */
+  enableDelete?: boolean
 }): ReactNode {
   const groupedUi = useGroupedUi()
   const { pushNotice } = useStoreActions()
   const { t } = useWebLocale()
   const [open, setOpen] = useState(false)
   const [archiving, setArchiving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false)
 
   const actions = matchConversationActions(groupedUi.uiActions, 'conversation:row', conversation)
 
@@ -60,8 +70,9 @@ export function ConversationRowActionsMenu({
       ? 'restore'
       : 'archive'
     : null
+  const canDelete = enableDelete && isConversationDeletable(conversation)
 
-  if (actions.length === 0 && hostArchiveAction === null) return null
+  if (actions.length === 0 && hostArchiveAction === null && !canDelete) return null
 
   const runHostArchiveAction = async (): Promise<void> => {
     if (archiving || hostArchiveAction === null) return
@@ -143,8 +154,64 @@ export function ConversationRowActionsMenu({
               onInvoked={() => setOpen(false)}
             />
           ))}
+          {canDelete && (
+            <>
+              <DropdownMenuSeparator className="popover-separator" />
+              <DropdownMenuItem
+                className="popover-item popover-item-danger"
+                danger
+                disabled={deleting}
+                title={t('conv.pane.deleteConfirmDesc')}
+                onSelect={() => {
+                  setDeleteConfirmOpen(true)
+                }}
+              >
+                <span className="pane-more-item-label">
+                  <HelmxIcon name="trash-2" size={13} />
+                  {t('conv.pane.deleteConversation')}
+                </span>
+              </DropdownMenuItem>
+            </>
+          )}
         </DropdownMenuContent>
       </DropdownMenuPortal>
+      {canDelete && (
+        <ConfirmDialog
+          open={deleteConfirmOpen}
+          onOpenChange={setDeleteConfirmOpen}
+          title={t('conv.pane.deleteConfirmTitle', { id: conversation.id })}
+          description={t('conv.pane.deleteConfirmDesc')}
+          confirmText={t('conv.pane.deleteConversation')}
+          danger
+          onConfirm={() => {
+            setDeleteConfirmOpen(false)
+            void (async () => {
+              setDeleting(true)
+              try {
+                await conversationsApi.remove(conversation.id)
+                // 导航（若该会话正被打开）由 conversation.deleted SSE 事件统一
+                // 处理，这里不做任何目标切换——与会话面板删除同语义。
+                pushNotice({
+                  type: 'notification',
+                  level: 'info',
+                  title: t('conv.pane.conversationDeleted'),
+                  body: t('conv.pane.conversationDeletedBody', { id: conversation.id }),
+                })
+              } catch (err) {
+                pushNotice({
+                  type: 'notification',
+                  level: 'error',
+                  title: t('conv.pane.deleteFailed'),
+                  body: err instanceof Error ? err.message : String(err),
+                })
+              } finally {
+                setDeleting(false)
+              }
+            })()
+          }}
+          onCancel={() => setDeleteConfirmOpen(false)}
+        />
+      )}
     </DropdownMenu>
   )
 }
