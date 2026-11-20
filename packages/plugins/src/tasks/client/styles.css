@@ -1,56 +1,108 @@
 /* builtin:tasks task board styles (host CSS variables adapt to dark/light themes, zero Emoji).
-   Only task-board-specific layout lives here: the four-column grid, cards, the
-   submission summary block, the mobile clear-down flow and the centered create /
-   rework modals. Generic primitives (search box, drawer shell, buttons, badges,
-   status dots, trace rows) reuse the host design-system classes. */
+   Only task-board-specific layout lives here: the Notion-style calm column
+   tracks, unified card anatomy (property strip / focal body / action footer),
+   the mobile status pill strip with grouped collapsible list, the collapsible
+   filter tray and the centered create / rework modals. Generic primitives
+   (search box, drawer shell, buttons, badges, status dots, trace rows) reuse
+   the host design-system classes. */
 
 .task-board {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
   min-width: 0;
   /* Container queries make the column grid adapt to the REAL pane width (split
      view / narrow windows), which viewport media queries cannot see. */
   container-type: inline-size;
 }
 
-/* ---- Top bar & toolbar ---- */
+/* ---- Semantic tone dots (column headers + mobile pills/groups) ---- */
+
+.task-tone-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: var(--fg-muted);
+}
+
+.task-tone-dot[data-tone='accent'] {
+  background: var(--accent);
+}
+
+.task-tone-dot[data-tone='warn'] {
+  background: var(--warn);
+}
+
+.task-tone-dot[data-tone='ok'] {
+  background: var(--ok);
+}
+
+.task-tone-dot[data-tone='err'] {
+  background: var(--err);
+}
+
+/* ---- Compact command bar (host ScreenHost renders the pane title) ---- */
 
 .task-board-topbar {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.task-board-title-wrap {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.task-board-title {
-  display: flex;
   align-items: center;
-  gap: 7px;
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--fg);
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .task-board-subtitle {
   font-size: 12px;
 }
 
-.task-board-toolbar {
+.task-board-actions {
   display: flex;
   align-items: center;
-  gap: 8px 10px;
+  gap: 8px;
+  margin-left: auto;
   flex-wrap: wrap;
 }
 
+.task-board-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.task-board-toolbar .primary-search-box {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Filter toggle: mobile-only affordance (hidden on desktop widths). */
+.task-board-filter-toggle {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--fg-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.task-board-filter-toggle:hover {
+  border-color: var(--border-strong);
+  color: var(--fg);
+}
+
+.task-filter-count {
+  padding: 0 5px;
+  font-size: 10px;
+}
+
+/* Property filters: always visible on desktop, collapsible tray on mobile. */
 .task-board-filters {
   display: flex;
   align-items: center;
@@ -62,15 +114,7 @@
   width: 150px;
 }
 
-.task-board-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-  flex-wrap: wrap;
-}
-
-/* ---- Desktop four-column board ---- */
+/* ---- Desktop four-column board (calm Notion column tracks) ---- */
 
 .task-board-desktop {
   display: flex;
@@ -111,13 +155,18 @@
   flex-direction: column;
   gap: 8px;
   min-width: 0;
+  padding: 10px 8px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
 }
 
 .task-column-header {
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 2px 2px 0;
+  padding: 0 2px;
+  min-height: 24px;
 }
 
 .task-column-title {
@@ -129,8 +178,20 @@
   text-overflow: ellipsis;
 }
 
-.task-column-header .badge {
+.task-column-count {
+  font-size: 11px;
+  color: var(--fg-subtle);
   flex-shrink: 0;
+}
+
+.task-column-add,
+.task-column-archive {
+  margin-left: auto;
+}
+
+.task-column-archive {
+  font-size: 10.5px;
+  color: var(--fg-muted);
 }
 
 .task-column-list {
@@ -146,32 +207,60 @@
   gap: 6px;
   padding: 14px 10px;
   border: 1px dashed var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   color: var(--fg-subtle);
   font-size: 11.5px;
   text-align: center;
 }
 
-/* ---- Task card ---- */
+/* Notion-style ghost "new task" row at the bottom of the backlog column. */
+.task-column-new-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: border-color 0.12s ease, color 0.12s ease;
+}
+
+.task-column-new-row:hover {
+  border-color: var(--border-strong);
+  color: var(--fg-secondary);
+}
+
+/* ---- Task card (unified PC & mobile anatomy) ---- */
 
 .task-card {
   display: flex;
   flex-direction: column;
   gap: 7px;
-  padding: 12px;
+  padding: 10px 11px;
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-sm);
   background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm);
   cursor: pointer;
   position: relative;
+  transition: border-color 0.12s ease;
 }
 
 .task-card:hover {
-  border-color: var(--fg-muted);
+  border-color: var(--border-strong);
 }
 
+/* Attention accent: a crisp left semantic bar (error escalates to err). */
 .task-card.is-attention {
-  border-color: var(--warn);
+  border-left: 3px solid var(--warn);
+}
+
+.task-card.is-attention.is-severe {
+  border-left-color: var(--err);
 }
 
 .task-card.is-clickless {
@@ -184,36 +273,17 @@
   gap: 8px;
 }
 
-.task-card-main {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-  flex: 1;
-}
-
-.task-card-title-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
 .task-card-title {
+  flex: 1;
+  min-width: 0;
   font-size: 13px;
   font-weight: 600;
+  line-height: 1.4;
   color: var(--fg);
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  max-width: 100%;
-}
-
-.task-card-id {
-  font-size: 10.5px;
-  color: var(--fg-muted);
-  font-family: var(--font-mono, monospace);
-  flex-shrink: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .task-card-tools {
@@ -223,17 +293,63 @@
   flex-shrink: 0;
 }
 
-.task-card-meta {
+/* Hover-revealed corner affordances on precise pointers; always accessible
+   on touch screens and keyboard focus. */
+@media (hover: hover) and (pointer: fine) {
+  .task-card-tools {
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+
+  .task-card:hover .task-card-tools,
+  .task-card:focus-within .task-card-tools {
+    opacity: 1;
+  }
+}
+
+/* Notion property strip: id / assignee / node / project / elapsed. */
+.task-card-props {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   flex-wrap: wrap;
   font-size: 11px;
   color: var(--fg-muted);
 }
 
-.task-card-meta .mono {
+.task-card-props .mono,
+.task-card-id {
   font-family: var(--font-mono, monospace);
+}
+
+.task-card-id {
+  color: var(--fg-subtle);
+  font-size: 10.5px;
+}
+
+.task-card-project {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.task-card-elapsed {
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.task-card-flags {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.task-card-flags .badge {
+  font-size: 10px;
 }
 
 .task-card-live {
@@ -260,31 +376,30 @@
   color: var(--warn);
 }
 
-.task-card-elapsed {
-  font-size: 10.5px;
-  color: var(--fg-subtle);
-  font-family: var(--font-mono, monospace);
-  flex-shrink: 0;
-}
-
-.task-card-flags {
+/* Current rework context line (reworked in-progress cards). */
+.task-card-rework {
   display: flex;
   align-items: center;
-  gap: 5px;
-  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--fg-muted);
+  min-width: 0;
 }
 
-.task-card-flags .badge {
-  font-size: 10px;
+.task-card-rework-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-/* Submission summary block (In Review cards) */
+/* Submission preview (in_review cards): crisp 2-line summary + fact pills. */
 
 .task-card-submission {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding: 8px;
+  padding: 7px 8px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-subtle);
@@ -306,7 +421,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
 }
 
@@ -321,6 +436,29 @@
 
 .task-card-submission-facts .mono {
   font-family: var(--font-mono, monospace);
+}
+
+.task-card-fact {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.task-card-fact span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Done cards: compact single-line summary, no tall box. */
+.task-card-done-line {
+  font-size: 11px;
+  color: var(--fg-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* Dependency row (Backlog cards) */
@@ -342,24 +480,7 @@
   color: var(--warn);
 }
 
-/* Current rework context line (reworked in-progress cards). */
-.task-card-rework {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11px;
-  color: var(--fg-muted);
-  min-width: 0;
-}
-
-.task-card-rework-text {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* Card footer actions */
+/* Card footer actions — rendered only when the card has real actions. */
 
 .task-card-footer {
   display: flex;
@@ -379,7 +500,7 @@
   flex-wrap: wrap;
 }
 
-/* ---- Mobile clear-down flow (<=680px) ---- */
+/* ---- Mobile board (<=680px): pills + grouped collapsible list ---- */
 
 .task-board-mobile {
   display: none;
@@ -387,40 +508,128 @@
   gap: 10px;
 }
 
-.task-board-mobile-tabs {
+/* Horizontal scrollable status pills: never squished into equal columns. */
+.task-mobile-pills {
   display: flex;
-  width: 100%;
+  align-items: center;
+  gap: 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 2px;
+}
+
+.task-mobile-pills::-webkit-scrollbar {
+  display: none;
+}
+
+.task-mobile-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.task-mobile-pill:hover {
+  border-color: var(--border-strong);
+}
+
+.task-mobile-pill.is-active {
+  border-color: var(--accent);
+  color: var(--fg);
+  background: var(--bg);
+  box-shadow: var(--shadow-sm);
+}
+
+.task-mobile-pill.is-muted {
+  color: var(--fg-subtle);
+}
+
+.task-mobile-pill-label {
   min-width: 0;
 }
 
-/* Five label+count capsules must fit narrow viewports (~375px): equal flex
-   shrink, compact padding, single-line ellipsized labels and shrunken badges. */
-@media (max-width: 680px) {
-  .task-board-mobile-tabs .segmented-control-btn {
-    flex: 1 1 0;
-    min-width: 0;
-    padding: 0 6px;
-    gap: 4px;
-  }
+.task-mobile-pill-count {
+  font-size: 10.5px;
+  color: var(--fg-subtle);
+}
 
-  .task-board-mobile-tabs .segmented-control-btn > span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
+.task-mobile-pill.is-active .task-mobile-pill-count {
+  color: var(--fg-secondary);
+}
 
-  .task-board-mobile-tabs .segmented-control-btn .badge {
-    flex-shrink: 0;
-    padding: 0 4px;
-    font-size: 10px;
-  }
+/* Grouped collapsible sections (the `all` view). */
+.task-mobile-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.task-mobile-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-mobile-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: var(--bg-subtle);
+  color: var(--fg-secondary);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.task-mobile-group-toggle:hover {
+  border-color: var(--border);
+}
+
+.task-mobile-group-label {
+  white-space: nowrap;
+}
+
+.task-mobile-group-count {
+  font-size: 10.5px;
+  font-weight: 400;
+  color: var(--fg-subtle);
+}
+
+.task-mobile-group-chevron {
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.task-mobile-group-header .task-mobile-group-add,
+.task-mobile-group-header .task-mobile-group-archive {
+  margin-left: auto;
+}
+
+.task-mobile-group-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .task-board-mobile-list {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
 }
 
 @media (max-width: 680px) {
@@ -432,7 +641,30 @@
     display: flex;
   }
 
-  .task-board-toolbar {
+  /* Compact above-the-fold controls: stats + primary actions on one row. */
+  .task-board-topbar {
+    align-items: center;
+  }
+
+  .task-board-actions {
+    margin-left: 0;
+  }
+
+  .task-board-actions .btn {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+
+  /* Search + filter toggle row; the property selects collapse into the tray. */
+  .task-board-filter-toggle {
+    display: inline-flex;
+  }
+
+  .task-board-filters[data-open='false'] {
+    display: none;
+  }
+
+  .task-board-filters {
     width: 100%;
   }
 
@@ -440,16 +672,12 @@
     width: 100%;
   }
 
-  .task-board-actions {
-    margin-left: 0;
-    width: 100%;
+  /* Phones cannot host a split pane. */
+  .task-card-split {
+    display: none;
   }
 
-  .task-board-actions .btn {
-    flex: 1;
-  }
-
-  /* Necessary card actions stay thumb-reachable: full-width wrapped rows. */
+  /* Touch-friendly card actions without stretching anything else. */
   .task-card-footer-actions {
     width: 100%;
     flex-wrap: wrap;
@@ -458,6 +686,13 @@
   .task-card-footer-actions .btn {
     flex: 1 1 auto;
     min-width: 0;
+    min-height: 30px;
+  }
+
+  /* Modal scroll hygiene with viewport-safe containment. */
+  .task-modal .modal-body {
+    overscroll-behavior: contain;
+    min-height: 0;
   }
 
   /* Detail drawer footer actions reach full width on phones. */
@@ -548,6 +783,14 @@
   color: var(--err);
 }
 
+.task-form-hint {
+  font-size: 11.5px;
+  color: var(--fg-subtle);
+  padding: 8px 10px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
 .task-form-grid-2 {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -560,6 +803,73 @@
   }
 }
 
+/* Primary switch block (start immediately) sits right under the core fields. */
+.task-form-switches-primary {
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+/* Collapsible advanced options disclosure with value chips. */
+.task-form-disclosure {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--fg-secondary);
+  font-size: 12.5px;
+  cursor: pointer;
+  min-width: 0;
+}
+
+.task-form-disclosure:hover {
+  border-color: var(--border-strong);
+}
+
+.task-form-disclosure-chevron {
+  flex-shrink: 0;
+  color: var(--fg-muted);
+  transition: transform 0.12s ease;
+}
+
+.task-form-disclosure-chevron.is-open {
+  transform: rotate(180deg);
+}
+
+.task-form-disclosure-label {
+  flex-shrink: 0;
+  font-weight: 600;
+}
+
+.task-form-disclosure-chips {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.task-form-disclosure-chips .badge {
+  font-size: 10px;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.task-form-advanced {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+}
+
 .task-form-switches {
   display: flex;
   flex-direction: column;
@@ -567,7 +877,7 @@
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  background: var(--bg-subtle);
+  background: var(--bg);
 }
 
 .task-form-switch-row {
@@ -629,14 +939,14 @@
   font-size: 13px;
   line-height: 1.6;
   color: var(--fg-secondary);
-  white-space: pre-wrap;
   word-break: break-word;
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--bg-subtle);
-  max-height: 280px;
+  max-height: 320px;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .task-detail-deps {
@@ -674,7 +984,86 @@
   font-size: 12.5px;
 }
 
+/* Submission changed-file list: first 5 + expand toggle. */
+.task-detail-files {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.task-detail-files-title {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--fg-secondary);
+  font-weight: 600;
+}
+
+.task-detail-file-list {
+  margin: 0;
+  padding: 6px 8px 6px 10px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  font-size: 11px;
+  color: var(--fg-muted);
+  max-height: 180px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.task-detail-file-list li {
+  font-family: var(--font-mono, monospace);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.task-detail-files-toggle {
+  align-self: flex-start;
+}
+
+/* Submission artifact chips: one tap to inspect deliverables. */
+.task-detail-artifacts {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.task-detail-artifact-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.task-detail-artifact-chip {
+  max-width: 100%;
+}
+
+.task-detail-artifact-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* ---- Tool-trace receipt extras (base row reuses the host .trace-row) ---- */
+
+.task-trace-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.task-trace-entry .task-trace-row {
+  flex: 1;
+  min-width: 0;
+}
 
 .task-trace-summary {
   min-width: 0;
@@ -685,4 +1074,8 @@
 
 .task-trace-error {
   color: var(--err);
+}
+
+.task-trace-review {
+  flex-shrink: 0;
 }
