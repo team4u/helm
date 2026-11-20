@@ -229,7 +229,9 @@ export const shellMessages = {
   },
   'shell.hubChangelog.viewChanges': { en: "What's changed", 'zh-CN': '查看更新内容' },
   'shell.hubChangelog.dismiss': { en: 'Got it', 'zh-CN': '知道了' },
-  'shell.overview.stats': { en: '{count} trees', 'zh-CN': '{count} 棵会话树' },
+  'shell.overview.stats': { en: '{count} conversation groups', 'zh-CN': '{count} 个会话组' },
+  'shell.overview.waitingForYou': { en: 'Waiting for you', 'zh-CN': '等待你处理' },
+  'shell.overview.hasError': { en: 'Error', 'zh-CN': '发生错误' },
   'shell.overview.filterAll': { en: 'All', 'zh-CN': '全部' },
   'shell.overview.filterNeeds': { en: 'Needs attention', 'zh-CN': '需处理' },
   'shell.overview.filterRunning': { en: 'Running', 'zh-CN': '进行中' },
@@ -244,8 +246,8 @@ export const shellMessages = {
   'shell.overview.sourceManaged': { en: 'Managed conversations', 'zh-CN': '托管会话' },
   'shell.overview.localNode': { en: 'Local', 'zh-CN': '本机' },
   'shell.overview.statsFiltered': {
-    en: '{count} of {total} trees',
-    'zh-CN': '{count} / {total} 棵会话树',
+    en: '{count} of {total} conversation groups',
+    'zh-CN': '{count} / {total} 个会话组',
   },
   'shell.overview.emptySystem': {
     en: 'No conversations yet. Start one with New topic.',
