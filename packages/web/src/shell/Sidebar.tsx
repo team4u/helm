@@ -371,7 +371,8 @@ function ActivityRail({
   const attentionSummary = composeAttentionSummary(attentionIndicator, t)
   const overviewTooltipLabel =
     attentionSummary !== '' ? `${t('shell.overview.railTooltip')} · ${attentionSummary}` : t('shell.overview.railTooltip')
-  const overviewPresence = resolveSidebarTargetPresence(store, (target) => target.kind === 'overview')
+  // 主屏是否停在总览：Rail 高亮的唯一归属判定（空间按钮与总览按钮互斥点亮）。
+  const onOverviewPrimary = store.primaryTarget?.kind === 'overview'
 
   return (
     <nav className="activity-rail" aria-label={t('shell.sidebar.mainNavigation')}>
@@ -393,14 +394,17 @@ function ActivityRail({
       <div className="activity-rail-spaces">
         {(Object.keys(SPACE_LABEL_KEYS) as SidebarSpace[]).map((key) => {
           const spaceLabel = t(SPACE_LABEL_KEYS[key])
+          // 高亮只认主屏归属：主屏停在总览时由总览按钮独占点亮，空间按钮
+          // 一律不亮（否则「对话」与「会话总览」双高亮）。
+          const spaceActive = space === key && !onOverviewPrimary
           return (
             <Tooltip content={spaceLabel} side="right" key={key}>
               <button
                 type="button"
-                className={`rail-btn rail-space-btn${space === key ? ' rail-btn-active' : ''}`}
+                className={`rail-btn rail-space-btn${spaceActive ? ' rail-btn-active' : ''}`}
                 title={spaceLabel}
                 aria-label={spaceLabel}
-                aria-current={space === key ? 'page' : undefined}
+                aria-current={spaceActive ? 'page' : undefined}
                 onClick={() => onOpenSpace(key)}
               >
                 <HelmxIcon name={SPACE_ICONS[key]} size={16} />
@@ -410,14 +414,15 @@ function ActivityRail({
         })}
       </div>
       {/* 宿主「会话总览」直达按钮（#/overview，对话空间）：紧邻态势微标，
-          桌面折叠 Rail 与移动抽屉同源一键直达；tone 灯点复用同源 indicator。 */}
+          桌面折叠 Rail 与移动抽屉同源一键直达；tone 灯点复用同源 indicator。
+          高亮仅主屏停总览时点亮（分屏挂总览由侧栏入口的 pane 标签表达）。 */}
       <Tooltip content={overviewTooltipLabel} side="right">
         <button
           type="button"
-          className={`rail-btn rail-overview-btn${overviewPresence.active ? ' rail-btn-active' : ''}`}
+          className={`rail-btn rail-overview-btn${onOverviewPrimary ? ' rail-btn-active' : ''}`}
           title={overviewTooltipLabel}
           aria-label={overviewTooltipLabel}
-          aria-current={overviewPresence.active ? 'page' : undefined}
+          aria-current={onOverviewPrimary ? 'page' : undefined}
           onClick={() => {
             store.openTarget({ kind: 'overview' })
             onNavigate?.()

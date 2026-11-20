@@ -1664,7 +1664,11 @@ export class HelmxExternalStore {
     if (opts?.split) {
       patch.splitTarget = resolved
     } else {
-      this.spaceMemory[spaceForTarget(resolved)] = resolved
+      // 总览是有专属入口的顶层目的地，不占对话空间的记忆位——
+      // 「对话」空间按钮永远跳回最近的真实会话/待命目标，绝不被总览劫持。
+      if (resolved.kind !== 'overview') {
+        this.spaceMemory[spaceForTarget(resolved)] = resolved
+      }
       patch.primaryTarget = resolved
     }
     if (resolved.kind === 'conversation' && opts?.highlightEntryId) {
