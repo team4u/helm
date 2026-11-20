@@ -31,6 +31,8 @@ export interface SidebarPartition {
   pinnedConversationIds: Set<number>
   /** sidebar.section 声明的过滤标签集合（如 'worker'、'worker-archived'）。 */
   sectionTags: Set<string>
+  /** sidebar.section 声明的留组标签集合（keptAliveTag；结单成员换标签后仍留在原分组）。 */
+  keptAliveTags: Set<string>
 }
 
 /** 从 UI 贡献中提取 sidebar.item / sidebar.section 的去重规则输入。 */
@@ -41,6 +43,7 @@ export function partitionSidebarUi(
   const pinnedProfileIds = new Set<string>()
   const pinnedConversationIds = new Set<number>()
   const sectionTags = new Set<string>()
+  const keptAliveTags = new Set<string>()
 
   for (const item of sidebarItems) {
     const target = item.spec.target
@@ -58,16 +61,19 @@ export function partitionSidebarUi(
   for (const section of sidebarSections) {
     const tag = section.spec.filterTag?.trim()
     if (tag) sectionTags.add(tag)
+    const kept = section.spec.keptAliveTag?.trim()
+    if (kept && kept !== tag) keptAliveTags.add(kept)
   }
-  return { pinnedProfileIds, pinnedConversationIds, sectionTags }
+  return { pinnedProfileIds, pinnedConversationIds, sectionTags, keptAliveTags }
 }
 
-/** sidebar.section 过滤：会话 tags 命中 filterTag 即属该分组。 */
+/** sidebar.section 过滤：会话 tags 命中 filterTag 或 keptAliveTag 即属该分组。 */
 export function filterConversationsByTag(
   conversations: ConversationSummary[],
   tag: string,
+  keptAliveTag?: string,
 ): ConversationSummary[] {
-  return conversations.filter((c) => c.tags.includes(tag))
+  return conversations.filter((c) => c.tags.includes(tag) || (keptAliveTag !== undefined && c.tags.includes(keptAliveTag)))
 }
 
 // ---------------------------------------------------------------------------
@@ -78,16 +84,20 @@ export function filterConversationsByTag(
  * 会话是否可被人工归档管理（与删除保护同界）：
  * - 子代理派生会话（有父链）与 bot/helmx 托管会话不参与——归档是人类整理行为；
  * - 已被插件 sidebar.section filterTag 接管的会话不参与——归档对其无可见效果
- *   （仍留在插件分组），避免「点了归档却什么都不发生」。
+ *   （仍留在插件分组），避免「点了归档却什么都不发生」；keptAliveTag 成员同界。
  * 当前已归档的会话本函数仍可能返回 true（可管理性），菜单按归档态选择动作。
  */
 export function isConversationArchivable(
   conv: Pick<ConversationSummary, 'parentConversationId' | 'ownedBy' | 'tags'>,
   sectionTags?: ReadonlySet<string>,
+  keptAliveTags?: ReadonlySet<string>,
 ): boolean {
   if (conv.parentConversationId !== undefined) return false
   if ((conv.ownedBy ?? 'human') !== 'human') return false
-  if (sectionTags !== undefined && conv.tags.some((t) => t !== ARCHIVED_TAG && sectionTags.has(t))) {
+  if (
+    sectionTags !== undefined &&
+    conv.tags.some((t) => t !== ARCHIVED_TAG && (sectionTags.has(t) || (keptAliveTags?.has(t) ?? false)))
+  ) {
     return false
   }
   return true
@@ -111,7 +121,9 @@ export function buildArchivedConversationList(input: {
   sidebarSections?: Array<QualifiedUiSpec<SidebarSectionSpec>>
 }): ArchivedConversationListItem[] {
   const { conversations, profiles, plugins = [], sidebarSections = [] } = input
-  const sectionTags = partitionSidebarUi([], sidebarSections).sectionTags
+  const partition = partitionSidebarUi([], sidebarSections)
+  const sectionTags = partition.sectionTags
+  const keptAliveTags = partition.keptAliveTags
   const enabledPluginIds = collectEnabledPluginIds(plugins)
   const visibleProfileIds = new Set(
     profiles.filter((profile) => isProfileVisible(profile, enabledPluginIds)).map((profile) => profile.id),
@@ -122,7 +134,7 @@ export function buildArchivedConversationList(input: {
       if (!isConversationArchived(c)) return false
       if (c.parentConversationId !== undefined) return false
       if ((c.ownedBy ?? 'human') !== 'human') return false
-      if (c.tags.some((t) => t !== ARCHIVED_TAG && sectionTags.has(t))) return false
+      if (c.tags.some((t) => t !== ARCHIVED_TAG && (sectionTags.has(t) || keptAliveTags.has(t)))) return false
       if (profiles.some((profile) => profile.id === c.profileId) && !visibleProfileIds.has(c.profileId)) return false
       return true
     })
@@ -219,13 +231,14 @@ export function buildAgentStandings(input: AgentStandingsInput): AgentStanding[]
 
   // 可挂到 Agent 站位下的会话：
   // 1. 排除子代理派生会话（有父链）；
-  // 2. 排除被 sidebar.section 接管的会话（后台 Worker 等分组展示，不重复挂载）；
+  // 2. 排除被 sidebar.section 接管的会话（后台 Worker 等分组展示，不重复挂载；
+  //    keptAliveTag 成员视同接管——结单/收尾后仍归插件分组，不回流站位）；
   // 3. 排除已人工归档会话（集中进「已归档」分组，绝不同时出现在活跃列表）；
   // 4. 非 human 会话仅保留可见 Profile 的常驻会话（ownedBy=helmx 或被启用 sidebar.item 指向）。
   const attachable = conversations.filter((c) => {
     if (c.parentConversationId !== undefined) return false
     if (isConversationArchived(c)) return false
-    if (c.tags.some((t) => partition.sectionTags.has(t))) return false
+    if (c.tags.some((t) => partition.sectionTags.has(t) || partition.keptAliveTags.has(t))) return false
     if ((c.ownedBy ?? 'human') === 'human') return true
     return (
       visibleProfileIds.has(c.profileId) &&

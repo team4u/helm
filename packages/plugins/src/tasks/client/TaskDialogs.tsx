@@ -47,6 +47,8 @@ import {
   TASK_ACTION_APPROVE_TITLE,
   TASK_ACTION_ARCHIVE,
   TASK_ACTION_ARCHIVE_TITLE,
+  TASK_ARCHIVED_BADGE,
+  TASK_ARCHIVED_BADGE_TITLE,
   TASK_ACTION_CANCEL,
   TASK_ACTION_CLOSE,
   TASK_ACTION_CONTINUE,
@@ -1106,16 +1108,23 @@ export function TaskDetailDrawer(props: TaskDetailDrawerProps): ReactNode {
                       </>
                     ) : null}
                     {task.column === 'done' ? (
-                      <button
-                        type="button"
-                        className="btn btn-sm btn-ghost"
-                        disabled={busy}
-                        title={t(TASK_ACTION_ARCHIVE_TITLE)}
-                        onClick={() => runAction(() => ctx.callAction('archive', { taskId: task.id }))}
-                      >
-                        <HelmxIcon name="archive" size={12} />
-                        <span>{t(TASK_ACTION_ARCHIVE)}</span>
-                      </button>
+                      task.archived === true ? (
+                        <span className="badge badge-neutral" title={t(TASK_ARCHIVED_BADGE_TITLE)}>
+                          <HelmxIcon name="archive" size={12} />
+                          <span>{t(TASK_ARCHIVED_BADGE)}</span>
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          className="btn btn-sm btn-ghost"
+                          disabled={busy}
+                          title={t(TASK_ACTION_ARCHIVE_TITLE)}
+                          onClick={() => runAction(() => ctx.callAction('archive', { taskId: task.id }))}
+                        >
+                          <HelmxIcon name="archive" size={12} />
+                          <span>{t(TASK_ACTION_ARCHIVE)}</span>
+                        </button>
+                      )
                     ) : null}
                     {task.column !== 'in_progress' ? (
                       <button

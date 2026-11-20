@@ -565,6 +565,7 @@ export interface TaskItem {
 /** Stable comparator: needsAttention on top, then createdAt descending (never updatedAt — streaming must not jump cards). */
 function compareTaskItems(a: TaskItem, b: TaskItem): number {
   if (a.live.needsAttention !== b.live.needsAttention) return a.live.needsAttention ? -1 : 1
+  if ((a.task.archived === true) !== (b.task.archived === true)) return a.task.archived === true ? 1 : -1
   if (a.task.createdAt !== b.task.createdAt) return b.task.createdAt - a.task.createdAt
   return b.task.id.localeCompare(a.task.id)
 }
@@ -649,7 +650,7 @@ export function resolveDefaultMobileTab(explicit: TaskMobileTab | undefined): Ta
 }
 
 // ---------------------------------------------------------------------------
-// Filters and ScreenProps.params codec (q / project / assignee / node / tab / task)
+// Filters and ScreenProps.params codec (q / project / assignee / node / tab / task / archived)
 // ---------------------------------------------------------------------------
 
 export interface TaskFilterState {
@@ -663,6 +664,8 @@ export interface TaskScreenParams {
   filter: TaskFilterState
   tab: TaskMobileTab
   taskId: string | undefined
+  /** 归档历史开关：true 时已完成/待办列附带展示已归档卡（淡化 + 已归档徽标）。 */
+  showArchived: boolean
 }
 
 /** Parse the URL params (deep-link restore is the single source of truth for filters). */
@@ -680,6 +683,7 @@ export function parseTaskScreenParams(params: Readonly<Record<string, string>>):
         ? (tab as TaskMobileTab)
         : resolveDefaultMobileTab(undefined),
     taskId: params['task'] !== undefined && params['task'] !== '' ? params['task'] : undefined,
+    showArchived: params['archived'] === '1',
   }
 }
 

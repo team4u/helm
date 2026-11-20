@@ -49,6 +49,24 @@ export const TASK_ARCHIVE_ALL_TITLE: LocalizedText = L(
 )
 export const TASK_ARCHIVING: LocalizedText = L('Archiving…', '正在归档…')
 
+/** Archived history toggle (board toolbar) + archived card badge. */
+export const TASK_ARCHIVE_HISTORY_SHOW: LocalizedText = L('Archived', '已归档')
+export const TASK_ARCHIVE_HISTORY_HIDE: LocalizedText = L('Hide archived', '收起已归档')
+export const TASK_ARCHIVE_HISTORY_TITLE: LocalizedText = L(
+  'Show archived task cards kept as history (most recent 50)',
+  '显示归档历史任务卡（最近 50 条）',
+)
+export const TASK_ARCHIVE_HISTORY_HIDDEN_HINT: LocalizedText = L(
+  'archived hidden',
+  '已归档已隐藏',
+)
+export const TASK_ARCHIVED_BADGE: LocalizedText = L('Archived', '已归档')
+export const TASK_ARCHIVED_BADGE_TITLE: LocalizedText = L(
+  'Archived off the active board; visible via the board Archived toggle',
+  '已归档收离看板；通过看板「已归档」开关查看',
+)
+export const TASK_ARCHIVED_EMPTY: LocalizedText = L('No archived tasks', '暂无已归档任务')
+
 /** Board stats line (`N tasks · M in flight · K awaiting review`). */
 export function taskBoardStats(total: number, inFlight: number, inReview: number, locale: HelmxLocale = DEFAULT_HELMX_LOCALE): string {
   return resolveLocalizedText(
