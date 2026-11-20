@@ -27,6 +27,9 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(252px, 1fr));
   gap: 12px;
+  /* 同行卡片各自按内容自然高度顶部对齐（不被最高者拉齐）；
+   * 行内参差是内容量的真实表达，底部空隙交给网格行距统一。 */
+  align-items: start;
   align-content: start;
   box-sizing: border-box;
 }
@@ -34,8 +37,8 @@
 .overview-card {
   display: flex;
   flex-direction: column;
-  gap: 7px;
-  padding: 11px 12px;
+  gap: 6px;
+  padding: 10px 12px;
   min-width: 0;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -52,6 +55,45 @@
 .overview-card:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
+}
+
+/* 批量模式勾选态：accent 边框 + 淡染底色，与筛选控件同一 accent 词汇。 */
+.overview-card.is-selected {
+  border-color: color-mix(in srgb, var(--accent) 55%, transparent);
+  background: color-mix(in srgb, var(--accent) 7%, var(--bg-subtle));
+}
+
+.overview-card.is-selected:hover {
+  border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--bg-hover));
+}
+
+.overview-card-batch-check {
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+/* 卡面右侧「更多操作」菜单（与侧栏会话行同源 ConversationRowActionsMenu）：
+ * 悬停设备上悬停卡片时浮现（触控设备常显），菜单展开期间保持可见。 */
+.overview-card-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+@media (hover: hover) {
+  .overview-card-actions {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 120ms ease;
+  }
+
+  .overview-card:hover .overview-card-actions,
+  .overview-card:focus-within .overview-card-actions,
+  .overview-card:has([aria-expanded='true']) .overview-card-actions {
+    opacity: 1;
+    pointer-events: auto;
+  }
 }
 
 .overview-card-head {
@@ -78,12 +120,36 @@
   flex-shrink: 0;
 }
 
+/* 紧凑元信息行：角色 · @节点 · 摘要 同一行；角色/节点固定可见，摘要
+ * 尾随弹性单行截断（长摘要挂 title 全文），远端节点不再独占一行。 */
 .overview-card-sub {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
   font-size: 11.5px;
   color: var(--fg-muted);
+  white-space: nowrap;
+}
+
+.overview-card-sub-profile,
+.overview-card-sub-node {
+  flex-shrink: 0;
+  max-width: 40%;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.overview-card-sub-summary {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.overview-card-sub-sep {
+  flex-shrink: 0;
+  color: var(--fg-subtle);
 }
 
 /* 卡片元信息只读插槽（OVERVIEW_CARD_META_SLOT）：胶囊行布局；
@@ -96,14 +162,6 @@
 
 .overview-card-meta-slot:empty {
   display: none;
-}
-
-.overview-card-node {
-  font-size: 11px;
-  color: var(--fg-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .overview-chips {
@@ -159,6 +217,46 @@
   color: var(--fg-subtle);
 }
 
+/* 批量操作条：横贯工具栏下方，仅批量模式渲染；按钮沿用通用 btn 词汇，
+ * 删除按钮走 btn-danger-sm（与侧栏批量条同语义）。 */
+.overview-batch-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent) 5%, var(--bg-subtle));
+}
+
+.overview-batch-bar-count {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg-secondary);
+}
+
+.overview-batch-bar-spacer {
+  flex: 1;
+}
+
+.overview-batch-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* 工具栏右缘的批量管理开关（勾选方块图标，激活态 accent）。 */
+.overview-batch-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.overview-batch-toggle.is-active {
+  color: var(--accent);
+}
+
 @media (max-width: 680px) {
   .overview-grid {
     grid-template-columns: minmax(0, 1fr);
@@ -174,5 +272,10 @@
   .overview-filter-select {
     flex: 1;
     min-width: 118px;
+  }
+
+  .overview-batch-bar {
+    padding: 8px 10px;
+    gap: 8px;
   }
 }
