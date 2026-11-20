@@ -99,12 +99,19 @@ export function memoryDreamCandidates(count: number, locale: HelmxLocale): strin
   )
 }
 
+/** Shared clock formatter for dream meta rows (host locale, same practice as the web app's absolute timestamps). */
+function formatDreamTime(ms: number, locale: HelmxLocale): string {
+  return Number.isFinite(ms) ? new Date(ms).toLocaleString(locale) : String(ms)
+}
+
 /** Last-run summary line (absent when never ran). */
 export function memoryDreamLastRun(
-  record: { ran: boolean; applied?: boolean; conflict?: boolean; reason?: string; error?: string },
+  record: { lastRunAt?: number; ran: boolean; applied?: boolean; conflict?: boolean; reason?: string; error?: string },
   locale: HelmxLocale,
 ): string {
   const prefix = resolveLocalizedText({ en: 'last run', 'zh-CN': '上次整理' }, locale)
+  const when = record.lastRunAt !== undefined ? formatDreamTime(record.lastRunAt, locale) : undefined
+  const head = when === undefined ? prefix : `${prefix} ${when}`
   if (!record.ran) {
     const reason =
       record.reason === 'no_candidates'
@@ -114,16 +121,30 @@ export function memoryDreamLastRun(
           : record.reason === 'memory_missing'
             ? resolveLocalizedText({ en: 'MEMORY.md missing', 'zh-CN': 'MEMORY.md 缺失' }, locale)
             : record.reason
-    return reason === undefined ? `${prefix}: ${resolveLocalizedText({ en: 'skipped (no candidates)', 'zh-CN': '跳过（无候选）' }, locale)}`
-      : `${prefix}: ${resolveLocalizedText({ en: 'skipped', 'zh-CN': '跳过' }, locale)} (${reason})`
+    return reason === undefined ? `${head}: ${resolveLocalizedText({ en: 'skipped (no candidates)', 'zh-CN': '跳过（无候选）' }, locale)}`
+      : `${head}: ${resolveLocalizedText({ en: 'skipped', 'zh-CN': '跳过' }, locale)} (${reason})`
   }
   if (record.conflict) {
-    return `${prefix}: ${resolveLocalizedText({ en: 'abandoned (memory edited during the dream)', 'zh-CN': '放弃写回（整理期间记忆被修改）' }, locale)}`
+    return `${head}: ${resolveLocalizedText({ en: 'abandoned (memory edited during the dream)', 'zh-CN': '放弃写回（整理期间记忆被修改）' }, locale)}`
   }
   if (record.applied) {
-    return `${prefix}: ${resolveLocalizedText({ en: 'applied', 'zh-CN': '已应用' }, locale)}`
+    return `${head}: ${resolveLocalizedText({ en: 'applied', 'zh-CN': '已应用' }, locale)}`
   }
-  return `${prefix}: ${resolveLocalizedText({ en: 'failed', 'zh-CN': '失败' }, locale)}`
+  return `${head}: ${resolveLocalizedText({ en: 'failed', 'zh-CN': '失败' }, locale)}`
+}
+
+/** Next scheduled run line (only while the schedule is enabled and the backend reports one). */
+export function memoryDreamNextRun(nextRunAt: number, locale: HelmxLocale): string {
+  const label = resolveLocalizedText({ en: 'next run', 'zh-CN': '下次运行' }, locale)
+  return `${label} ${formatDreamTime(nextRunAt, locale)}`
+}
+
+/** Short diagnostic of the most recent failed run (backend bounds it to 300 chars; display caps to one tidy line). */
+export function memoryDreamLastError(error: string, locale: HelmxLocale): string {
+  const label = resolveLocalizedText({ en: 'last error', 'zh-CN': '上次诊断' }, locale)
+  const cap = 160
+  const text = error.length > cap ? `${error.slice(0, cap)}…` : error
+  return `${label}: ${text}`
 }
 
 /** Manual run result line. */
@@ -164,6 +185,10 @@ export function memoryDreamRunResult(
 
 export const MEMORY_DREAM_RUN: LocalizedText = { en: 'Organize now', 'zh-CN': '立即整理' }
 export const MEMORY_DREAM_RUNNING: LocalizedText = { en: 'Organizing…', 'zh-CN': '整理中…' }
+export const MEMORY_DREAM_DRAFT_KEPT: LocalizedText = {
+  en: 'Unsaved edits in the editor were kept (based on the pre-dream text); saving them will replace the organized memory.',
+  'zh-CN': '已保留编辑区未保存的修改（基于整理前文本）；保存将覆盖整理后的记忆。',
+}
 export const MEMORY_DREAM_PAUSE: LocalizedText = { en: 'Pause auto', 'zh-CN': '暂停自动' }
 export const MEMORY_DREAM_RESUME: LocalizedText = { en: 'Resume auto', 'zh-CN': '恢复自动' }
 export const MEMORY_DREAM_GLOBAL_HINT: LocalizedText = {
@@ -173,4 +198,12 @@ export const MEMORY_DREAM_GLOBAL_HINT: LocalizedText = {
 export const MEMORY_DREAM_LOAD_FAILED: LocalizedText = {
   en: 'Dream status unavailable; manual organizing still works.',
   'zh-CN': '整理状态暂不可用；手动「立即整理」不受影响。',
+}
+export const MEMORY_DREAM_STATUS_LOADING: LocalizedText = {
+  en: 'Loading dream status…',
+  'zh-CN': '整理状态加载中…',
+}
+export const MEMORY_DREAM_MALFORMED: LocalizedText = {
+  en: 'Dream status response is malformed.',
+  'zh-CN': '整理状态响应格式不正确。',
 }

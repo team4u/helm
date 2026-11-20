@@ -22,12 +22,15 @@ import { Loader2, MoonStar, Save } from 'lucide-react'
 import {
   MEMORY_DIRTY_HINT,
   MEMORY_DISABLED_HINT,
+  MEMORY_DREAM_DRAFT_KEPT,
   MEMORY_DREAM_GLOBAL_HINT,
   MEMORY_DREAM_LOAD_FAILED,
+  MEMORY_DREAM_MALFORMED,
   MEMORY_DREAM_PAUSE,
   MEMORY_DREAM_RESUME,
   MEMORY_DREAM_RUN,
   MEMORY_DREAM_RUNNING,
+  MEMORY_DREAM_STATUS_LOADING,
   MEMORY_DREAM_TITLE,
   MEMORY_LOAD_FAILED,
   MEMORY_LOADING,
@@ -42,11 +45,14 @@ import {
   MEMORY_TEXTAREA_LABEL,
   memoryCharCount,
   memoryDreamCandidates,
+  memoryDreamLastError,
   memoryDreamLastRun,
+  memoryDreamNextRun,
   memoryDreamRunResult,
   memoryDreamSchedule,
   memoryLineCount,
 } from './copy.ts'
+import { isDreamStatusResult, type DreamRunResult, type DreamStatusResult } from './models.ts'
 import './index.css'
 
 interface MemoryGetResult {
@@ -54,28 +60,6 @@ interface MemoryGetResult {
   enabled: boolean
   content: string
   initialized: boolean
-}
-
-interface DreamStatusResult {
-  profileId?: string
-  config: { enabled: boolean; hour: number; timezone: string }
-  nextRunAt?: number
-  running: string[]
-  profiles: Array<{
-    profileId: string
-    candidateCount: number
-    memoryChars: number | null
-    lastRun?: { ran: boolean; applied?: boolean; conflict?: boolean; reason?: string; error?: string }
-  }>
-}
-
-interface DreamRunResult {
-  profileId: string
-  ran: boolean
-  reason?: string
-  applied?: boolean
-  conflict?: boolean
-  consumed?: number
 }
 
 type Operation = 'load' | 'toggle' | 'save'
@@ -104,15 +88,23 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
   const [dreamBusy, setDreamBusy] = useState<Versioned<DreamOperation> | null>(null)
   const generation = useRef(0)
   const requestGeneration = useRef(0)
+  const dreamStatusReq = useRef(0)
   const mounted = useRef(false)
   const currentProfile = useRef(effectiveId)
   const draftRef = useRef<Versioned<string> | null>(null)
+  const stateRef = useRef<Versioned<MemoryGetResult> | null>(null)
   const callAction = useRef(ctx.callAction)
 
   // PluginUiView may rebuild ctx as the store updates; update the delegated
   // references, but never let their identity trigger a reload.
   currentProfile.current = effectiveId
   callAction.current = ctx.callAction
+
+  /** Mirror `state` into a ref so async flows (dream refresh) read the latest known server content. */
+  const applyState = useCallback((next: Versioned<MemoryGetResult> | null): void => {
+    stateRef.current = next
+    setState(next)
+  }, [])
 
   const isCurrent = useCallback((targetId: string, token: number, requestToken = requestGeneration.current) =>
     mounted.current && currentProfile.current === targetId && generation.current === token && requestGeneration.current === requestToken,
@@ -128,7 +120,7 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
     try {
       const result = await callAction.current('get', { profileId: targetId }) as MemoryGetResult
       if (!isCurrent(targetId, token, requestToken)) return
-      setState({ profileId: targetId, generation: token, value: result })
+      applyState({ profileId: targetId, generation: token, value: result })
       const existingDraft = draftRef.current
       if (existingDraft?.profileId !== targetId || existingDraft.generation !== token) {
         const nextDraft = { profileId: targetId, generation: token, value: result.content }
@@ -139,7 +131,7 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
       if (!isCurrent(targetId, token, requestToken)) return
       // If configure succeeded but the refresh failed, the stale `enabled`
       // value is no longer the current server-side fact either.
-      setState(null)
+      applyState(null)
       setError({
         profileId: targetId,
         generation: token,
@@ -148,7 +140,7 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
     } finally {
       if (isCurrent(targetId, token, requestToken)) setBusy(null)
     }
-  }, [isCurrent])
+  }, [applyState, isCurrent])
 
   useEffect(() => {
     mounted.current = true
@@ -161,23 +153,35 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
   /** Dream sub-block: status fetch / manual run / pause-resume auto consolidation. */
   const loadDreamStatus = useCallback(async (targetId: string, token: number): Promise<void> => {
     if (!isCurrent(targetId, token)) return
+    // Sequence dream status requests: only the latest response may paint, so a
+    // slow earlier fetch cannot roll the meta row back to stale facts.
+    const req = ++dreamStatusReq.current
     try {
-      const result = await callAction.current('dream_status', { profileId: targetId }) as DreamStatusResult
-      if (!isCurrent(targetId, token)) return
+      const result = await callAction.current('dream_status', { profileId: targetId }) as unknown
+      if (!isCurrent(targetId, token) || dreamStatusReq.current !== req) return
+      if (!isDreamStatusResult(result)) {
+        // Guard the consumed boundary: a malformed payload must surface as an
+        // honest "status unavailable" state, never crash the memory section.
+        setDreamStatus(null)
+        setDreamError({ profileId: targetId, generation: token, value: t(MEMORY_DREAM_MALFORMED) })
+        return
+      }
       setDreamStatus({ profileId: targetId, generation: token, value: result })
       setDreamError(null)
     } catch (err) {
-      if (!isCurrent(targetId, token)) return
+      if (!isCurrent(targetId, token) || dreamStatusReq.current !== req) return
       setDreamStatus(null)
       setDreamError({ profileId: targetId, generation: token, value: err instanceof Error ? err.message : String(err) })
     } finally {
-      if (isCurrent(targetId, token)) setDreamBusy((current) => (current?.value === 'status' ? null : current))
+      if (isCurrent(targetId, token) && dreamStatusReq.current === req) {
+        setDreamBusy((current) => (current?.value === 'status' ? null : current))
+      }
     }
-  }, [isCurrent])
+  }, [isCurrent, t])
 
   useEffect(() => {
     if (effectiveId === '') {
-      setState(null)
+      applyState(null)
       setError(null)
       setBusy(null)
       draftRef.current = null
@@ -190,7 +194,7 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
     }
 
     const token = ++generation.current
-    setState(null)
+    applyState(null)
     setError(null)
     setBusy({ profileId: effectiveId, generation: token, value: 'load' })
     draftRef.current = null
@@ -205,7 +209,42 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
     return () => {
       if (generation.current === token) generation.current += 1
     }
-  }, [effectiveId, load, loadDreamStatus])
+  }, [effectiveId, applyState, load, loadDreamStatus])
+
+  /**
+   * After a dream applied on the server, refresh the editor baseline: a clean
+   * editor follows the new content, while a dirty draft (unsaved keystrokes)
+   * is preserved — the run notice explains that saving it would replace the
+   * organized memory.
+   */
+  const refreshMemoryAfterDream = useCallback(
+    async (targetId: string, token: number): Promise<'updated' | 'kept-dirty' | 'skipped'> => {
+      try {
+        const fresh = await callAction.current('get', { profileId: targetId }) as MemoryGetResult
+        if (!isCurrent(targetId, token)) return 'skipped'
+        const known = stateRef.current
+        const draft = draftRef.current
+        const dirty =
+          known !== null &&
+          known.profileId === targetId &&
+          known.generation === token &&
+          draft?.profileId === targetId &&
+          draft.generation === token &&
+          draft.value !== known.value.content
+        applyState({ profileId: targetId, generation: token, value: fresh })
+        if (dirty) return 'kept-dirty'
+        const nextDraft = { profileId: targetId, generation: token, value: fresh.content }
+        draftRef.current = nextDraft
+        setDraft(nextDraft)
+        return 'updated'
+      } catch {
+        // Refresh failure never fabricates content: the editor keeps the last
+        // known view and the run notice still reports the dream outcome.
+        return 'skipped'
+      }
+    },
+    [applyState, isCurrent],
+  )
 
   const handleDreamRun = async () => {
     const targetId = effectiveId
@@ -217,7 +256,13 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
     try {
       const result = await callAction.current('dream', { profileId: targetId }) as DreamRunResult
       if (!isCurrent(targetId, token)) return
-      setDreamNotice({ profileId: targetId, generation: token, value: memoryDreamRunResult(result, locale) })
+      let notice = memoryDreamRunResult(result, locale)
+      if (result.applied) {
+        const outcome = await refreshMemoryAfterDream(targetId, token)
+        if (outcome === 'kept-dirty') notice = `${notice} ${t(MEMORY_DREAM_DRAFT_KEPT)}`
+      }
+      if (!isCurrent(targetId, token)) return
+      setDreamNotice({ profileId: targetId, generation: token, value: notice })
       await loadDreamStatus(targetId, token)
     } catch (err) {
       if (!isCurrent(targetId, token)) return
@@ -280,7 +325,7 @@ export function ProfileMemorySection(props: ProfileDetailSlotProps): ReactNode {
       if (!isCurrent(targetId, token, requestToken)) return
       const fresh = await callAction.current('get', { profileId: targetId }) as MemoryGetResult
       if (!isCurrent(targetId, token, requestToken)) return
-      setState({ profileId: targetId, generation: token, value: fresh })
+      applyState({ profileId: targetId, generation: token, value: fresh })
       const currentDraft = draftRef.current
       if (
         currentDraft?.profileId === targetId &&
@@ -430,6 +475,11 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
   const { status, notice, error, busy, disabled } = props
   const row = status?.profiles.find((p) => p.profileId === props.targetId)
   const autoConfig = status?.config ?? null
+  // While the status is still loading the run button stays disabled; once the
+  // status read has failed the copy explicitly promises that a manual run
+  // still works, so the button must be usable in that state too.
+  const statusLoading = status === null && error === null
+  const lastError = row?.lastRun?.error
   return (
     <div className="memory-dream-block">
       <div className="flex-row-between memory-section-header">
@@ -441,7 +491,7 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
           <button
             type="button"
             className="btn btn-secondary btn-sm"
-            disabled={disabled || busy !== null || status === null}
+            disabled={disabled || busy !== null || statusLoading}
             onClick={props.onRun}
           >
             {busy === 'run' ? <Loader2 size={13} className="spin-slow" /> : <MoonStar size={13} />}
@@ -463,15 +513,21 @@ function MemoryDreamBlock(props: MemoryDreamBlockProps): ReactNode {
         {autoConfig !== null ? (
           <>
             <span className="mono">{memoryDreamSchedule(autoConfig, locale)}</span>
+            {autoConfig.enabled && status?.nextRunAt !== undefined && (
+              <span className="text-subtle">{memoryDreamNextRun(status.nextRunAt, locale)}</span>
+            )}
             {row !== undefined && <span className="text-subtle">{memoryDreamCandidates(row.candidateCount, locale)}</span>}
             {row?.lastRun !== undefined && <span className="text-subtle">{memoryDreamLastRun(row.lastRun, locale)}</span>}
           </>
         ) : error !== null ? (
           <span className="text-subtle">{t(MEMORY_DREAM_LOAD_FAILED)}</span>
         ) : (
-          <span className="text-subtle">{t(MEMORY_LOADING)}</span>
+          <span className="text-subtle">{t(MEMORY_DREAM_STATUS_LOADING)}</span>
         )}
       </div>
+      {lastError !== undefined && lastError !== '' && (
+        <div className="text-subtle text-xs memory-dream-diag">{memoryDreamLastError(lastError, locale)}</div>
+      )}
       {notice !== null && <div className="text-subtle text-xs memory-dream-notice">{notice}</div>}
       {error !== null && (
         <div className="badge badge-warn memory-section-error" role="alert">
