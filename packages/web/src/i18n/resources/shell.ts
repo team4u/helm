@@ -203,6 +203,32 @@ export const shellMessages = {
     en: 'Switch to {version} did not complete within the budget; check helmx status',
     'zh-CN': '切换到 {version} 未在时限内完成，请用 helmx status 检查',
   },
+  'shell.hubChangelog.entry': { en: 'Version & updates', 'zh-CN': '版本与更新' },
+  'shell.hubChangelog.title': { en: 'Changelog', 'zh-CN': '版本与更新' },
+  'shell.hubChangelog.closeTitle': { en: 'Close changelog', 'zh-CN': '关闭变更日志' },
+  'shell.hubChangelog.loading': { en: 'Loading changelog...', 'zh-CN': '正在加载变更日志...' },
+  'shell.hubChangelog.absent': {
+    en: 'This Hub did not ship a changelog (older payload or custom deployment).',
+    'zh-CN': '此 Hub 未随附变更日志（更早的安装包或特殊部署）。',
+  },
+  'shell.hubChangelog.emptyRange': {
+    en: 'No recorded changes in this range.',
+    'zh-CN': '该范围内没有已记录的变更。',
+  },
+  'shell.hubChangelog.range': {
+    en: '{from} -> now, {count} versions',
+    'zh-CN': '{from} 以来 · {count} 个版本',
+  },
+  'shell.hubChangelog.rangeOlder': {
+    en: 'since {from} (earlier than the earliest entry), {count} versions',
+    'zh-CN': '自 {from}（更早版本无记录）· {count} 个版本',
+  },
+  'shell.hubChangelog.upgraded': {
+    en: 'Hub updated from v{from} to v{version}',
+    'zh-CN': 'Hub 已从 v{from} 更新到 v{version}',
+  },
+  'shell.hubChangelog.viewChanges': { en: "What's changed", 'zh-CN': '查看更新内容' },
+  'shell.hubChangelog.dismiss': { en: 'Got it', 'zh-CN': '知道了' },
   'shell.overview.stats': { en: '{count} trees', 'zh-CN': '{count} 棵会话树' },
   'shell.overview.filterAll': { en: 'All', 'zh-CN': '全部' },
   'shell.overview.filterNeeds': { en: 'Needs attention', 'zh-CN': '需处理' },

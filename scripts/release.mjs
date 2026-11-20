@@ -14,7 +14,7 @@ import { spawnSync } from 'node:child_process';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { commitSubjectsSince, resolvePreviousTag } from './lib/release-notes.mjs';
+import { commitSubjectsSince, prependChangelogSection, resolvePreviousTag } from './lib/release-notes.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -196,10 +196,18 @@ function main() {
     return;
   }
 
-  // 4. 锁步 bump + 提交 + 轻量 tag
+  // 4. 锁步 bump + CHANGELOG 追加 + 提交 + 轻量 tag
   const updated = bumpWorkspaceVersions(targetVersion);
   console.log(`锁步更新版本至 ${targetVersion}（${updated.length} 个 package.json）`);
-  git(['add', ...updated.map((rel) => rel.replaceAll('\\', '/'))]);
+  const changelogPath = path.resolve(rootDir, 'CHANGELOG.md');
+  prependChangelogSection({
+    version: targetVersion,
+    date: new Date().toISOString().slice(0, 10),
+    subjects: prevTag ? changelog : '-（首次发布）',
+    changelogPath,
+  });
+  console.log(`CHANGELOG.md 已追加 v${targetVersion} 小节（随包分发的已安装版本变更日志）`);
+  git(['add', ...updated.map((rel) => rel.replaceAll('\\', '/')), 'CHANGELOG.md']);
   git(['commit', '-m', `chore(release): v${targetVersion}`]);
   const tag = `v${targetVersion}`;
   if (git(['rev-parse', '-q', '--verify', `refs/tags/${tag}`], { allowFailure: true }).status === 0) {

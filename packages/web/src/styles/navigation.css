@@ -718,3 +718,30 @@
 /* 话题切换已回归左栏手风琴（仅展开当前智能体），顶栏恢复单行标题。 */
 
 
+
+/* 侧栏底部常驻入口（版本与更新） */
+.sidebar-footer {
+  border-top: 1px solid var(--border);
+  padding: 6px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sidebar-footer-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 8px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted, inherit);
+  font-size: 12.5px;
+  cursor: pointer;
+  text-align: left;
+}
+.sidebar-footer-item:hover {
+  background: var(--hover-bg, rgba(127, 127, 127, 0.12));
+  color: inherit;
+}

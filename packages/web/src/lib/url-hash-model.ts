@@ -453,7 +453,8 @@ export function formatLocationHash(state: WorkspaceLocationState): string {
     query.push(['wb', state.workbenchTab === '' ? DEFAULT_WORKBENCH_TAB : state.workbenchTab])
   }
   const modal = state.activeModal
-  if (modal !== null && modal.kind !== 'command-palette') {
+  // command-palette and hub-changelog are ephemeral UI: never serialized into the URL hash.
+  if (modal !== null && modal.kind !== 'command-palette' && modal.kind !== 'hub-changelog') {
     query.push(['modal', MODAL_KIND_TO_KEY[modal.kind]])
     if (modal.kind === 'artifact-preview') {
       query.push(['id', modal.artifactId])
