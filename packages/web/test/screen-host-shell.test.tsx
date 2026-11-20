@@ -280,6 +280,70 @@ test('AuthGate / ToastOverlay / Sidebar 原语与折叠按钮及零 Emoji / 零�
   assert.ok(host?.querySelector('[data-notice-id="n-err"].callout-error[role="alert"]'))
   assert.ok(host?.querySelector('[data-notice-id="n-warn"].callout-warn[role="status"]'))
 
+  // 2b) 标准「查看」按钮：view 深链优先、conversationId 回退、非法 view 不渲染按钮；
+  //     关闭按钮常驻（右上角定位由样式承担，行为面断言其可点击关单）
+  const openedTargets: unknown[] = []
+  const dismissedIds: string[] = []
+  const viewStore = makeTestStore({
+    notices: [
+      {
+        id: 'n-view',
+        type: 'notification',
+        level: 'info',
+        title: '任务 T-1 已提交验收',
+        body: 'x'.repeat(200),
+        createdAt: 3000,
+        view: 'screen:builtin:tasks/board?task=T-1',
+      },
+      { id: 'n-conv', type: 'notification', level: 'info', title: 'legacy', createdAt: 3100, conversationId: 42 },
+      { id: 'n-bad', type: 'notification', level: 'info', title: 'broken target', createdAt: 3200, view: 'not-a-target' },
+    ],
+  })
+  const viewActions = viewStore.actions as unknown as {
+    openTarget: (target: unknown) => void
+    dismissNotice: (id: string) => void
+  }
+  viewActions.openTarget = (target) => {
+    openedTargets.push(target)
+  }
+  viewActions.dismissNotice = (id) => {
+    dismissedIds.push(id)
+  }
+  mount(
+    <HostStoreProviders value={viewStore}>
+      <ToastOverlay />
+    </HostStoreProviders>,
+  )
+  const viewBtn = host?.querySelector<HTMLButtonElement>('[data-notice-id="n-view"] .toast-action-btn')
+  assert.ok(viewBtn, 'view 通知应渲染标准查看按钮')
+  assert.equal(viewBtn.textContent, 'View')
+  await act(async () => {
+    viewBtn.click()
+  })
+  assert.equal(openedTargets.length, 1)
+  assert.deepEqual(openedTargets[0], {
+    kind: 'screen',
+    pluginId: 'builtin:tasks',
+    screenId: 'board',
+    params: { task: 'T-1' },
+  })
+  assert.equal(dismissedIds[0], 'n-view', '点击查看后应关闭对应气泡')
+
+  const convBtn = host?.querySelector<HTMLButtonElement>('[data-notice-id="n-conv"] .toast-action-btn')
+  assert.ok(convBtn, '仅 conversationId 的存量通知应回退到会话查看按钮')
+  await act(async () => {
+    convBtn.click()
+  })
+  assert.deepEqual(openedTargets[1], { kind: 'conversation', conversationId: 42 })
+
+  assert.ok(host?.querySelector('[data-notice-id="n-bad"] .toast-action-btn') === null, '非法 view 不得渲染假按钮')
+  const closeBtn = host?.querySelector<HTMLButtonElement>('[data-notice-id="n-bad"] .toast-close-btn')
+  assert.ok(closeBtn, '无动作通知仍有关闭按钮')
+  await act(async () => {
+    closeBtn.click()
+  })
+  assert.equal(dismissedIds[2], 'n-bad', '关闭按钮应精确关单')
+
   // 3) Sidebar 折叠 / 展开按钮联动 toggleSidebarCollapsed
   let toggleCount = 0
   const expandedStore = makeTestStore({

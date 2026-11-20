@@ -88,7 +88,8 @@ export const shellMessages = {
   'shell.theme.currentLight': { en: 'Light', 'zh-CN': '浅色' },
 
   // Toast overlay
-  'shell.toast.viewConversation': { en: 'View conversation #{id}', 'zh-CN': '查看会话 #{id}' },
+  'shell.toast.view': { en: 'View', 'zh-CN': '查看' },
+  'shell.toast.dismiss': { en: 'Dismiss', 'zh-CN': '关闭' },
 
   // Shared sidebar row copy (agent standings + archived group)
   'shell.conversationFallback': { en: 'Conversation #{id}', 'zh-CN': '会话 #{id}' },

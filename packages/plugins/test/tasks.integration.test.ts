@@ -1101,7 +1101,7 @@ test('tasks-int11: board badge projection tracks the lifecycle live; submit noti
     const { kernel } = env.app
 
     // Collect notifications and per-frame board doc updates from the durable event stream
-    const notifications: Array<{ level: string; title: string; body?: string; conversationId?: number }> = []
+    const notifications: Array<{ level: string; title: string; body?: string; conversationId?: number; view?: string }> = []
     const boardDocFrames: number[] = []
     const plannerUpserts: number[] = []
     let plannerConvId = 0
@@ -1113,6 +1113,7 @@ test('tasks-int11: board badge projection tracks the lifecycle live; submit noti
           title: event.title,
           body: event.body,
           conversationId: event.conversationId,
+          view: event.view,
         })
       } else if (event.type === 'plugin.doc.updated' && 'doc' in event) {
         if (event.doc.pluginId === TASKS_PLUGIN_ID && event.doc.name === 'board') boardDocFrames.push(frame.seq)
@@ -1211,6 +1212,7 @@ test('tasks-int11: board badge projection tracks the lifecycle live; submit noti
     assert.match(firstNotice.title, /T-1/)
     assert.match(firstNotice.title, /验收/)
     assert.match(firstNotice.body ?? '', /First draft/)
+    assert.equal(firstNotice.view, 'screen:builtin:tasks/board?task=T-1', '交卷通知的标准查看按钮直达看板详情抽屉')
 
     // Rework -> resubmit: a second honest notification for the new review round
     await kernel.plugins.invokeAction(TASKS_PLUGIN_ID, 'rework', { taskId: 'T-1', feedback: 'Tighten the summary.' })
