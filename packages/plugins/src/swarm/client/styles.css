@@ -185,7 +185,7 @@
 
 .sw-tray-row {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
   font-size: 12px;
@@ -198,15 +198,17 @@
 }
 
 /* 行主体即详情入口：真实 button 覆盖整行主要信息位（无嵌套交互）；
-   中止为右侧同级 sibling 按钮。两层布局：主行承载名称与编号，第二行独占行宽展示实况。 */
+   中止为右侧同级 sibling 按钮。单行布局（与折叠横栏同构）：状态灯、
+   名称、编号与实况同行，实况吃掉剩余宽度做单行省略——行高恒定 32px，
+   实况长短变化不引起托盘/输入区高度跳动；完整内容走 title 悬浮与行点击抽屉。 */
 .sw-tray-row-main {
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 2px;
-  padding: 5px 0 5px 8px;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 0 0 8px;
   background: none;
   border: none;
   font: inherit;
@@ -224,14 +226,8 @@
   outline-offset: -1.5px;
 }
 
-.sw-tray-row-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
 .sw-tray-row-title {
+  flex-shrink: 1;
   font-weight: 500;
   color: var(--fg);
   white-space: nowrap;
@@ -247,10 +243,10 @@
   color: var(--fg-subtle);
 }
 
-/* 实况行与横栏 frontline 同构：单行省略。行高恒定——实况文本长度变化
-   （1↔2 行翻转）不再引起托盘/输入区高度跳动；完整内容走 title 悬浮与行点击抽屉。 */
+/* 实况占行内剩余宽度，单行省略（同横栏 frontline）；min-width 保底可见。 */
 .sw-tray-row-live {
-  min-width: 0;
+  flex: 1 1 0%;
+  min-width: 60px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -263,7 +259,7 @@
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
-  padding: 3px 8px 3px 0;
+  padding: 0 8px 0 0;
 }
 
 /* ---------------------------------------------------------------------------
@@ -674,17 +670,6 @@
   /* 移动/窄分屏保留当前进展 frontline，次要耗时让位。 */
   .sw-tray-elapsed {
     display: none;
-  }
-  .sw-tray-row {
-    flex-wrap: wrap;
-  }
-  .sw-tray-row-main {
-    flex-basis: 100%;
-  }
-  .sw-tray-row-actions {
-    width: 100%;
-    justify-content: flex-end;
-    padding: 0 6px 4px 0;
   }
   .sw-receipt-headline {
     max-width: 100%;

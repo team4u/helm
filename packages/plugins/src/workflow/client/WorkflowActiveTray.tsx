@@ -14,13 +14,13 @@
  *   body (conversationId opens the ConversationDrawer, else runId focuses
  *   the run in the workbench); detach / abort are sibling buttons in the
  *   trailing action group — no stopPropagation acrobatics needed;
- * - the row body is a two-row layout: the headline keeps title / #id /
- *   progress / elapsed, while the current execution content (live tool
- *   semantics / output / thinking / approval title, falling back to the
- *   model-provided doing digest) lives on its own second line (single-line
- *   ellipsis, same as the bar frontline — constant row height so live text
- *   length changes never make the tray or composer jump) so the title
- *   never crowds it out;
+ * - the row body is a single-line layout isomorphic to the collapsed bar:
+ *   status light, title / #id / progress / elapsed and the current execution
+ *   content (live tool semantics / output / thinking / approval title,
+ *   falling back to the model-provided doing digest) share one row — the
+ *   live line takes the remaining width as a single-line ellipsis, so row
+ *   height is constant and live-text length changes never make the tray or
+ *   composer jump;
  * - live facts come from the host snapshot through useConversation with
  *   includeDetail:false (never an eager detail fetch) shared with the
  *   timeline subagent cards via resolveSubagentHeaderSnippet; collapsed bar
@@ -168,26 +168,26 @@ function WorkflowActiveTrayRow(props: {
         ? trayRowOpenRunLabel(item.runId, locale)
         : item.title
   const rowMainClass = `workflow-active-tray-row-main${rowActivatable ? ' workflow-active-tray-row-clickable' : ''}`
+  // 单行行体（与折叠横栏同构）：状态灯/标题/#id/进度/耗时与实况同行，
+  // 实况吃掉剩余宽度单行省略——行高恒定，实况长短变化不引起托盘/输入区跳动。
   const rowMainContent = (
     <>
-      <span className="workflow-active-tray-row-head">
-        <StatusLight
-          status={item.isBlocked ? 'blocked' : 'running'}
-          label={executionStatusLabel(item.isBlocked ? 'blocked' : 'working', locale)}
-        />
-        <span className="workflow-active-tray-row-title">{item.title}</span>
-        {item.conversationId !== undefined && !isFallbackConvTitle ? (
-          <span className="workflow-active-tray-row-id tabular-nums">{`#${item.conversationId}`}</span>
-        ) : null}
-        {item.progress !== undefined ? (
-          <span className="badge badge-neutral workflow-trace-badge tabular-nums">
-            {`${item.progress.done}/${item.progress.total}`}
-          </span>
-        ) : null}
-        {itemElapsed !== undefined ? (
-          <span className="workflow-active-tray-elapsed tabular-nums">{itemElapsed}</span>
-        ) : null}
-      </span>
+      <StatusLight
+        status={item.isBlocked ? 'blocked' : 'running'}
+        label={executionStatusLabel(item.isBlocked ? 'blocked' : 'working', locale)}
+      />
+      <span className="workflow-active-tray-row-title">{item.title}</span>
+      {item.conversationId !== undefined && !isFallbackConvTitle ? (
+        <span className="workflow-active-tray-row-id tabular-nums">{`#${item.conversationId}`}</span>
+      ) : null}
+      {item.progress !== undefined ? (
+        <span className="badge badge-neutral workflow-trace-badge tabular-nums">
+          {`${item.progress.done}/${item.progress.total}`}
+        </span>
+      ) : null}
+      {itemElapsed !== undefined ? (
+        <span className="workflow-active-tray-elapsed tabular-nums">{itemElapsed}</span>
+      ) : null}
       <ActiveTrayLiveLine
         conversationId={item.activityConversationId ?? item.conversationId}
         runId={item.runId}

@@ -101,7 +101,7 @@
 
 .workflow-active-tray-row {
   display: flex;
-  align-items: stretch;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
   font-size: 12px;
@@ -110,16 +110,17 @@
 }
 
 /* 行主体即详情入口：真实 button 覆盖整行主要信息位（无嵌套交互）；
-   detach / 中止为右侧同级 sibling 按钮组。两层布局：主行承载标题/编号/
-   进度/耗时，当前实际执行内容独立为第二行（单行省略，标题不抢占）。 */
+   detach / 中止为右侧同级 sibling 按钮组。单行布局（与折叠横栏同构）：
+   状态灯/标题/编号/进度/耗时与实况同行，行高恒定 32px，实况长短变化
+   不引起托盘/输入区高度跳动。 */
 .workflow-active-tray-row-main {
   flex: 1;
   min-width: 0;
   display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 2px;
-  padding: 5px 0 5px 8px;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 0 0 8px;
   background: none;
   border: none;
   font: inherit;
@@ -144,14 +145,8 @@ button.workflow-active-tray-row-clickable:focus-visible {
   border-bottom: none;
 }
 
-.workflow-active-tray-row-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
 .workflow-active-tray-row-title {
+  flex-shrink: 1;
   font-weight: 500;
   color: var(--fg);
   white-space: nowrap;
@@ -167,12 +162,11 @@ button.workflow-active-tray-row-clickable:focus-visible {
   color: var(--fg-subtle);
 }
 
-/* 第二行实际执行内容：live 工具语义/输出/思考/审批标题或模型降级摘要；
-   独占行宽（动作按钮不与它同列抢宽）。与横栏 frontline 同构的单行省略：
-   行高恒定，实况长度变化（1↔2 行翻转）不再引起托盘/输入区高度跳动；
+/* 实况占行内剩余宽度，单行省略（同横栏 frontline）；min-width 保底可见；
    完整内容走 title 悬浮与行点击（抽屉/workbench 聚焦）。 */
 .workflow-active-tray-row-live {
-  min-width: 0;
+  flex: 1 1 0%;
+  min-width: 60px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -185,7 +179,7 @@ button.workflow-active-tray-row-clickable:focus-visible {
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
-  padding: 5px 8px 5px 0;
+  padding: 0 8px 0 0;
 }
 
 /* Timeline single-row trace helper styles (same structure as the host .trace-row 26px) */
@@ -366,16 +360,5 @@ button.workflow-active-tray-row-clickable:focus-visible {
      次要的耗时让位。 */
   .workflow-active-tray-elapsed {
     display: none;
-  }
-  .workflow-active-tray-row {
-    flex-wrap: wrap;
-  }
-  .workflow-active-tray-row-main {
-    flex-basis: 100%;
-  }
-  .workflow-active-tray-row-actions {
-    width: 100%;
-    justify-content: flex-end;
-    padding: 0 6px 4px 0;
   }
 }
