@@ -134,12 +134,18 @@ export class MemoryStore {
    * file resolves { applied: false } without writing — the caller keeps candidates and diagnostics
    * and never clobbers a concurrent human edit. The 64k cap is re-enforced on the final text here
    * as the last authoritative gate before the atomic write.
+   *
+   * `opts.guard` (policy from the dream engine, evaluated by the mechanism here): re-checked inside
+   * the lock AFTER the hash re-validation and immediately before the write — a per-Profile memory
+   * switch flipped while this call was waiting for the lock still resolves { applied: false,
+   * guarded: true } without writing (distinct from a hash conflict).
    */
   async commitDreamMemory(
     profileId: string,
     expectedHash: string,
     next: string,
-  ): Promise<{ applied: boolean }> {
+    opts?: { guard?: () => boolean },
+  ): Promise<{ applied: boolean; guarded?: boolean }> {
     if (typeof next !== 'string') throw new Error('memory text must be a string')
     const path = await this.memoryPath(profileId)
     return this.host.withFileLock(path, async () => {
@@ -151,6 +157,7 @@ export class MemoryStore {
         throw err
       }
       if (hashOf(current) !== expectedHash) return { applied: false }
+      if (opts?.guard !== undefined && !opts.guard()) return { applied: false, guarded: true }
       if (next.length > MAX_MEMORY_CHARS) {
         throw memoryLimitError(profileId, next.length, 'replace', next.length)
       }

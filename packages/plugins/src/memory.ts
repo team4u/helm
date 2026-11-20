@@ -49,7 +49,10 @@ export {
   nextDailyRunAt,
   looksLikeLowValueHumanInput,
   extractFinalAssistantText,
+  stripExcerptNoise,
+  stripFencedCodeBlocks,
   DREAM_TARGET_CHARS,
+  DREAM_MAX_TOKENS,
   type DreamCandidate,
   type DreamClock,
   type DreamConfig,
@@ -398,30 +401,33 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
         config: { enabled: true, hour: 3, timezone: defaultDreamTimezone() },
         runs: {},
       })
+      /** Best-effort dream failure reporting (notification event + stderr); never recurses. */
+      const emitDreamError = (title: string, detail: unknown): void => {
+        const message = ctx.host.redact(detail instanceof Error ? detail.message : String(detail))
+        try {
+          ctx.host.emitEvent('notification', {
+            type: 'notification',
+            level: 'error',
+            title,
+            body: `[memory-dream] ${message}`,
+          })
+        } catch {
+          // Best-effort reporting only; never recurse.
+        }
+        console.error(`[memory-dream] ${title}：${message}`)
+      }
       const dream = createDreamEngine({
         dataDir: ctx.dataDir,
         doc: dreamDoc,
         redact: (text) => ctx.host.redact(text),
+        atomicWriteFile: (path, content) => ctx.host.atomicWriteFile(path, content),
         completeText: (input) => ctx.host.completeText(input),
         listConversations: (filter) => ctx.host.listConversations(filter),
         getConversationDetail: (id, options) => ctx.host.getConversationDetail(id, options),
         store,
         profiles: { list: async () => ctx.host.profiles.list() },
         isMemoryEnabled: isEnabled,
-        emitError: (title, detail) => {
-          const message = detail instanceof Error ? detail.message : String(detail)
-          try {
-            ctx.host.emitEvent('notification', {
-              type: 'notification',
-              level: 'error',
-              title,
-              body: `[memory-dream] ${message}`,
-            })
-          } catch {
-            // Best-effort reporting only; never recurse.
-          }
-          console.error(`[memory-dream] ${title}：${message}`)
-        },
+        emitError: emitDreamError,
       }, options.dream)
 
       // Lightweight candidate collection on settled human turns (bounded, redacted, private).
@@ -471,7 +477,14 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
               { profileId },
             )
           }
-          return dream.dreamFor(profileId)
+          try {
+            return await dream.dreamFor(profileId)
+          } catch (err) {
+            // The invoker receives the real error; the notification event keeps the failure
+            // visible in the UI notification center as well (redacted inside emitDreamError).
+            emitDreamError(`memory dream of profile '${profileId}' failed`, err)
+            throw err
+          }
         },
       })
 
@@ -520,7 +533,6 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
         },
         idempotent: true,
         async handler(input, context) {
-          const view = await dream.status()
           const focus =
             input.profileId !== undefined
               ? input.profileId
@@ -528,6 +540,9 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
                 ? ctx.host.getConversation(context.conversationId).profileId
                 : undefined
           if (focus !== undefined) await requireProfile(profiles, focus)
+          // Focused mode reads only the target profile's files; candidate disk errors surface
+          // explicitly (500 dream_candidates_corrupt) instead of being displayed as zero.
+          const view = await dream.status(focus)
           return focus === undefined ? view : { ...view, profileId: focus }
         },
       })
@@ -559,7 +574,6 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
           required: ['enabled', 'hour', 'timezone'],
           additionalProperties: false,
         },
-        idempotent: true,
         async handler(input) {
           return dream.configure(input)
         },
