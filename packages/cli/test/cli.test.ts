@@ -23,6 +23,7 @@ import {
   runCliCaptured,
   startMockHub,
   useTempDir,
+  waitFor,
 } from './helpers/cli-harness.js'
 
 /**
@@ -821,6 +822,88 @@ test('conversations watch: error settle exits 1, not-found, stream_closed, --tim
   const human = await runCliCaptured(['conversations', 'watch', '9'], humanEnv)
   assert.equal(human.code, 1)
   assert.match(human.out, /settled: error/)
+})
+
+test('conversations watch: settles while the SSE connection stays open (no res.end), and the client disconnects', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-test-')
+  const conv = makeConversationSummary({ id: 11, title: 'deploy', status: 'working' })
+  const upsert = (seq: number, patch: Record<string, unknown>) =>
+    `event: conversation.upsert\ndata: ${JSON.stringify({ seq, event: { type: 'conversation.upsert', conversation: { ...conv, ...patch } } })}\n\n`
+  let clientDisconnected = false
+  const hub = await startMockHub(
+    {
+      'GET /api/events': (_body, _req, res) => {
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        // The mock hub consumes the request body before dispatching, so req 'close' is already
+        // consumed: premature response close (client dropped the socket) is the reliable signal.
+        res.on('close', () => {
+          if (!res.writableEnded) clientDisconnected = true
+        })
+        res.write(`event: snapshot\ndata: ${JSON.stringify({ bootId: 'b1', seq: 5, conversations: [conv], pendingAsks: [], plugins: [] })}\n\n`)
+        res.write(upsert(6, { doing: 'bash: pnpm test' }))
+        res.write(upsert(7, { status: 'done', unread: true, doing: undefined }))
+        // A real Hub never ends the SSE stream after a settle frame: keep the connection open,
+        // only closing it in teardown (registered later than the hub cleanup, so it runs first).
+        t.after(() => res.end())
+        return null
+      },
+    },
+    { autoRegisterCleanup: t },
+  )
+  const env = makeCliEnv(hub.url, dir)
+
+  const human = await runCliCaptured(['conversations', 'watch', '11'], env)
+  assert.equal(human.code, 0, human.err)
+  assert.match(human.out, /watching #11 deploy \(working\)/)
+  assert.match(human.out, /status: working -> done/)
+  assert.match(human.out, /settled: done/)
+  // Settle must actually tear down the subscription: the server observes the client socket closing.
+  await waitFor(() => clientDisconnected, { timeoutMs: 5_000, message: 'watch must disconnect from the SSE stream after settle' })
+})
+
+test('conversations watch: deterministic abort against a stream that ignores AbortSignal and never rejects read()', { timeout: 60_000 }, async (t) => {
+  const dir = useTempDir(t, 'helmx-cli-test-')
+  const conv = makeConversationSummary({ id: 12, title: 'deploy', status: 'working' })
+  const snapshotFrame = `event: snapshot\ndata: ${JSON.stringify({ bootId: 'b1', seq: 5, conversations: [conv], pendingAsks: [], plugins: [] })}\n\n`
+  const upsert = (seq: number, patch: Record<string, unknown>) =>
+    `event: conversation.upsert\ndata: ${JSON.stringify({ seq, event: { type: 'conversation.upsert', conversation: { ...conv, ...patch } } })}\n\n`
+  const encoder = new TextEncoder()
+  // Fault injection: undici long-lived streams do not reliably reject a pending read() when the
+  // fetch AbortSignal fires. A plain ReadableStream that ignores init.signal models that exactly.
+  const hostileFetch = (frames: string[], hangCancel = false): typeof fetch =>
+    (async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const frame of frames) controller.enqueue(encoder.encode(frame))
+        },
+        ...(hangCancel ? { cancel: (): Promise<void> => new Promise<void>(() => {}) } : {}),
+      }), { status: 200, headers: { 'content-type': 'text/event-stream' } })) as typeof fetch
+  const env = makeCliEnv('http://127.0.0.1:9', dir) // baseUrl is never contacted: fetch is fully injected
+
+  // (a) Settle inside onFrame aborts synchronously: must print the result line and exit 0
+  //     immediately (loop exit must not depend on the pending read() rejecting).
+  const settled = await runCliCaptured(['conversations', 'watch', '12', '--json'], env, {
+    fetch: hostileFetch([snapshotFrame, upsert(6, { status: 'done', unread: true, doing: undefined })]),
+  })
+  assert.equal(settled.code, 0, settled.err)
+  const result = JSON.parse(settled.out.trim().split('\n').at(-1) ?? '{}') as Record<string, unknown>
+  assert.equal(result['type'], 'result')
+  assert.equal(result['status'], 'done')
+
+  // (b) Silent stream + --timeout: the async timeout abort must break the pending read()
+  //     deterministically (exit 124, coreutils timeout convention).
+  const timed = await runCliCaptured(['conversations', 'watch', '12', '--timeout', '150', '--json'], env, {
+    fetch: hostileFetch([snapshotFrame]),
+  })
+  assert.equal(timed.code, 124)
+  assert.equal(parseCliError(timed).code, 'watch_timeout')
+
+  // (c) A cancel() that never resolves must not turn teardown into a second hang.
+  const hungCancel = await runCliCaptured(['conversations', 'watch', '12', '--json'], env, {
+    fetch: hostileFetch([snapshotFrame, upsert(6, { status: 'done', unread: true, doing: undefined })], true),
+  })
+  assert.equal(hungCancel.code, 0, hungCancel.err)
+  assert.match(hungCancel.out, /"type":"result"/)
 })
 
 test('hub unreachable and 401 suggest login', { timeout: 60_000 }, async (t) => {
