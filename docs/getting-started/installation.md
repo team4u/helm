@@ -109,6 +109,7 @@ Hub 运行文件默认放在 `~/.helmx-hub`，会话、凭据和插件数据默�
 | `HELMX_CONVERSATION_ID` / `HELMX_NODE_ID` | 支持 `--current` 的命令用它们识别当前会话或节点。 |
 | `HELMX_CWD` | Hub 的默认工作目录。受管执行中表示会话的工作目录。 |
 | `HELMX_MODEL` | 覆盖 Hub 启动时的默认模型。 |
+| `HELMX_NODE_JOIN_GRACE_MS` | Hub 重启时为「恢复所依赖且已注册的远端节点」等待回连的上限毫秒数，默认 10000；`0` 关闭等待。超时后照常启动，绑定该节点的工作按真实在线状态显式失败。 |
 | `VITE_HOST` | Web 开发服务器的监听地址，默认 `0.0.0.0`。 |
 | `HERDR_SOCKET_PATH` | 覆盖 Herdr 的本机 socket 或命名管道路径。 |
 

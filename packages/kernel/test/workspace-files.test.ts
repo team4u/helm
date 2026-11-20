@@ -157,6 +157,9 @@ describe('workspace file reader & HTTP GET /api/conversations/:id/files/content'
       models,
       autoResume: false,
     })
+    // (Kernel started before handler use: the listen-before-start HTTP layer gates non-probe API
+    // routes with `503 hub_starting` while `kernel.started === false`.)
+    await kernel.start()
     handler = createHubHandler(kernel)
     const setupRes = await handler(
       new Request('http://127.0.0.1:3202/api/auth/setup', {

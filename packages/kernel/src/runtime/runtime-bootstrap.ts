@@ -35,6 +35,13 @@ export interface KernelBootOptions {
   cwd?: string
   hubUrl?: string
   autoResume?: boolean
+  /**
+   * Startup node-join grace budget (ms), bounded wait before recovery for registered remote nodes the
+   * startup recovery depends on; `0` disables the wait entirely. Defaults from `resolveNodeJoinGraceMs()`
+   * (env `HELMX_NODE_JOIN_GRACE_MS`, default 10s). Only effective on the explicit `kernel.start()` path
+   * (the composition root listens before starting); `autoResume` startup skips it (no socket can be open yet).
+   */
+  nodeJoinGraceMs?: number
   models?: Models
   /**
    * Initial runtime providers injected alongside built-in providers before plugin activation
@@ -440,3 +447,25 @@ export async function teardownKernelRuntime(deps: {
   }
 }
 
+
+/**
+ * Default startup node-join grace budget (ms): bounded wait before recovery for registered remote nodes
+ * that startup recovery depends on (0 disables). Sourced from `HELMX_NODE_JOIN_GRACE_MS`; invalid values
+ * (non-numeric / negative) fail startup explicitly rather than being silently coerced.
+ */
+export const DEFAULT_NODE_JOIN_GRACE_MS = 10_000
+
+export function resolveNodeJoinGraceMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env['HELMX_NODE_JOIN_GRACE_MS']
+  if (raw === undefined || raw === '') return DEFAULT_NODE_JOIN_GRACE_MS
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 0) {
+    throw new HelmxError(
+      'config_corrupt',
+      `HELMX_NODE_JOIN_GRACE_MS must be a non-negative integer (received '${raw}')`,
+      500,
+      { value: raw },
+    )
+  }
+  return value
+}

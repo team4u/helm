@@ -20,9 +20,19 @@ const app = await createHelmx({
   dataDir: process.env.HELMX_DATA_DIR,
   cwd: process.env.HELMX_CWD ?? process.cwd(),
   model: process.env.HELMX_MODEL,
+  // Two-phase boot: assemble + recover only. The HTTP listener (incl. `/ws/node`) opens below
+  // BEFORE `kernel.start()` so remote nodes reconnect while the kernel is still pre-start; the
+  // kernel's bounded node-join grace then waits for recovery-dependent registered nodes before
+  // driving plugin recovery and the scheduler (restart recovery no longer races node reconnection).
+  autoStart: false,
 });
+let hub: Awaited<ReturnType<typeof startHub>> | undefined;
 try {
-  const hub = await startHub({ kernel: app.kernel, port, hostname, ...(webDistDir !== undefined ? { webDistDir } : {}) });
+  hub = await startHub({ kernel: app.kernel, port, hostname, ...(webDistDir !== undefined ? { webDistDir } : {}) });
+  // Recovery + scheduler resume happen only after the socket is listening (`503 hub_starting` gate
+  // covers API requests arriving in between; the readiness banner below still prints only when the
+  // Hub is fully started, preserving the launcher's listen-line readiness contract).
+  await app.kernel.start();
   // Activity heartbeat (process-private update busy-gate signal; see activity-heartbeat.ts). Started
   // only after the server is listening so the recorded port is the real bound one; stopped first on
   // shutdown so no stale record outlives this instance.
@@ -37,6 +47,7 @@ try {
     },
   });
   process.stdout.write(`Helmx Hub: ${hub.url}\nData directory: ${app.kernel.dataDir}\n`);
+  const listeningHub = hub;
   let stopping = false;
   const stop = async () => {
     if (stopping) return;
@@ -46,7 +57,7 @@ try {
         await heartbeat.stop();
       } finally {
         try {
-          await hub.close();
+          await listeningHub.close();
         } finally {
           await app.close();
         }
@@ -59,6 +70,9 @@ try {
   process.once('SIGINT', stop);
   process.once('SIGTERM', stop);
 } catch (error) {
+  // The listener may already be open when a later step (kernel.start / heartbeat) failed: close it
+  // before the kernel so no half-started listener outlives the process.
+  if (hub !== undefined) await hub.close().catch(() => undefined);
   await app.close();
   throw error;
 }

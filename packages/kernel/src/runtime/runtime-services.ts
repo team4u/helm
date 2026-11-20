@@ -62,6 +62,8 @@ export interface RuntimeServicesInit extends BootstrappedKernelContext {
   hubUrl?: string
   seedKeyCache: Record<string, string>
   autoResume: boolean
+  /** Startup node-join grace budget (ms; 0 disables) — see `runtime-bootstrap.ts` KernelBootOptions.nodeJoinGraceMs. */
+  nodeJoinGraceMs?: number
   externalModels?: unknown
   /** Initial runtime providers passed through `KernelRuntimeOptions.providers`. */
   providers?: ReadonlyArray<Provider>

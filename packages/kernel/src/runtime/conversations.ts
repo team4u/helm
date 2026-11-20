@@ -528,6 +528,16 @@ export class ConversationTracker {
     return this.mirrors.get(conversationId)?.live?.run !== undefined
   }
 
+  /**
+   * Whether resuming the scheduler would execute or admit work in this conversation: an active run
+   * (re-driven) or queued inbox submissions (admitted on resume). Used by the startup node-join grace
+   * to decide whether a conversation's bound node is needed before recovery (read-only fact, no state).
+   */
+  hasRunnableWork(conversationId: number): boolean {
+    const mirror = this.mirrors.get(conversationId)
+    return mirror !== undefined && (mirror.live?.run !== undefined || (mirror.inbox?.length ?? 0) > 0)
+  }
+
   /** Whether the conversation has an active context compaction task (separate from hasLiveWork so compaction never fabricates turn_settled). */
   isCompacting(conversationId: number): boolean {
     return (this.mirrors.get(conversationId)?.live?.compactions?.length ?? 0) > 0

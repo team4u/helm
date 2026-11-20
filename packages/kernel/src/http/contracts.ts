@@ -222,6 +222,13 @@ export interface KernelRuntimeLike {
   readonly events: EventHub
   /** Dedicated SSE stream port for session documents (returns 501 if unprovided). */
   readonly sessionDocEvents?: SessionDocEventPort
+  /**
+   * Startup lifecycle fact: false while the kernel has not finished `start()` (plugin services +
+   * scheduler resume). When provided and false, the HTTP layer gates non-probe API routes with
+   * `503 hub_starting` (listen-before-start two-phase boot; `startHub` may open the socket first so
+   * remote nodes reconnect while recovery has not converged yet). Optional: omitted = always ready.
+   */
+  readonly started?: boolean
   readonly profiles: ProfileService
   readonly skills: SkillService
   readonly credentials: CredentialService

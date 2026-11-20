@@ -15,15 +15,26 @@ import { createAppsPlugin } from '@helmx/plugins/apps';
 import { createTokenSpeedPlugin } from '@helmx/plugins/token-speed';
 import { createTasksPlugin } from '@helmx/plugins/tasks';
 
-export type HelmxOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'>;
+export type HelmxOptions = Omit<NonNullable<Parameters<typeof KernelRuntime.open>[0]>, 'autoResume'> & {
+  /**
+   * Two-phase boot switch (default `true` = createHelmx runs `kernel.start()` itself, unchanged for
+   * all existing callers). When `false`, the returned kernel is assembled and recovered but NOT
+   * started: the composition root should first open the HTTP listener (`startHub`, so `/ws/node`
+   * accepts remote-node reconnections) and only then call `kernel.start()` — its bounded node-join
+   * grace then waits for recovery-dependent registered nodes before driving plugin recovery and the
+   * scheduler (fixes restart recovery racing node reconnection; see kernel `node-join-grace.ts`).
+   */
+  autoStart?: boolean;
+};
 
 /** Composition root only selects plugins and their default enabled states, providing no plugin-specific runtime dependencies. */
 export async function createHelmx(options: HelmxOptions = {}) {
   // Default product composition injects the plugin build provider (`client.tsx` compilation + external TS transpilation);
   // callers may override via `options.buildProvider`. The kernel itself does not bundle esbuild (separating mechanism from
   // tooling) and explicitly rejects client UI / TS plugins when unwired (`unsupported_client_build`, etc.).
+  const { autoStart = true, ...kernelOptions } = options;
   const kernel = await KernelRuntime.open({
-    ...options,
+    ...kernelOptions,
     buildProvider: options.buildProvider ?? createPluginBuildProvider(),
     autoResume: false,
   });
@@ -50,7 +61,8 @@ export async function createHelmx(options: HelmxOptions = {}) {
     await kernel.plugins.register(createSuperAgentPlugin(), { enabled: false });
     await loadExternalPlugins(kernel.dataDir, kernel.plugins);
     // Run `prepare -> start` across all registered plugins before resuming the SDK scheduler.
-    await kernel.start();
+    // Two-phase boot (autoStart: false) defers this to the entrypoint after the HTTP listener opens.
+    if (autoStart) await kernel.start();
     return { kernel, close: () => kernel.close() };
   } catch (error) {
     await kernel.close();

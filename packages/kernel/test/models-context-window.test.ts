@@ -76,6 +76,9 @@ test('catalog contextWindow projection and models.changed backfill: unknown -> k
     const unregister = await kernel.registerRuntimeProvider(provider, 'builtin:demo')
 
     // HTTP catalog check (sharing source with kernel.listModels). Initialize auth first to obtain token.
+    // (Kernel started before startHub: the listen-before-start HTTP layer gates non-probe API routes
+    // with `503 hub_starting` while `kernel.started === false`.)
+    await kernel.start()
     hub = await startHub({ kernel, port: 0 })
     const setup = await fetch(`${hub.url}/api/auth/setup`, {
       method: 'POST',
