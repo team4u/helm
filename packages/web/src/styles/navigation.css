@@ -710,8 +710,8 @@
   flex-wrap: wrap;
 }
 
-/* 侧栏头部总览入口（命令面板搜索钮旁）：复用 rail-overview-dot 同源 tone
- * 灯点（绝对定位锚点需要 relative 宿主），与 Rail 总览按钮同一事实源。 */
+/* 侧栏头部总览入口（命令面板搜索钮旁）：挂 overview-count-badge 同源计数
+ * 徽标（绝对定位锚点需要 relative 宿主），与移动端总览按钮同一事实源。 */
 .sidebar-overview-open-btn {
   position: relative;
 }

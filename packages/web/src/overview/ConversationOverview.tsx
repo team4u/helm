@@ -421,7 +421,6 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
         <div className="overview-filter-selects">
           <Select
             className="overview-filter-select"
-            size="sm"
             aria-label={t('shell.overview.profileFilterLabel')}
             options={[
               { value: '', label: t('shell.overview.profileFilter') },
@@ -432,7 +431,6 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
           />
           <Select
             className="overview-filter-select"
-            size="sm"
             aria-label={t('shell.overview.nodeFilterLabel')}
             options={[
               { value: '', label: t('shell.overview.nodeFilter') },
@@ -447,7 +445,6 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
           {showSourceFilter && (
             <Select
               className="overview-filter-select"
-              size="sm"
               aria-label={t('shell.overview.sourceFilterLabel')}
               options={[
                 { value: 'all', label: t('shell.overview.sourceFilter') },
