@@ -2,10 +2,10 @@
  * 全局并发态势 Hook：把 attention-model 纯函数接进 store 现场。
  *
  * 单一职责：从 store 各切片（会话 / 插件 / Profile / workbench 面板 / 插件
- * doc / 当前导航目标）推导后台在途索引与态势条目，并自洽发现、按需加载
+ * doc / 当前导航目标）推导后台在途索引与态势微标，并自洽发现、按需加载
  * workbench badge doc——不依赖侧栏抽屉是否展开（移动端合着抽屉时后台
  * 任务也不失明；ensurePluginDoc 幂等，多处挂载不重复请求）。
- * Sidebar 平铺区、移动端汉堡微标与桌面折叠 Rail 微标共用本 Hook 的同源输出。
+ * 侧栏总览入口、移动端汉堡微标与桌面折叠 Rail 微标共用本 Hook 的同源输出。
  */
 import { useEffect, useMemo } from 'react'
 import {
@@ -28,11 +28,12 @@ import {
 import {
   buildAttentionModel,
   collectViewedConversationIds,
-  type AttentionModelResult,
   type GlobalAttentionIndicator,
 } from './attention-model.js'
 
-export interface GlobalAttentionValue extends AttentionModelResult {
+export interface GlobalAttentionValue {
+  /** 全局态势微标（成员级排除正在查看的会话）。 */
+  indicator: GlobalAttentionIndicator
   /** 当前可见的主屏/分屏/会话弹窗目标，用于即时隐藏已查看的未读完成提示。 */
   viewedConversationIds: ReadonlySet<number>
   /** 后台在途索引（与会话行单灯位、插件 SDK 快照共享同一事实源）。 */
@@ -74,9 +75,9 @@ export function useGlobalAttention(): GlobalAttentionValue {
     () => collectViewedConversationIds({ primaryTarget, splitTarget, activeModal }),
     [primaryTarget, splitTarget, activeModal],
   )
-  const model = useMemo(
+  const indicator = useMemo(
     () => buildAttentionModel({ conversations, background, profiles, plugins, viewedConversationIds, t }),
     [conversations, background, profiles, plugins, viewedConversationIds, t],
   )
-  return { ...model, background, viewedConversationIds }
+  return { indicator, background, viewedConversationIds }
 }

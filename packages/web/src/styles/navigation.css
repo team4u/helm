@@ -712,14 +712,10 @@
 /* 话题切换已回归左栏手风琴（仅展开当前智能体），顶栏恢复单行标题。 */
 
 
-/* 态势平铺分组（跨角色活跃/待关注）：行结构与插件分组行同构的单灯位行，
- * 标题下挂一行极简副信息（角色名 + 真实动作/子任务数，muted 单行省略），
- * 不与下方智能体站位分组重复占位——空时整组不渲染。 */
-.sidebar-attention-group .attention-row {
-  min-height: 32px;
-}
-
-.attention-row-body {
+/* 会话总览脉冲入口（对话空间顶部单行）：行结构与视图行同构（行首灯位 +
+ * activity 图标 + 标题），有态势时标题下挂一行真实摘要（muted 单行省略），
+ * 全安静时零灯零副文——不装忙。 */
+.sidebar-overview-entry-body {
   display: flex;
   flex-direction: column;
   gap: 1px;
@@ -727,7 +723,7 @@
   flex: 1;
 }
 
-.attention-row-sub {
+.sidebar-overview-entry-sub {
   font-size: 11px;
   font-weight: 400;
   color: var(--fg-muted);
@@ -736,18 +732,4 @@
   text-overflow: ellipsis;
   max-width: 100%;
   line-height: 1.35;
-}
-
-.sidebar-attention-header-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  min-width: 0;
-  color: var(--fg-muted);
-}
-
-.sidebar-attention-header-meta {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
 }

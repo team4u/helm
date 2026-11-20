@@ -436,13 +436,13 @@ function renderSidebar(store: HelmxExternalStore): string {
 }
 
 /**
- * Drop the cross-agent attention flat group before counting standings/section
- * rows and lights: its rows intentionally add one more single-light row per
- * qualifying tree (covered by attention-model.test.ts); stripping keeps these
- * assertions scoped to the agent-standings/sidebar-section row semantics.
+ * Strip the sidebar overview pulse entry before counting standings/section
+ * lights: its same-source indicator light intentionally adds one more light
+ * whenever any tree has a signal (covered by attention-model.test.ts);
+ * stripping keeps these assertions scoped to the standings/section semantics.
  */
-function withoutAttentionGroup(html: string): string {
-  const start = html.indexOf('sidebar-attention-group')
+function stripOverviewEntry(html: string): string {
+  const start = html.indexOf('sidebar-overview-entry')
   if (start < 0) return html
   const standings = html.indexOf('agent-standing-group', start)
   if (standings < 0) return html.slice(0, start)
@@ -452,7 +452,7 @@ function withoutAttentionGroup(html: string): string {
 /** Count conversation status lights (excluding the ActivityRail SSE status-dot-connected dot). */
 function countStatusLights(html: string): number {
   return (
-    withoutAttentionGroup(html).match(/class="status-dot(?: status-dot-(?:working|blocked|done|error|background))?"/g) ?? []
+    stripOverviewEntry(html).match(/class="status-dot(?: status-dot-(?:working|blocked|done|error|background))?"/g) ?? []
   ).length
 }
 
@@ -505,7 +505,10 @@ test('idle conversation + background in flight: only the background hollow ring 
   const html = renderSidebar(store)
   assert.ok(html.includes('class="status-dot status-dot-background"'), 'the background in-flight hollow ring must render')
   assert.ok(html.includes('title="Idle · background task: 2 Running"'), 'the tooltip states both the base status and the background summary')
-  assert.ok(!html.includes('status-dot-working'), 'idle + background in flight must not masquerade as the conversation itself working')
+  assert.ok(
+    !stripOverviewEntry(html).includes('status-dot-working'),
+    'idle + background in flight must not masquerade as the conversation itself working (the overview entry pulse light is scoped out)',
+  )
   assert.equal(countStatusLights(html), 1, 'the collapsed standing row carries exactly one light')
 })
 
@@ -568,7 +571,7 @@ test('expanded state: the standing row does not duplicate the indicator; each ch
   // each of the three child rows carries one light (done green dot / background hollow ring / error status light); the standing row duplicates none
   assert.equal(countStatusLights(html), 3, 'expanded state: exactly one light per child row, none on the standing row')
   assert.equal(
-    (withoutAttentionGroup(html).match(/status-dot-background/g) ?? []).length,
+    (stripOverviewEntry(html).match(/status-dot-background/g) ?? []).length,
     1,
     'the background hollow ring appears exactly once on its own child row (attention rows excluded)',
   )
@@ -603,7 +606,7 @@ test('collapsed standing row: non-primary background in flight + representative 
       'builtin:workflow/run-badges': badgesDoc({ '2': { count: 4, tone: 'accent', footerText: '4 Running' } }),
     },
   })
-  const blockedHtml = withoutAttentionGroup(renderSidebar(blockedStore))
+  const blockedHtml = stripOverviewEntry(renderSidebar(blockedStore))
   assert.ok(blockedHtml.includes('class="status-dot status-dot-blocked"'), 'the representative blocked status light surfaces')
   assert.ok(!blockedHtml.includes('status-dot-background'), 'with the representative blocked, the whole standing background ring hides')
   assert.ok(!blockedHtml.includes('background task'), 'the tooltip shows only the representative status')
@@ -743,7 +746,7 @@ test('leading fixed light slot: working/done/idle+background lights all sit befo
     'the idle row keeps its empty slot (no light renders, the slot remains)',
   )
   // slot count matches row count: every conversation row (nav-item-sub) and every standing row carries exactly one nav-status-slot
-  const scoped = withoutAttentionGroup(html)
+  const scoped = stripOverviewEntry(html)
   const subRows = (scoped.match(/class="nav-item nav-item-sub/g) ?? []).length
   const standingRows = (scoped.match(/class="nav-item agent-standing-row/g) ?? []).length
   const slots = (scoped.match(/class="nav-status-slot"/g) ?? []).length
