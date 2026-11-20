@@ -34,7 +34,7 @@ test('消息正文与气泡宽度样式契约：AI 正文段落与列表解除 7
 })
 
 test('人类胶囊 Markdown 样式契约：正文对齐胶囊前景色与字号，胶囊本体不再 pre-wrap（换行交给硬换行）', { timeout: 60_000 }, () => {
-  assert.match(stylesCss, /\.msg-human-pill\s+\.msg-ai-body\s*\{[^}]*color:\s*var\(--fg\)/)
+  assert.match(stylesCss, /\.msg-human-pill\s+\.msg-ai-body\s*\{[^}]*color:\s*var\(--prose-fg\)/)
   assert.match(stylesCss, /\.msg-human-pill\s+\.msg-ai-body\s*\{[^}]*font-size:\s*15px/)
   assert.match(stylesCss, /\.msg-human-pill\.msg-human-pill-queued\s+\.msg-ai-body\s*\{[^}]*color:\s*var\(--fg-muted\)/)
   assert.match(stylesCss, /\.msg-human-row-external\s+\.msg-human-pill\s+\.msg-ai-body\s*\{[^}]*color:\s*var\(--fg-secondary\)/)
