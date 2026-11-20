@@ -623,7 +623,7 @@ test('ConversationOverview card meta slot: contributions render with tree props;
   }
 })
 
-test('Sidebar rail: the overview button opens #/overview and carries the same-source tone dot', { timeout: 60_000 }, async () => {
+test('Sidebar overview entry: the rail button is gone; the header button opens #/overview with the same-source tone dot', { timeout: 60_000 }, async () => {
   const store = overviewStore({
     conversations: [
       conv({ id: 2, title: '在跑的调研', profileId: 'coder', status: 'working', createdAt: 8000, updatedAt: 8000 }),
@@ -639,8 +639,10 @@ test('Sidebar rail: the overview button opens #/overview and carries the same-so
       root = createRoot(container)
       root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(Sidebar)))
     })
-    const overviewBtn = container.querySelector<HTMLButtonElement>('.rail-overview-btn')
-    assert.ok(overviewBtn !== null, 'the host overview entry renders in the rail')
+    // Rail 总览按钮整特性删除：入口唯一收敛到侧栏头部（对话空间）。
+    assert.ok(container.querySelector('.rail-overview-btn') === null, 'the rail overview button is gone for good')
+    const overviewBtn = container.querySelector<HTMLButtonElement>('.sidebar-overview-open-btn')
+    assert.ok(overviewBtn !== null, 'the host overview entry renders in the sidebar header')
     assert.ok(
       overviewBtn.getAttribute('aria-label')?.includes('Conversation overview'),
       'the tooltip label states the overview',
@@ -652,9 +654,7 @@ test('Sidebar rail: the overview button opens #/overview and carries the same-so
     const primary = store.getPrimaryTarget()
     assert.ok(primary.kind === 'overview', 'clicking navigates to the overview stage')
 
-    // 唯一点亮不变量：主屏停总览时总览按钮独占 Rail 高亮，空间按钮全灭
-    // （修复「对话」空间按钮与「会话总览」双高亮）。
-    assert.ok(overviewBtn.classList.contains('rail-btn-active'), 'the overview rail button owns the active state')
+    // 主屏停总览时空间按钮一律不亮（Rail 已无总览按钮，双高亮无从谈起）。
     const spaceBtns = [...container.querySelectorAll<HTMLButtonElement>('.rail-space-btn')]
     assert.ok(spaceBtns.length === 3, 'three space buttons render')
     for (const btn of spaceBtns) {
@@ -680,21 +680,22 @@ test('Sidebar rail: the overview button opens #/overview and carries the same-so
       jumped.kind === 'conversation' && jumped.conversationId === 50,
       'the conversations space button jumps back to the remembered conversation target',
     )
-
-    // 无信号时灯点不渲染（诚实：无信号不装忙）
-    const quiet = overviewStore({
-      conversations: [conv({ id: 50, title: '安静', profileId: 'coder' })],
-      primaryTarget: { kind: 'conversation', conversationId: 50 },
-    })
-    const html = renderToString(e(HelmxExternalStoreContext.Provider, { value: quiet }, e(Sidebar)))
-    assert.ok(html.includes('rail-overview-btn'), 'the overview button always renders')
-    assert.ok(!html.includes('rail-overview-dot'), 'no tone dot without any signal')
   } finally {
     await act(async () => {
       root?.unmount()
     })
     container.remove()
   }
+
+  // 无信号时灯点不渲染（诚实：无信号不装忙）
+  const quiet = overviewStore({
+    conversations: [conv({ id: 50, title: '安静', profileId: 'coder' })],
+    primaryTarget: { kind: 'conversation', conversationId: 50 },
+  })
+  const html = renderToString(e(HelmxExternalStoreContext.Provider, { value: quiet }, e(Sidebar)))
+  assert.ok(!html.includes('rail-overview-btn'), 'the rail overview button never renders')
+  assert.ok(html.includes('sidebar-overview-open-btn'), 'the header entry always renders in the conversations space')
+  assert.ok(!html.includes('rail-overview-dot'), 'no tone dot without any signal')
 })
 
 // ---------------------------------------------------------------------------
