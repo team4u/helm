@@ -374,6 +374,37 @@ test('a currently visible conversation receiving unread=true while foreground-fo
   }
 })
 
+test('opening a conversation drawer from a non-conversation view clears its unread completion immediately', { timeout: 60_000 }, async () => {
+  const page = setVisibilityAndFocus({ hidden: false, focused: true })
+  const h = await mountProvider({ hash: '#/overview' })
+  h.nextEvents((_url, signal) => {
+    const c = controlledStream(signal)
+    c.send(
+      snapshotFrame({
+        bootId: 'boot-1',
+        seq: 1,
+        conversations: [makeConv({ id: 7, status: 'done', unread: true, stateChangeSeq: 4 })],
+        pendingAsks: [],
+        plugins: [],
+        ui: [],
+      }),
+    )
+    return c
+  })
+  try {
+    await h.waitFor((s) => s.sseConnected && s.conversations.some((conv) => conv.id === 7))
+    assert.equal(h.patchCalls.length, 0, 'overview itself does not mark every unread conversation as read')
+    await act(async () => {
+      h.store().setActiveModal({ kind: 'conversation-drawer', conversationId: 7 })
+    })
+    await h.waitFor((s) => h.patchCalls.length === 1 && s.conversations.find((conv) => conv.id === 7)?.unread === false)
+    assert.deepEqual(h.patchCalls, [{ id: 7, body: { unread: false } }])
+  } finally {
+    await h.close()
+    page.restore()
+  }
+})
+
 test('page hidden (hidden=true) or unfocused (hasFocus=false): receiving unread=true on the current conversation sends no PATCH (unread kept)', { timeout: 60_000 }, async () => {
   const page = setVisibilityAndFocus({ hidden: true, focused: true })
   const h = await mountProvider({ hash: '#/c/1' })

@@ -863,6 +863,7 @@ test('新建待办：核心字段直出、高级选项折叠、MultiSelect 依�
   await click(newBtn ?? null)
   let modal = document.querySelector('.task-modal')
   assert.ok(modal, '新建弹窗应挂载')
+  assert.ok(modal.closest('.modal-backdrop'), '创建弹窗内容应处于宿主遮罩的居中布局层中')
 
   // 核心三件套直出：标题 / 简报 / 立即开工开关；高级字段默认折叠
   const inputs = [...modal.querySelectorAll<HTMLInputElement>('input')]

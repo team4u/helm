@@ -19,7 +19,6 @@ import { PluginUiView } from '../ui/PluginUiView.js'
 import { Tooltip } from '../ui/Tooltip.js'
 import { ConversationRowActionsMenu } from '../ui/ConversationRowActionsMenu.js'
 import { isSameResolvedTarget, resolveTargetString, CENTER_TARGETS, spaceForTarget, type SidebarSpace } from '../lib/types.js'
-import { useIsMobileViewport } from '../lib/use-media-query.js'
 import { readBrowserNotificationPermission } from '../lib/browser-notification.js'
 import { formatModShortcut } from './shortcuts-model.js'
 import {
@@ -315,8 +314,8 @@ const SPACE_LABEL_KEYS: Record<
  * Activity Rail（48px）：仅空间切换（对话/视图/设置）+ 主题按钮。
  * 桌面与移动抽屉共用；空间按钮直接导航主舞台到对应空间的最近目标（store.openSpace），
  * 系统中心入口收敛到「设置」空间内的纵向列表。
- * 「对话空间」按钮常驻挂载全局态势微标（与移动端汉堡同源 indicator）：桌面折叠
- * 侧栏时也能一眼感知全局并发（需处理/运行中/未读完成的紧凑计数与灯色）。
+ * 空间按钮本身不携带任何徽标：全局态势感知收敛到下方「会话总览」直达按钮的
+ * tone 灯点（同源 indicator；总览页已有逐会话指示灯，入口计数冗余）。
  */
 function ActivityRail({
   sseConnected,
@@ -387,26 +386,17 @@ function ActivityRail({
       <div className="activity-rail-spaces">
         {(Object.keys(SPACE_LABEL_KEYS) as SidebarSpace[]).map((key) => {
           const spaceLabel = t(SPACE_LABEL_KEYS[key])
-          const carriesAttention = key === 'conversations' && attentionIndicator.tone !== null
-          const labelWithAttention = carriesAttention && attentionSummary !== ''
-            ? `${spaceLabel} · ${attentionSummary}`
-            : spaceLabel
           return (
-            <Tooltip content={labelWithAttention} side="right" key={key}>
+            <Tooltip content={spaceLabel} side="right" key={key}>
               <button
                 type="button"
                 className={`rail-btn rail-space-btn${space === key ? ' rail-btn-active' : ''}`}
-                title={labelWithAttention}
-                aria-label={labelWithAttention}
+                title={spaceLabel}
+                aria-label={spaceLabel}
                 aria-current={space === key ? 'page' : undefined}
                 onClick={() => onOpenSpace(key)}
               >
                 <HelmxIcon name={SPACE_ICONS[key]} size={16} />
-                {carriesAttention && (
-                  <span className="rail-attention-badge" data-tone={attentionIndicator.tone}>
-                    {attentionIndicator.totalCount > 99 ? '99+' : attentionIndicator.totalCount}
-                  </span>
-                )}
               </button>
             </Tooltip>
           )
@@ -453,7 +443,7 @@ function ActivityRail({
                 >
                   <HelmxIcon name={entry.icon} size={16} />
                   {badge !== null && !badge.dot && badge.count > 0 && (
-                    <span className="rail-attention-badge" data-tone={badge.tone}>
+                    <span className="rail-quick-badge" data-tone={badge.tone}>
                       {sidebarBadgeCountLabel(badge.count)}
                     </span>
                   )}
@@ -586,14 +576,10 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   // 该空间最近的主舞台目标，URL 即该空间真实锚点，刷新/前进/后退天然可还原。
   const space = spaceForTarget(primaryTarget)
 
-  // 全局并发态势（跨角色平铺条目 + 汉堡/Rail 微标 + 后台在途索引）：badge doc
-  // 的按需加载内聚在 Hook（ensurePluginDoc 幂等，移动端合着抽屉也不漏后台任务）。
-  // 插件停用后其 UI 贡献与 doc 均从 store 消失，态势自然归零。
+  // 全局并发态势（对话空间平铺条目 + Rail/移动端快捷导航的总览灯点 + 后台在途
+  // 索引）：badge doc 的按需加载内聚在 Hook（ensurePluginDoc 幂等，移动端合着
+  // 抽屉也不漏后台任务）。插件停用后其 UI 贡献与 doc 均从 store 消失，态势自然归零。
   const { items: attentionItems, indicator: attentionIndicator, background } = useGlobalAttention()
-
-  // 移动端视口：抽屉形态。任何空间拉开汉堡都能看到态势平铺区并一键行动；
-  // 桌面非对话空间保持原布局（态势经 Rail 微标感知，点击「对话空间」直达）。
-  const isMobileViewport = useIsMobileViewport()
 
   // 插件全局快捷入口（sidebar.item quickEntry，最薄通用声明）：仅收当前启用
   // 插件确实注册了的 screen（插件停用后贡献即时消失，入口零残留）；点击走标准
@@ -709,11 +695,8 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
         </div>
 
         <div className="sidebar-scroll">
-          {/* 移动端抽屉在任何空间都先看到态势平铺区（一键行动）；对话空间的
-              常规挂载点在下方 PendingAsksPanel 之后，此处避免重复渲染。 */}
-          {space !== 'conversations' && isMobileViewport && (
-            <SidebarAttentionGroup items={attentionItems} store={sidebarStore} onNavigate={onClose} />
-          )}
+          {/* 态势平铺区仅挂对话空间（会话界面的侧栏）；其他空间保持各自的
+              视图/设置列表，全局态势经总览入口的 tone 灯点感知。 */}
           {space === 'conversations' ? (
             <>
               <PendingAsksPanel store={sidebarStore} />

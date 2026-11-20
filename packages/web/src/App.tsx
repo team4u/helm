@@ -38,6 +38,7 @@ import {
   parseLocationHash,
   type WorkspaceLocationState,
 } from './lib/url-hash-model.js'
+import { isSameResolvedTarget } from './lib/types.js'
 import { ScreenHost } from './screens/ScreenHost.js'
 import { ConversationOverview } from './overview/ConversationOverview.js'
 import { AuthGate } from './shell/AuthGate.js'
@@ -299,10 +300,16 @@ function HelmxShellInner() {
         ? fallbackTarget.conversationId
         : undefined
 
+  // 移动端快捷导航簇的 quickEntry 按钮仅在「不在该视图上」时渲染（主屏已停在
+  // 入口目标时就地隐藏）；顶栏左让位宽度（mq-quick-on）跟随真实可见性，而非
+  // 插件是否声明了 quickEntry。
+  const mobileQuickEntryVisible =
+    firstQuickEntry !== null && !isSameResolvedTarget(primaryTarget, firstQuickEntry.target)
+
   return (
     <LazyRetryContext.Provider value={versionWatch.clearPreloadError}>
       <div
-        className={`helmx-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}${firstQuickEntry !== null ? ' mq-quick-on' : ''}`}
+        className={`helmx-shell${sidebarOpen ? ' sidebar-open' : ''}${sidebarCollapsed ? ' sidebar-collapsed' : ''}${mobileQuickEntryVisible ? ' mq-quick-on' : ''}`}
         onClick={(event) => {
           const target = event.target as HTMLElement
           if (target.closest('.nav-item')) {
@@ -319,7 +326,9 @@ function HelmxShellInner() {
           <HelmxIcon name="menu" />
         </button>
         {/* 移动端免开汉堡的一键直达：首个 quickEntry 插件视图 + 会话总览
-            （态势微标独立可按）；桌面由折叠 Rail 承担同源入口，此处渲染 null。 */}
+            （tone 灯点同源 indicator，主屏已停在入口目标时就地隐藏）；
+            quickEntry 徽标由插件 sidebarItem 的通用 badge 声明驱动；
+            桌面由折叠 Rail 承担同源入口，此处渲染 null。 */}
         <MobileQuickNav indicator={attention.indicator} quickEntry={firstQuickEntry} quickEntryBadge={quickEntryBadge} />
         {sidebarOpen && (
           <button

@@ -91,13 +91,11 @@
   box-shadow: var(--seg-edge);
 }
 
-/* 全局态势微标（Rail 空间按钮 / 移动端汉堡同源）：紧凑计数 + 灯色，
- * 只呈现真实聚合事实（需处理/运行中/未读完成），无信号时不渲染。 */
-.rail-space-btn {
-  position: relative;
-}
-
-.rail-attention-badge {
+/* 快捷入口计数徽标（sidebar.item 通用 badge 声明驱动）：紧凑计数 + 灯色，
+ * 只呈现插件公开 doc 的真实聚合事实，无信号时不渲染；专用类与对话空间
+ * 按钮解耦（态势感知统一走 rail-overview-dot tone 灯点）。
+ * tone 词汇 = SidebarBadgeTone 五值。 */
+.rail-quick-badge {
   position: absolute;
   top: 0;
   right: 0;
@@ -117,15 +115,11 @@
   pointer-events: none;
 }
 
-.rail-attention-badge[data-tone='error'] { background: var(--err); }
-.rail-attention-badge[data-tone='blocked'] { background: var(--warn); }
-.rail-attention-badge[data-tone='running'] { background: var(--accent); }
-.rail-attention-badge[data-tone='done'] { background: var(--ok); }
-/* sidebar.item badge 声明 tone 词汇（error/warn/accent/ok/neutral）与态势微标共用本类。 */
-.rail-attention-badge[data-tone='warn'] { background: var(--warn); }
-.rail-attention-badge[data-tone='accent'] { background: var(--accent); }
-.rail-attention-badge[data-tone='ok'] { background: var(--ok); }
-.rail-attention-badge[data-tone='neutral'] { background: var(--fg-muted); }
+.rail-quick-badge[data-tone='error'] { background: var(--err); }
+.rail-quick-badge[data-tone='warn'] { background: var(--warn); }
+.rail-quick-badge[data-tone='accent'] { background: var(--accent); }
+.rail-quick-badge[data-tone='ok'] { background: var(--ok); }
+.rail-quick-badge[data-tone='neutral'] { background: var(--fg-muted); }
 
 /* 插件全局快捷入口（sidebar.item quickEntry）：紧随空间按钮，细分隔线隔离；
  * 按钮复用 rail-btn 形态（含激活态），插件停用后贡献消失即零残留。 */
@@ -147,7 +141,7 @@
 }
 
 /* 快捷入口静默灯点（sidebar.item badge dotField：计数为 0 时的安静后台活动提示，
- * 无数字、不抢焦点；tone 词汇同 .rail-attention-badge）。 */
+ * 无数字、不抢焦点；tone 词汇同 .rail-quick-badge）。 */
 .rail-quick-dot {
   position: absolute;
   top: 3px;

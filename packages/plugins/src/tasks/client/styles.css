@@ -734,7 +734,31 @@
 /* ---- Centered create / rework modals (host .modal shell + task-specific form) ---- */
 
 .task-modal {
-  width: min(560px, 100vw);
+  width: min(560px, 100%);
+  min-height: 0;
+}
+
+@media (max-width: 680px) {
+  .task-modal {
+    width: calc(100vw - 20px);
+    max-height: calc(100dvh - max(20px, env(safe-area-inset-top) + env(safe-area-inset-bottom)));
+    border-radius: var(--radius-md);
+  }
+
+  .task-modal .modal-header {
+    flex: 0 0 auto;
+    padding-top: max(12px, env(safe-area-inset-top));
+  }
+
+  .task-modal .task-modal-body {
+    min-height: 0;
+    overscroll-behavior: contain;
+  }
+
+  .task-modal .task-modal-footer {
+    flex: 0 0 auto;
+    padding-bottom: max(12px, env(safe-area-inset-bottom));
+  }
 }
 
 .task-modal-body {
