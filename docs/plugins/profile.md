@@ -25,7 +25,8 @@
 | `profile.assets-missing` | SYSTEM.md 缺失或为空 | `<profile_assets_missing>` 显式说明：本回合无该 Profile 人格，要求模型告知用户、不假装特定人格 |
 | `profile.agents` | 会话靶点工作区存在非空白 AGENTS.md | `<project_instructions path="...">` 项目约定全文（先脱敏，超 64000 字符显式截断） |
 | `profile.agents-unavailable` | 远端节点离线、宿主能力未接线、AGENTS.md 为特殊文件或超 256 KiB 读取上限等 | `<project_instructions_unavailable>` 显式说明原因，绝不静默降级为「无文件」 |
-| `profile.skills` | 可用技能非空 | `<available_skills>` 目录（id/name/description/references） |
+| `profile.node-skills-unavailable` | 节点技能库扫描失败（远端离线、宿主能力未接线、目录 IO 故障、条目/文件超上限等） | `<node_skills_unavailable>` 显式说明原因；本回合技能目录退化为仅 Hub 来源（显式声明，非静默） |
+| `profile.skills` | 可用技能非空（Hub 目录 + 节点补充技能合并） | `<available_skills>` 目录（id/name/description/references） |
 | `profile.catalog` | 当回合实际有 `subagent` / `SubagentWorkflow` 派工工具 | `<available_profiles>` 协作目录与 `@` 点名委派指引 |
 | `profile.workspace-boundary` | Profile 开启 `restrictToCwd` | `<workspace_boundary>` 边界声明：点名会话 cwd 与 `path_outside_workspace` 拒绝语义，避免模型反复试错 |
 
@@ -42,6 +43,17 @@
 - **`composerCompleter`** `profile-mentions`：`@` 触发的补全源（复用宿主通用补全渲染）。
 - **`sidebarItem`** `assistant`：左栏个人助理站位，指向 `conversation:profile:assistant`（不依赖某一具体会话存在，会话全部删除后站位仍在）。
 
+### 节点技能库（会话坐标的只读技能来源）
+
+会话靶点 `(nodeId, cwd)` 指向的节点可以在工作区 **`<cwd>/.helmx/skills/<id>/SKILL.md`**（+ 任意嵌套 references）下提供自己的技能库， builtin:profile 每回合 `before_turn` 重新发现、`load_skill` 每次直接读节点当前文件内容（无缓存、不回写历史上下文，节点上的修改下一回合即生效）。机制全部复用内核 EnvFabric：
+
+- **只读、不同步**：节点技能永远留在节点事实来源上，绝不复制进 Hub `SkillService` 的 dataDir；Web 技能中心与 `helmx skills` 展示的是 Hub 全局目录（无会话上下文），节点技能只对会话内 Agent 生效。
+- **同名优先级契约**（明确顺序，不依赖目录枚举顺序）：Hub dataDir（含受管技能，永远最高）> 机器级共享根 `~/.agents/skills` > 节点 `.helmx/skills`。节点技能只能补充、不能覆盖：同名时目录不收录节点版本，`load_skill` 无来源参数、永远解析到高优先级版本——Agent 不会见到 namespace skill id，同名冲突也不会变成 Agent 选择题。
+- **可用性同规则**：节点技能与 Hub 技能共用 `isSkillAvailable`（Profile 白名单过滤；节点文件 frontmatter 的 `managedByPlugin` 强制剥离，节点不得冒充宿主受管技能，因此插件启停不影响节点技能）。
+- **安全纪律**（与 AGENTS.md 注入同款，全走 ExecutionEnv 安全原语）：远端在线预检（离线短路不进入 RPC 等待）、`canonicalPath` 解析后 `openBinaryReader({ noFollow: true })` 同句柄有界读取（单文件上限 256 KiB，读后同句柄复核 size/mtime，杜绝把被截断的旧前缀当完整快照）、路径词汇与 Hub 技能共用 `@helmx/protocol` skill-contract（穿越 / 绝对路径 / 反斜杠一律拒绝）、name/description 进系统提示前脱敏。软链技能目录在发现层跳过（`listDir` 不跟随软链）。
+- **显式失败语义**：工作区无 `.helmx/skills` 属常态（按空处理）；节点离线 / 宿主能力未接线 / 目录 IO 故障 / 条目数（256）或单技能 references 数（512）超上限，`before_turn` 注入 `profile.node-skills-unavailable` 显式说明段（技能目录退化为仅 Hub 来源），`load_skill` 对节点分支报 `409 node_offline` / `502 node_skill_read_failed`（含脱敏诊断），绝不静默 fallback、绝不伪造成功。
+- **边界如实**：这是发现与加载层的目录边界，不是 OS 沙箱——节点本地用软链组织技能目录属节点自身文件系统自由（读取时 `noFollow` 拒最终组件软链），模型可请求的路径被相对路径词汇限制在技能目录树内。
+
 ## 配置与数据边界
 
 本插件自身**无 `ctx.configSchema` 配置项**。Profile 的技能白名单（`Profile.skills`：缺省全部、`[]` 禁用全部、非空白名单）与 SYSTEM.md 归 Profile 配置管理（`helmx profiles create/update`）。插件不持有自己的持久文档——技能目录每回合从 `ctx.host.skills.list()` 现读。
@@ -56,9 +68,10 @@
 | :--- | :--- |
 | 插件入口 | `packages/plugins/src/profile.ts` |
 | AGENTS.md 读取与注入 | `packages/plugins/src/profile/agents-md.ts` |
+| 节点技能库发现与读取 | `packages/plugins/src/profile/node-skills.ts` |
 | 协作目录计算与渲染 | `packages/plugins/src/profile/catalog.ts` |
 | helmx-cli 技能资产 | `packages/plugins/src/profile/skill/`（构建后随包分发） |
-| 测试 | `packages/plugins/test/profile-agents-md.test.ts`、`profile-collaboration.test.ts`、`profile-collaboration.integration.test.ts`、`profile-starters.test.ts` |
+| 测试 | `packages/plugins/test/profile-agents-md.test.ts`、`profile-node-skills.test.ts`、`profile-collaboration.test.ts`、`profile-collaboration.integration.test.ts`、`profile-starters.test.ts` |
 
 ## 相关文档
 

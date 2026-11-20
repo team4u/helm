@@ -84,7 +84,7 @@ export interface SkillFrontmatterDoc {
 /** Strip symmetric leading/trailing single/double quotes from a YAML single-line
  * scalar (double quotes restore \" and \\ escapes, single quotes restore ''
  * escapes; asymmetric quotes stay verbatim — never fabricate a parse).
- * Semantics match stripQuotedScalar of the kernel parseSkillFrontmatter. */
+ * Semantics match stripQuotedScalar of the @helmx/protocol parseSkillFrontmatter. */
 function stripQuotedScalar(value: string): string {
   if (value.length < 2) return value
   const first = value[0]
@@ -97,7 +97,7 @@ function stripQuotedScalar(value: string): string {
 
 /** Parse the top YAML frontmatter of SKILL.md (--- ... --- / ... fences) into a
  * field sequence and body. Value syntax aligns with the minimal set of the
- * kernel parseSkillFrontmatter: single-line scalars (symmetric quotes
+ * @helmx/protocol parseSkillFrontmatter: single-line scalars (symmetric quotes
  * stripped) and block scalars — folded > / >- (trimmed consecutive indented
  * lines joined by spaces) and literal | / |- (common indent removed, lines
  * joined by newlines); lines not matching the key pattern (comments, blanks)

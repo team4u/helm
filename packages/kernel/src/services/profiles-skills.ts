@@ -10,9 +10,12 @@ import { dirname, join, relative, sep } from 'node:path'
 import {
   HelmxError,
   assertProfileId,
+  assertSkillId,
+  assertSafeSkillRelativePath,
   isJsonObject,
   isValidEnvName,
   isValidProfileId,
+  parseSkillFrontmatter,
   type Profile,
   type ProfileChangedEvent,
   type ProfileStarterPrompt,
@@ -33,6 +36,10 @@ import {
   readTextFile,
 } from './atomic-file.js'
 import { withFileLock } from './file-lock.js'
+
+// Re-export the shared skill contract so the kernel services entry keeps exposing it
+// (existing in-repo consumers import from '../services/index.js').
+export { assertSkillId, assertSafeSkillRelativePath, parseSkillFrontmatter } from '@helmx/protocol'
 
 export const DEFAULT_PROFILE_ID = 'assistant'
 const DEFAULT_PROFILE_NAME = 'person assist'
@@ -393,18 +400,13 @@ export class ProfileService {
 // SkillService
 // ---------------------------------------------------------------------------
 
-const SKILL_NAME_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/
+// Skill id / in-bundle path / frontmatter validity rules are the cross-package contract in
+// @helmx/protocol skill-contract.ts (single source of truth, shared with @helmx/plugins node skills).
 
 /** Real-path containment check: child === parent or child sits underneath parent (both must already be realpathed). */
 function isWithin(child: string, parent: string): boolean {
   if (child === parent) return true
   return child.startsWith(parent + sep)
-}
-
-export function assertSkillId(id: string): void {
-  if (!SKILL_NAME_PATTERN.test(id)) {
-    throw new Error(`illegal skill id: ${id}`)
-  }
 }
 
 /** Built-in plugin bootstrapped skill bundle asset: SKILL.md + references files. */
@@ -414,27 +416,10 @@ export interface BuiltinSkillAsset {
   references: Record<string, string>
 }
 
-/**
- * Validate a relative path inside a skill bundle: forbids absolute paths, `..` segments, backslashes, control characters, and empty segments.
- * Allows nested relative paths like `SKILL.md` and `references/...`.
- */
-function assertSafeRelativePath(input: string): string {
-  if (input.includes('\\')) throw new Error(`illegal path (backslash): ${input}`)
-  if (input.includes('\0')) throw new Error('illegal path (contains NUL)')
-  if (input === '' || input === '.') throw new Error('path cannot be empty')
-  if (input.startsWith('/')) throw new Error(`forbidden absolute path: ${input}`)
-  for (const seg of input.split('/')) {
-    if (seg === '' || seg === '.') throw new Error(`illegal path segment: ${input}`)
-    if (seg === '..') throw new Error(`forbidden path traversal: ${input}`)
-    if (/[\s\/?#]/.test(seg)) throw new Error(`illegal path segment: ${input}`)
-  }
-  return input
-}
-
 /** Recursively collect relative paths of regular files in a skill bundle. Skips hidden files/dirs starting with `.`
  * (.git/.gitignore, etc.), dependency/build artifact dirs (node_modules/__pycache__/dist, which would bloat the catalog
  * on engineering-style skill bundles), and symlinks (closing escape vectors).
- * Only collects paths passing assertSafeRelativePath—sharing the exact same validity contract with load_skill
+ * Only collects paths passing assertSafeSkillRelativePath—sharing the exact same validity contract with load_skill
  * so every listed reference is guaranteed readable (paths with spaces/?/# are omitted for consistency). */
 async function collectFiles(root: string, rel = ''): Promise<string[]> {
   const dir = rel === '' ? root : join(root, rel)
@@ -454,7 +439,7 @@ async function collectFiles(root: string, rel = ''): Promise<string[]> {
       out.push(...(await collectFiles(root, relPath)))
     } else if (entry.isFile() && entry.name !== 'SKILL.md') {
       try {
-        out.push(assertSafeRelativePath(relPath))
+        out.push(assertSafeSkillRelativePath(relPath))
       } catch {
         // Invalid relative paths (spaces / special chars) cannot be read via load_skill; exclude from catalog.
       }
@@ -570,7 +555,7 @@ export class SkillService {
    * (3) per-segment lstat rejecting symlinks and verifying target realpath stays inside skillDir. */
   async readFile(skillId: string, path = 'SKILL.md'): Promise<string> {
     assertSkillId(skillId)
-    const rel = assertSafeRelativePath(path)
+    const rel = assertSafeSkillRelativePath(path)
     for (const skillsRoot of await this.resolveReadableRoots()) {
       const content = await this.readFileInRoot(skillsRoot, skillId, rel)
       if (content !== undefined) return content
@@ -645,7 +630,7 @@ export class SkillService {
   async writeFile(skillId: string, path: string, content: string): Promise<void> {
     assertSkillId(skillId)
     this.assertSkillMutable(skillId)
-    const rel = assertSafeRelativePath(path)
+    const rel = assertSafeSkillRelativePath(path)
     const skillsRoot = await this.requireSkillsRoot()
     const root = join(skillsRoot, skillId)
     const rootReal = await realpath(root).catch(() => undefined)
@@ -684,7 +669,7 @@ export class SkillService {
     assertSkillId(asset.id)
     // Validate boundary up front: reject any invalid reference before creating directories or writing files.
     const references = Object.entries(asset.references).map(([name, content]) => ({
-      rel: assertSafeRelativePath(`references/${name}`),
+      rel: assertSafeSkillRelativePath(`references/${name}`),
       content,
     }))
     const skillsRoot = join(this.dataDir, 'skills')
@@ -902,73 +887,3 @@ async function removeRetiredManagedSkillDirs(
   }
 }
 
-/** Strip symmetric leading/trailing single or double quotes from a YAML single-line scalar (unescaping \" and \\
- * in double quotes and '' in single quotes; asymmetric quotes are kept verbatim without guessing). */
-function stripQuotedScalar(value: string): string {
-  if (value.length < 2) return value
-  const first = value[0]
-  const last = value[value.length - 1]
-  if ((first !== '"' || last !== '"') && (first !== "'" || last !== "'")) return value
-  const inner = value.slice(1, -1)
-  if (first === '"') return inner.replace(/\\"/g, '"').replace(/\\\\/g, '\\')
-  return inner.replace(/''/g, "'")
-}
-
-/** Parse top YAML frontmatter name/description/managedByPlugin from SKILL.md (defaults to id/empty when omitted).
- * Only accepts the current field name managedByPlugin (no legacy aliases); a present key with an empty value is invalid
- * and throws explicitly rather than fabricating ownerless data (honest failure, no silent fallback).
- * Supports the minimal YAML subset used by pi ecosystem shared skills (~/.agents/skills): single-line scalars
- * (stripping symmetric outer quotes) and block scalars—folded > / >- (trims consecutive indented lines and joins
- * with spaces for long single-line descriptions) and literal | / |- (strips common indent and joins with newlines);
- * advanced YAML syntax (anchors/lists/nesting, etc.) is unsupported. */
-export function parseSkillFrontmatter(text: string): {
-  name: string
-  description: string
-  managedByPlugin?: string
-} {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text)
-  if (match === null) return { name: '', description: '' }
-  const body = match[1] ?? ''
-  const fields = new Map<string, string>()
-  const lines = body.split(/\r?\n/)
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!
-    const m = /^([A-Za-z_][A-Za-z0-9_-]*):\s*(.*)$/.exec(line)
-    if (m === null || m[1] === undefined) continue
-    const key = m[1]
-    const inline = (m[2] ?? '').trim()
-    // Block scalar: > / >- / | / |- spans consecutive indented lines until a line indented less than the first non-empty line.
-    if (inline === '>' || inline === '>-' || inline === '|' || inline === '|-') {
-      const block: string[] = []
-      let indent = -1
-      for (let j = i + 1; j < lines.length; j++) {
-        const raw = lines[j]!
-        if (raw.trim() === '') {
-          block.push('')
-          continue
-        }
-        const leading = raw.length - raw.trimStart().length
-        if (indent === -1) indent = leading
-        if (leading < indent) break
-        block.push(raw.slice(indent))
-        i = j
-      }
-      while (block.length > 0 && block[block.length - 1] === '') block.pop()
-      const value = inline.startsWith('>')
-        ? block.map((l) => l.trim()).filter((l) => l !== '').join(' ')
-        : block.join('\n')
-      fields.set(key, value.trim())
-      continue
-    }
-    fields.set(key, stripQuotedScalar(inline))
-  }
-  const managedRaw = fields.get('managedByPlugin')
-  if (managedRaw !== undefined && managedRaw === '') {
-    throw new Error(`SKILL.md frontmatter managedByPlugin value is empty (when present, it must be a non-empty plugin ID)`)
-  }
-  return {
-    name: fields.get('name') ?? '',
-    description: fields.get('description') ?? '',
-    ...(managedRaw !== undefined ? { managedByPlugin: managedRaw } : {}),
-  }
-}
