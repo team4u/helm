@@ -249,6 +249,47 @@ export function parseTaskBoardDoc(raw: unknown): TaskBoardDoc | undefined {
 }
 
 // ---------------------------------------------------------------------------
+// Overview card meta lookup (OVERVIEW_CARD_META_SLOT contribution)
+// ---------------------------------------------------------------------------
+
+/** Rank within the same match bucket: non-archived wins, then newer updatedAt, then id (deterministic). */
+function preferOverviewTask(candidate: TaskRecord, current: TaskRecord | undefined): boolean {
+  if (current === undefined) return true
+  const candidateArchived = candidate.archived === true
+  const currentArchived = current.archived === true
+  if (candidateArchived !== currentArchived) return !candidateArchived
+  if (candidate.updatedAt !== current.updatedAt) return candidate.updatedAt > current.updatedAt
+  return candidate.id > current.id
+}
+
+/**
+ * Pure lookup for the read-only overview card pill: find the task bound to a
+ * conversation tree. Priority: exact root-conversation match first, then any
+ * tree member (sub-sessions); within a bucket non-archived records win over
+ * archived history, newest updatedAt over older. No match returns undefined
+ * (the pill renders nothing — zero visual residue).
+ */
+export function findTaskForOverviewCard(
+  tasks: readonly TaskRecord[],
+  rootConversationId: number | undefined,
+  memberIds: ReadonlyArray<number> | undefined,
+): TaskRecord | undefined {
+  const memberSet = memberIds === undefined ? undefined : new Set(memberIds)
+  let rootHit: TaskRecord | undefined
+  let memberHit: TaskRecord | undefined
+  for (const task of tasks) {
+    const conversationId = task.conversationId
+    if (conversationId === undefined) continue
+    if (conversationId === rootConversationId) {
+      if (preferOverviewTask(task, rootHit)) rootHit = task
+    } else if (memberSet !== undefined && memberSet.has(conversationId)) {
+      if (preferOverviewTask(task, memberHit)) memberHit = task
+    }
+  }
+  return rootHit ?? memberHit
+}
+
+// ---------------------------------------------------------------------------
 // Conversation subtree walk (cycle-defended, depth-capped)
 // ---------------------------------------------------------------------------
 

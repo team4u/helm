@@ -86,6 +86,18 @@
   white-space: nowrap;
 }
 
+/* 卡片元信息只读插槽（OVERVIEW_CARD_META_SLOT）：胶囊行布局；
+ * 无贡献时组件渲染 null 零占位，空容器也归零（防多余 gap）。 */
+.overview-card-meta-slot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.overview-card-meta-slot:empty {
+  display: none;
+}
+
 .overview-card-node {
   font-size: 11px;
   color: var(--fg-muted);

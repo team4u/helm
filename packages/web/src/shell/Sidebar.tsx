@@ -40,7 +40,7 @@ import {
 import type { ConversationBackgroundActivity, ConversationBackgroundIndex } from './background-activity-model.js'
 import { AgentStandingsGroup } from './SidebarAgentStandings.js'
 import { ArchivedConversationsGroup } from './SidebarArchivedConversations.js'
-import { SidebarAttentionGroup } from './SidebarAttentionGroup.js'
+import { SidebarOverviewEntry } from './SidebarOverviewEntry.js'
 import { useGlobalAttention } from './use-attention-indicator.js'
 import { useSidebarBadges } from './use-sidebar-badges.js'
 import { composeAttentionSummary, type GlobalAttentionIndicator } from './attention-model.js'
@@ -583,10 +583,10 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
   // 该空间最近的主舞台目标，URL 即该空间真实锚点，刷新/前进/后退天然可还原。
   const space = spaceForTarget(primaryTarget)
 
-  // 全局并发态势（对话空间平铺条目 + Rail/移动端快捷导航的总览灯点 + 后台在途
+  // 全局并发态势（总览入口脉冲灯点 + Rail/移动端快捷导航的总览灯点 + 后台在途
   // 索引）：badge doc 的按需加载内聚在 Hook（ensurePluginDoc 幂等，移动端合着
   // 抽屉也不漏后台任务）。插件停用后其 UI 贡献与 doc 均从 store 消失，态势自然归零。
-  const { items: attentionItems, indicator: attentionIndicator, background } = useGlobalAttention()
+  const { indicator: attentionIndicator, background } = useGlobalAttention()
 
   // 插件全局快捷入口（sidebar.item quickEntry，最薄通用声明）：仅收当前启用
   // 插件确实注册了的 screen（插件停用后贡献即时消失，入口零残留）；点击走标准
@@ -702,12 +702,12 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
         </div>
 
         <div className="sidebar-scroll">
-          {/* 态势平铺区仅挂对话空间（会话界面的侧栏）；其他空间保持各自的
-              视图/设置列表，全局态势经总览入口的 tone 灯点感知。 */}
+          {/* 会话总览脉冲入口仅挂对话空间（会话界面的侧栏）；其他空间保持
+              各自的视图/设置列表，全局态势经总览入口的 tone 灯点感知。 */}
           {space === 'conversations' ? (
             <>
               <PendingAsksPanel store={sidebarStore} />
-              <SidebarAttentionGroup items={attentionItems} store={sidebarStore} onNavigate={onClose} />
+              <SidebarOverviewEntry store={sidebarStore} indicator={attentionIndicator} onNavigate={onClose} />
               <AgentStandingsGroup store={sidebarStore} background={background} onNavigate={onClose} />
               <SidebarSectionGroups store={sidebarStore} background={background} />
               <ArchivedConversationsGroup background={background} onNavigate={onClose} />

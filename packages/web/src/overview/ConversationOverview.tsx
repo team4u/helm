@@ -4,8 +4,12 @@
  * - 复用态势模型的唯一树聚合口径：一张卡片 = 一棵根会话树（含安静树），
  *   卡面只呈现真实事实（代表位灯、lastError / doing / 后台摘要 / 后代运行
  *   计数），绝不编造进度；
- * - 筛选：全部 / 需处理 / 进行中 / 未读（SegmentedControl）+ 角色 / 节点
- *  （SDK Select）；排序桶序 + createdAt 倒序，流式输出不跳卡；
+ * - 筛选：全部 / 需处理 / 进行中 / 未读（SegmentedControl）+ 角色 / 节点 /
+ *   来源（SDK Select，来源 = 常规对话 vs 托管会话，托管判定与侧栏
+ *   sidebarSection filterTag 同源，零插件 ID 特判）；排序桶序 + createdAt
+ *   倒序，流式输出不跳卡；
+ * - 卡片元信息区挂 OVERVIEW_CARD_META_SLOT 只读插槽（插件贡献跳转胶囊等，
+ *   插槽内可点元素自行 stopPropagation，不误触卡片直达；无贡献零占位）；
  * - 打开真实会话：卡面点击直达 targetConversationId（树内有等待人类的会话
  *   时直达最新审批现场），后代会话芯片逐个直达——统一复用既有会话抽屉
  *   （conversation-drawer 模态，进 URL、浏览器返回即收起），人在总览不离场；
@@ -15,10 +19,12 @@
  */
 import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
-import { HelmxIcon, SegmentedControl, Select } from '@helmx/plugin-client'
+import { HelmxIcon, PluginSlot, SegmentedControl, Select } from '@helmx/plugin-client'
+import { OVERVIEW_CARD_META_SLOT } from '@helmx/protocol/browser'
 import {
   useAuthConnection,
   useConversations,
+  useGroupedUi,
   useLocationTargets,
   usePlugins,
   useProfilesSlice,
@@ -27,6 +33,7 @@ import {
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { CloseSplitButton, SplitToggleButton } from '../ui/SplitControls.js'
 import { ConversationStatusDot } from '../shell/SidebarPrimitives.js'
+import { partitionSidebarUi } from '../shell/sidebar-model.js'
 import { useGlobalAttention } from '../shell/use-attention-indicator.js'
 import {
   buildOverviewCards,
@@ -35,6 +42,7 @@ import {
   overviewProfileOptions,
   type OverviewBucketFilter,
   type OverviewCard,
+  type OverviewSourceFilter,
 } from './overview-model.js'
 
 export interface ConversationOverviewProps {
@@ -43,6 +51,7 @@ export interface ConversationOverviewProps {
 }
 
 type BucketFilterValue = OverviewBucketFilter
+type SourceFilterValue = OverviewSourceFilter
 
 /** 单卡：根会话树聚合卡（只读）；卡面直达 target，芯片逐后代直达。 */
 function OverviewCardView({
@@ -77,6 +86,15 @@ function OverviewCardView({
         <span className="overview-card-id tabular-nums">#{card.root.id}</span>
       </div>
       {subParts.length > 0 && <div className="overview-card-sub">{subParts.join(' · ')}</div>}
+      {/* 卡片元信息只读插槽：外层不拦截冒泡（空白处点击仍直达卡片目标），
+          插件可点元素自行 stopPropagation；无贡献时 PluginSlot 渲染 null 零占位。 */}
+      <PluginSlot
+        ownerPluginId="builtin:overview"
+        name={OVERVIEW_CARD_META_SLOT}
+        conversationId={card.root.id}
+        slotProps={{ rootConversation: card.root, memberIds: card.memberIds }}
+        className="overview-card-meta-slot"
+      />
       {card.root.nodeId !== undefined && card.root.nodeId !== 'local' && (
         <div className="overview-card-node mono" title={t('shell.node.title', { id: card.root.nodeId })}>
           @{card.root.nodeId}
@@ -122,6 +140,7 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   const { background, viewedConversationIds } = useGlobalAttention()
   const conversations = useConversations()
   const plugins = usePlugins()
+  const groupedUi = useGroupedUi()
   const { profiles } = useProfilesSlice()
   const { splitTarget } = useLocationTargets()
   const { sseConnected } = useAuthConnection()
@@ -129,18 +148,34 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
   const [bucketFilter, setBucketFilter] = useState<BucketFilterValue>('all')
   const [profileFilter, setProfileFilter] = useState('')
   const [nodeFilter, setNodeFilter] = useState('')
+  const [sourceFilter, setSourceFilter] = useState<SourceFilterValue>('all')
 
+  // 来源判定与侧栏同源（sidebarSection filterTag，零插件 ID 特判）：
+  // 插件停用后其 section 贡献消失，卡片自然回到「常规对话」一侧。
+  const sectionTags = useMemo(
+    () => partitionSidebarUi(groupedUi.sidebarItems, groupedUi.sidebarSections).sectionTags,
+    [groupedUi.sidebarItems, groupedUi.sidebarSections],
+  )
   const cards = useMemo(
-    () => buildOverviewCards({ conversations, background, profiles, plugins, t }),
-    [conversations, background, profiles, plugins, t],
+    () => buildOverviewCards({ conversations, background, profiles, plugins, t, sectionTags }),
+    [conversations, background, profiles, plugins, t, sectionTags],
   )
   const visibleCards = useMemo(
-    () => filterOverviewCards(cards, { bucket: bucketFilter, profileId: profileFilter, nodeId: nodeFilter }),
-    [cards, bucketFilter, profileFilter, nodeFilter],
+    () =>
+      filterOverviewCards(cards, {
+        bucket: bucketFilter,
+        profileId: profileFilter,
+        nodeId: nodeFilter,
+        source: sourceFilter,
+      }),
+    [cards, bucketFilter, profileFilter, nodeFilter, sourceFilter],
   )
   const dataReady = conversations.length > 0 || (assetsLoaded && sseConnected)
   const profileOptions = useMemo(() => overviewProfileOptions(cards), [cards])
   const nodeOptions = useMemo(() => overviewNodeOptions(cards), [cards])
+  // 来源筛选仅在存在托管卡片（或已选非 all，防困住）时展示：无托管会话时
+  // 不添无效控件，保持工具栏零噪音。
+  const showSourceFilter = sourceFilter !== 'all' || cards.some((card) => card.managed)
 
   const bucketCounts = useMemo(() => {
     const counts = { all: cards.length, needs_attention: 0, running: 0, unread_done: 0 }
@@ -223,6 +258,20 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
             value={nodeFilter}
             onChange={(event) => setNodeFilter(event.target.value)}
           />
+          {showSourceFilter && (
+            <Select
+              className="overview-filter-select"
+              size="sm"
+              aria-label={t('shell.overview.sourceFilterLabel')}
+              options={[
+                { value: 'all', label: t('shell.overview.sourceFilter') },
+                { value: 'regular', label: t('shell.overview.sourceRegular') },
+                { value: 'managed', label: t('shell.overview.sourceManaged') },
+              ]}
+              value={sourceFilter}
+              onChange={(event) => setSourceFilter(event.target.value as SourceFilterValue)}
+            />
+          )}
         </div>
       </div>
 

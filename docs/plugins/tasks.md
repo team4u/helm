@@ -136,7 +136,8 @@
 - `sidebarItem` `task-board`（`order: 5`，先于 App Center；`quickEntry: true` 随宿主快捷入口体系直达）：Rail 视图图标一步直达看板；注册处声明 `badge: TASK_BOARD_SIDEBAR_BADGE`（count=`attentionCount` / tone=`badgeTone` / dot=`hasRunning` / summary=`badgeSummary`），驱动活动 Rail 快捷入口、移动端 MobileQuickNav 与侧栏视图行的通用徽标渲染；
 - `screen` `board`：`TaskBoardScreen` 全屏看板（四列 + 移动端清零流，由前端切片实现）；
 - `sidebarSection` `task-conversations`（`filterTag: task` + `keptAliveTag: task-archived`）：任务执行会话单一收口分组（结单/归档成员换标签后仍留组沉底），默认折叠；
-- `toolView` `task-tool-card`：`task_create / task_start / task_submit / task_approve / task_rework` 的时间线活体回执卡。
+- `toolView` `task-tool-card`：`task_create / task_start / task_submit / task_approve / task_rework` 的时间线活体回执卡；
+- `slot` `overview-card-meta`（target `OVERVIEW_CARD_META_SLOT`，宿主会话总览卡片元数据区）：向任务执行会话的总览卡贡献一枚只读跳转胶囊（`TaskOverviewCardMeta`：任务号 + 列位标签 + 可选项目短标记，点击 `stopPropagation` 后深链 `screen:builtin:tasks/board?task=<id>` 定位看板抽屉）。`scope.tags` 为 `task` / `task-archived` 的 OR 匹配——仅任务执行会话卡片挂载，普通对话零开销零订阅；查无匹配任务返回 `null` 零视觉残留；审批/返工/开工/合并等重操作一律留在看板自身，胶囊坚持只读 + 跳转；插件停用后贡献即时消失。
 
 ## 生命周期与诚实边界
 
