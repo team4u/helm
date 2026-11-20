@@ -235,7 +235,8 @@ test('sidebar footer carries the changelog entry', { timeout: 60_000 }, async (t
     ) satisfies React.ReactElement as React.ReactElement,
   )
   t.after(mounted.unmount)
-  const footerItem = mounted.host.querySelector('.sidebar-footer-item') as HTMLElement | null
-  assert.ok(footerItem !== null, 'sidebar footer entry exists')
-  assert.match(footerItem.textContent ?? '', /版本与更新|Version & updates/)
+  const railButton = mounted.host.querySelector('.sidebar-changelog-toggle') as HTMLElement | null
+  assert.ok(railButton !== null, 'rail changelog entry exists below the theme toggle')
+  assert.match(railButton.getAttribute('title') ?? '', /版本与更新|Version & updates/)
+  assert.equal(mounted.host.querySelector('.sidebar-footer'), null, 'the bottom-row footer is gone')
 })

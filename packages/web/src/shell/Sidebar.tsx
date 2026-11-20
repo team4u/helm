@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import type { ConversationSummary } from '@helmx/protocol/browser'
 import { resolveLocalizedText } from '@helmx/protocol/browser'
 import { HelmxIcon } from '@helmx/plugin-client'
@@ -315,8 +315,28 @@ const SPACE_LABEL_KEYS: Record<
   settings: 'shell.space.settings',
 }
 
+/** 主题钮下方的常驻 changelog 入口（Activity Rail 底部，桌面与移动抽屉共用）。 */
+function RailChangelogButton(): ReactNode {
+  const { t } = useWebLocale()
+  const { setActiveModal } = useStoreActions()
+  const label = t('shell.hubChangelog.entry')
+  return (
+    <Tooltip content={label} side="right">
+      <button
+        type="button"
+        className="btn btn-ghost btn-sm sidebar-changelog-toggle"
+        title={label}
+        aria-label={label}
+        onClick={() => setActiveModal({ kind: 'hub-changelog' })}
+      >
+        <HelmxIcon name="file-text" size={16} />
+      </button>
+    </Tooltip>
+  )
+}
+
 /**
- * Activity Rail（48px）：仅空间切换（对话/视图/设置）+ 主题按钮。
+ * Activity Rail（48px）：仅空间切换（对话/视图/设置）+ 主题按钮与 changelog 入口。
  * 桌面与移动抽屉共用；空间按钮直接导航主舞台到对应空间的最近目标（store.openSpace），
  * 系统中心入口收敛到「设置」空间内的纵向列表。
  * 空间按钮本身不携带任何徽标：全局态势感知收敛到下方「会话总览」直达按钮的
@@ -461,6 +481,8 @@ function ActivityRail({
             />
           </button>
         </Tooltip>
+        {/* 已安装版本 changelog（随包分发的 CHANGELOG.md，离线可读）：主题钮下方的常驻入口 */}
+        <RailChangelogButton />
       </div>
     </nav>
   )
@@ -712,21 +734,6 @@ export function Sidebar({ onClose }: { onClose?: () => void } = {}) {
           ) : (
             <SettingsNavGroup store={sidebarStore} onNavigate={onClose} />
           )}
-        </div>
-
-        {/* 侧栏底部常驻入口：已安装版本 changelog（随包分发的 CHANGELOG.md，离线可读） */}
-        <div className="sidebar-footer">
-          <button
-            type="button"
-            className="sidebar-footer-item"
-            onClick={() => {
-              setActiveModal({ kind: 'hub-changelog' })
-              onClose?.()
-            }}
-          >
-            <HelmxIcon name="file-text" size={13} />
-            <span>{t('shell.hubChangelog.entry')}</span>
-          </button>
         </div>
       </div>
     </aside>
