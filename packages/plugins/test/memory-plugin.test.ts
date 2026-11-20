@@ -547,7 +547,12 @@ test('memory 动作清单：get/set/configure/dream/dream_status/dream_configure
     )
     // 缺省自动挂载：无 cli.command 覆写时按 [stripBuiltin(pluginId), actionId] = memory <action>
     for (const m of manifests) {
-      assert.equal(m.cli, undefined, 'memory 动作未覆写 cli（默认路径 memory <action>）')
+      if (m.id === 'dream') {
+        // dream 显式声明 cli.timeoutMs: 0（模型自身有 deadline，CLI 不加 30s 上限）；无 command 覆写
+        assert.deepEqual(m.cli, { timeoutMs: 0 }, 'dream 仅覆写 timeoutMs（默认路径 memory dream）')
+      } else {
+        assert.equal(m.cli, undefined, '其余 memory 动作未覆写 cli（默认路径 memory <action>）')
+      }
       assert.ok(m.inputSchema.type === 'object')
       assert.ok(m.outputSchema.type === 'object')
       assert.ok(!(m.inputSchema as { required?: string[] }).required?.includes('profileId'), 'profileId 是可选的目标 selector')

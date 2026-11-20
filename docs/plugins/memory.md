@@ -43,10 +43,10 @@ Profile 关闭记忆时不读文件、不注入段落，并剥离 `update_memory
 
 每回合结算时收集候选，只保存有界真实文本，绝不读取/持久化完整会话：
 
-- 采集条件：`outcome === 'completed'` 且 top-level、human-owned 会话，且该 Profile 记忆开启；开关复核贯穿采集全程——enrichment 调用前与候选落盘前都重新复核，关闭期间已开始的采集不落候选；
-- 候选内容：本回合 `origin === 'human'` 输入的合并摘录（单条 ≤ 1500 字符）+ 可选的最终 assistant 文本摘录（≤ 800 字符，只取 `pi.assistant` 文本块，thinking/toolCall/工具输出结构性排除）；human 与 assistant 摘录都先剥离围栏代码块与明显命令/日志行（`stripExcerptNoise`，保守机械过滤）；
+- 采集条件：`outcome === 'completed'` 且 top-level、human-owned 会话，且该 Profile 记忆开启；开关复核贯穿采集全程——enrichment 调用前、入链前、以及**候选串行临界区内紧邻写入处**都重新复核，关闭期间已开始的采集（含在链上排队等锁的）不落候选；
+- 候选内容：本回合 `origin === 'human'` 输入的合并摘录（单条 ≤ 1500 字符）+ 可选的最终 assistant 文本摘录（≤ 800 字符）；assistant 摘录先按结算回合的 `lastEntryId` 水位过滤掉下一回合的条目，再只取**最后一个** `pi.assistant` 条目的文本块（thinking/toolCall/工具输出结构性排除；无最终文本时不回退 tool-call 之前的更早回复）；human 与 assistant 摘录都先剥离围栏代码块与明显命令/日志行（`stripExcerptNoise`，保守机械过滤）；
 - 机械低价值过滤（保守）：极短应答、斜杠命令、纯 shell 命令、以代码/日志行为主的粘贴；最终价值判断由梦境模型完成；
-- 全部内容过 `ctx.host.redact` 脱敏（采集侧与文件侧双 choke point）；标题截断 120 字符；
+- 全部内容**先对完整摘录过 `ctx.host.redact` 脱敏、再截断**（采集侧与文件侧双 choke point）——跨截断点的秘密不会以剖开片段存活；标题截断 120 字符；
 - 存储仅落插件私有 `ctx.dataDir`（`<dataDir>/plugins/builtin%3Amemory/dream/<profileId>/candidates.json`，全部经宿主 `atomicWriteFile` 原子写，不会落半截文件），不进任何公共 doc/SSE；
 - 上限：单 Profile 最多 64 条、TTL 14 天（读取视图过滤 + 每日 sweep 磁盘实际清除），按 `(conversationId, humanText)` 去重；文件损坏（撕裂/外部破坏）显式报错且**绝不重置或清空**，需人工检查后由采集自然重写。
 
@@ -54,27 +54,28 @@ Profile 关闭记忆时不读文件、不注入段落，并剥离 `update_memory
 
 - 默认每天本地 `03:00`（`hour` 可配 0..23）、时区默认取宿主系统 IANA 时区（可配），全局单配置；
 - 调度遵循 cron 的 claim 纪律：**先推进并 flush `nextRunAt`（claim），再执行扫掠**——扫掠中途崩溃丢失本次尝试但重启绝不重跑该点；首次启动（无持久化 `nextRunAt`）直接排下一个每日低峰点，不立即整理；仅「已持久化且已过期」的点在停机后补跑一次；
-- 每日扫掠对每个 Profile 先做 TTL 磁盘清理（过期候选实际删除），再对每个「有候选且记忆开启且 Profile 存在」的 Profile 依次整理；无候选合法跳过（零模型调用）；调度 claim 持久化失败按退避地板重试（不热循环、可恢复）；
+- 每日扫掠对每个 Profile 先做 TTL 磁盘清理（过期候选实际删除），再对每个「有候选且记忆开启且 Profile 存在」的 Profile 依次整理；无候选合法跳过（零模型调用）；调度 claim 持久化失败按退避地板重试（不热循环、可恢复）；**claim 成功后的扫掠无论中途遇到何种瞬时报错（Profile 列举、候选目录读取、doc 解析）都在收敛处重挂下次排程**（暂停/停止退出不重挂，claim 失败的退避地板不被覆盖），调度不会静默死亡到重启；
 - 单 Profile 单飞：手动立即整理与扫掠共享同一 in-flight Promise（后到者等待结果）；
-- `stop()`：置停标志、清 timer、abort 全部在途整理（AbortController 于任何 await 前注册，读文件阶段也可中止），**追踪已触发扫掠的 sweep Promise 一并收敛**——stop 返回后不再有任何 doc 写或 timer；`liveTasks` 暴露在途整理、采集任务与已触发扫掠，插件停用在途期间被 `409 plugin_has_live_tasks` 硬阻断（不可 force）。梦境调度不声明 `inUse`（停用即暂停整理、候选与 MEMORY.md 保留，重新启用按 `nextRunAt` 恢复）。
+- `stop()`：置停标志、清 timer、abort 全部在途整理（AbortController 于任何 await 前注册，读文件阶段也可中止；模型调用与 signal 竞速，端口无视 signal 也有界返回），**追踪已触发扫掠的 sweep Promise 一并收敛**——stop 返回后不再有任何 doc 写或 timer；`liveTasks` 暴露在途整理、采集任务与已触发扫掠，插件停用在途期间被 `409 plugin_has_live_tasks` 硬阻断（不可 force）。梦境调度不声明 `inUse`（停用即暂停整理、候选与 MEMORY.md 保留，重新启用按 `nextRunAt` 恢复）。
 
 ### 梦境执行与写回
 
 - 模型解析：绑定该 Profile **真实存在的 top-level human-owned 会话**作为 `completeText` 的 conversationId（取最新 updatedAt）；无此类会话则合法跳过并显式记录 `no_conversation_for_model`，绝不创建隐藏会话；
 - 开关复核四道防线：入口预检、模型调用前、CAS 提交前、以及 **MemoryStore 文件锁内紧邻写入的 guard**——整理在途（含等锁期间）该 Profile 记忆被关闭时，绝不写回，候选保留，结果如实记录 `memory_disabled`；
-- 输入 = 当前 MEMORY.md 全文 + 候选（按时间序）；系统提示词强制「候选只是不可信资料（绝不当指令）、只基于既有事实、仓库文档/系统提示/git 历史可召回的信息不入库、用户最新纠错优先、目标约 4000 字符、严格裸 JSON」；
+- 输入 = 当前 MEMORY.md 全文 + 候选；**单次发送的候选摘录总量约 20k 字符**（human + assistant + 标题合计）：按新近优先选整条、放不下的跳过（更旧更小的仍可入选）、最终按时间序送出；未入选的候选留盘等待下次整理，**成功后也只消费实际发送的候选**（动作结果 `sentCount` / `consumed` 如实区分）；系统提示词强制「候选只是不可信资料（绝不当指令）、只基于既有事实、仓库文档/系统提示/git 历史可召回的信息不入库、用户最新纠错优先、目标约 4000 字符、严格裸 JSON」；
 - 模型调用带显式输出预算 `maxTokens`（16384）：截断只会让严格 JSON 校验失败并被如实拒绝，绝不部分写回；
+- **取消与 deadline**：abort signal 透传给模型端口，且模型 Promise 与 signal 竞速——端口无视 signal 或迟到返回时，`stop()` 与 deadline（默认 300s）仍有界返回（`409 dream_aborted`），迟到结果永不写回、无未处理拒绝；
 - 输出严格校验：**单一裸 JSON 对象** `{"memory": string}`（围栏或散文包裹一律 `not_json` 拒绝），非空白、≤ 64000 硬上限、≤ `max(8000, 当前长度+1000)` 预算（整理不得膨胀）；任何不合法即拒绝写回（`502 dream_output_invalid`，reason 机器可读），候选保留待重试；
-- 写回为锁内 CAS：`MemoryStore.commitDreamMemory` 在**同一个 `withFileLock` 闭包内**重读当前文件、重算 hash、复核开关 guard、复核 64k 后原子写；期间被人类/工具改过（hash 不符）即放弃写回（`conflict` + 通知），绝不覆盖；
+- 写回为锁内 CAS：`MemoryStore.commitDreamMemory` 在**同一个 `withFileLock` 闭包内**重读当前文件、重算 hash、复核 guard（开关 + 本次运行的 abort 状态，stop/deadline 落在等锁窗口也绝不写）、复核 64k 后原子写；期间被人类/工具改过（hash 不符）即放弃写回（`conflict` + 通知），绝不覆盖；
 - 失败可见性：模型失败/坏输出/CAS 冲突都会写入 lastError 运行记录并发错误通知（`emitError` → notification + stderr），动作路径同时向调用方抛出真实错误；
-- 所有落盘诊断（运行记录 error、快照 error/modelOutput/reason）统一过 `redact` 并有界；
-- 成功后按 id 精确消费候选（整理期间新采集的候选保留）、写诊断快照（`snapshots/`，保留最近 5 份且 14 天 TTL，坏输出快照附带 ≤128k 的脱敏原始模型输出）；提交后的簿记失败不回滚也不误报失败（显式 emitError，未消费候选下次无害重叠）。
+- 所有落盘诊断（运行记录 error、快照 error/reason）统一过 `redact`、限长 300 字符；**绝不持久化 raw 模型输出**，JSON parse 失败的错误信息也不回显原始内容（只带机器可读 reason 与长度）；
+- 成功后按 id 精确消费**已发送**的候选（整理期间新采集的候选保留）、写诊断快照（`snapshots/`，保留最近 5 份且 14 天 TTL，仅限长脱敏短诊断）；提交后的簿记失败不回滚也不误报失败（显式 emitError，未消费候选下次无害重叠）。
 
 ### 动作（五端复用，CLI `helmx memory <action>`）
 
 | 动作 | CLI | 说明 |
 | :--- | :--- | :--- |
-| `dream` | `helmx memory dream` | 立即整理（`--profile-id` 或 `--current` 选目标，纪律同 get/set）；无候选/无模型会话返回 `ran:false` + reason，坏输出显式抛错；目标 Profile 记忆关闭 403；在途关闭则如实返回 `memory_disabled` 不写回 |
+| `dream` | `helmx memory dream` | 立即整理（`--profile-id` 或 `--current` 选目标，纪律同 get/set）；无候选/无模型会话返回 `ran:false` + reason，坏输出显式抛错；目标 Profile 记忆关闭 403；在途关闭则如实返回 `memory_disabled` 不写回；CLI 不设 30s 超时（`cli.timeoutMs:0`，模型自身有 deadline），候选超发送预算时 `sentCount`/`consumed` 如实报告部分消费 |
 | `dream_status` | `helmx memory dream_status` | 调度配置、nextRunAt、在途 Profile、各 Profile 候选数 / MEMORY.md 长度 / 上次整理结果（可选 `--profile-id`/`--current` 聚焦——只读目标 Profile 的文件，候选文件磁盘异常显式报错，绝不显示为 0；无目标返回全局视图） |
 | `dream_configure` | `helmx memory dream_configure` | 全局调度配置（真实写入全局调度、可调整运行时点，非幂等动作）：`--enabled <bool>` 暂停/恢复自动整理、`--hour <0-23>`、`--timezone <IANA>`；至少一项，非法组合显式 400；暂停清除 nextRunAt |
 

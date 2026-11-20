@@ -12,21 +12,31 @@
  * Honesty and safety invariants:
  * - candidates come only from settled turns' bounded real text: the human inputs of the turn plus
  *   an optional bounded final-assistant-text excerpt (tool outputs / thinking / code dumps are
- *   filtered); the full conversation is never read or persisted;
+ *   filtered; entries beyond the settled turn's lastEntryId and pre-tool-call replies never
+ *   stand in for a missing final text); the full conversation is never read or persisted;
  * - every persisted byte passes host redaction and is bounded per item, per profile count and
- *   TTL; candidates live only under the plugin-private dataDir, never in any public doc/SSE;
+ *   TTL; excerpts are redacted in full BEFORE truncation (a secret straddling the cap cannot
+ *   survive as a cut-open fragment); candidates live only under the plugin-private dataDir,
+ *   never in any public doc/SSE;
  * - the dream itself runs no conversation turn (completeText only), so it can never re-enter the
  *   turn_settled collector -- the dream cannot feed itself;
+ * - one dream call sends only whole candidates that fit the ~20k-chars send budget (newest-first
+ *   selection, chronological order) and consumes exactly the sent ones; the rest survive to the
+ *   next dream;
  * - model resolution binds completeText to a real existing top-level human-owned conversation of
  *   the very profile; with no such conversation the dream is a legal no-op with an explicit
  *   status reason (never a hidden conversation);
  * - model output is strictly validated (a single JSON object {"memory": string}, non-blank, within
  *   the hard 64k cap and the dream budget); anything else is rejected without writing back,
- *   keeping candidates and a diagnostic snapshot;
+ *   keeping candidates and a diagnostic snapshot (bounded redacted short text only -- raw model
+ *   output is never dumped, and parse errors never echo raw content);
+ * - the model call is raced against its abort signal: a port that ignores the signal or settles
+ *   late cannot hold stop() or the deadline open, and its late result is never written back;
  * - write-back is a CAS: MemoryStore.commitDreamMemory re-reads and re-hashes inside the same
  *   file lock; a concurrent human edit aborts the write (conflict), never clobbers; an optional
- *   guard re-checks the per-Profile memory switch inside that lock, adjacent to the write, so a
- *   switch flipped mid-run (even while waiting for the lock) never receives a write-back;
+ *   guard re-checks the per-Profile memory switch AND the run's abort state inside that lock,
+ *   adjacent to the write, so a switch flipped mid-run or a stop landing while the commit waits
+ *   for the lock never receives a write-back;
  * - scheduling follows the cron claim discipline: the daily sweep first advances + flushes the
  *   persisted nextRunAt (claim) and only then runs, so a crash mid-sweep never re-runs the point;
  *   a fresh install schedules the next daily slot (no immediate dream); only a persisted
@@ -93,8 +103,12 @@ export const CANDIDATE_TTL_MS = 14 * 24 * 3600 * 1_000
 export const MAX_DREAM_SNAPSHOTS = 5
 export const DREAM_SNAPSHOT_TTL_MS = 14 * 24 * 3600 * 1_000
 
-/** Raw model output kept in a rejected-dream diagnostic snapshot. */
-export const MAX_SNAPSHOT_MODEL_OUTPUT_CHARS = 128_000
+/**
+ * Per-call send budget for candidate excerpts (human + assistant + title chars, whole entries).
+ * One dream sends at most about this much candidate material; candidates beyond the budget stay
+ * on disk for the next dream (newest-first selection keeps the freshest signal in every call).
+ */
+export const DREAM_CANDIDATE_SEND_BUDGET_CHARS = 20_000
 
 /** Default daily hour (low-peak) when no explicit config exists. */
 export const DEFAULT_DREAM_HOUR = 3
@@ -166,7 +180,9 @@ export interface DreamRunSummary {
   candidateCount: number
   beforeChars?: number
   afterChars?: number
-  /** Candidates folded into memory (equals candidateCount on success). */
+  /** Candidate excerpts actually sent to the model (whole entries within the send budget). */
+  sentCount?: number
+  /** Candidates folded into memory (equals sentCount on success). */
   consumed?: number
 }
 
@@ -175,6 +191,7 @@ export interface DreamSnapshot {
   ranAt: number
   profileId: string
   candidateCount: number
+  /** The candidates actually sent in this attempt (within the send budget). */
   candidateIds: string[]
   beforeChars: number
   afterChars?: number
@@ -183,8 +200,6 @@ export interface DreamSnapshot {
   conflict?: boolean
   reason?: string
   error?: string
-  /** Raw model output, kept only for rejected dreams (bounded). */
-  modelOutput?: string
 }
 
 /** The MemoryStore surface the dream engine consumes (kept structural for tests). */
@@ -337,13 +352,21 @@ export function nextDailyRunAt(hour: number, timezone: string, afterMs: number):
 }
 
 /**
- * Extract the bounded final assistant text of a settled turn from the newest page of visible
- * entries: only `pi.assistant` entries' text blocks are used; thinking / toolCall blocks and all
- * other kinds (tool results, user echo, bookkeeping) are structurally dropped. The joined text is
- * additionally stripped of fenced code blocks and obvious command/log lines before the cap —
- * an assistant reply quoting tool output or code must never persist that noise as dream material.
+ * Extract the final assistant text of a settled turn from the newest page of visible entries:
+ * only `pi.assistant` entries' text blocks are used; thinking / toolCall blocks and all other
+ * kinds (tool results, user echo, bookkeeping) are structurally dropped. The joined text is
+ * additionally stripped of fenced code blocks and obvious command/log lines — an assistant reply
+ * quoting tool output or code must never persist that noise as dream material.
+ *
+ * Semantics: the LAST `pi.assistant` entry of the (caller-filtered) page is the turn's final
+ * reply and the only one considered — there is no backward fallback to an earlier assistant
+ * message, so a missing final text (e.g. the turn ended on a tool-call-only entry) yields
+ * undefined instead of standing in a pre-tool-call reply. The text is returned UNBOUNDED and
+ * UNREDACTED: bounding and redaction belong to the collector, in that order (redact the full
+ * excerpt first, truncate after — a secret straddling the truncation point must never survive
+ * as a cut-open fragment).
  */
-export function extractFinalAssistantText(entries: ConversationEntry[], cap: number): string | undefined {
+export function extractFinalAssistantText(entries: ConversationEntry[]): string | undefined {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i]
     if (entry === null || entry === undefined || entry.kind !== 'pi.assistant' || !Array.isArray(entry.model)) continue
@@ -354,10 +377,19 @@ export function extractFinalAssistantText(entries: ConversationEntry[], cap: num
       .map((block) => block.text)
       .join('\n')
     const stripped = stripExcerptNoise(text)
-    if (stripped === '') continue
-    return stripped.length > cap ? `${stripped.slice(0, cap)}…[truncated]` : stripped
+    return stripped === '' ? undefined : stripped
   }
   return undefined
+}
+
+/** Entries of the settled turn only: drop anything newer than the payload's lastEntryId watermark. */
+export function entriesUpToSettledTurn(entries: ConversationEntry[], lastEntryId: number | undefined): ConversationEntry[] {
+  if (lastEntryId === undefined) return entries
+  return entries.filter((entry) => {
+    const id = Number(entry?.id)
+    // Non-numeric ids carry no ordering information; they pass through (extraction stays strict).
+    return Number.isNaN(id) || id <= lastEntryId
+  })
 }
 
 const CODE_LINE_PATTERN =
@@ -448,6 +480,37 @@ export function buildDreamUserText(memory: string, candidates: DreamCandidate[])
   return lines.join('\n')
 }
 
+/** Excerpt material one candidate contributes to a dream call (title + human + assistant). */
+export function candidatePayloadChars(candidate: DreamCandidate): number {
+  return candidate.humanText.length + (candidate.assistantText?.length ?? 0) + candidate.conversationTitle.length
+}
+
+/**
+ * Select the candidates one dream sends: whole entries, newest first, until the per-call send
+ * budget (~20k excerpt chars) is exhausted; a too-large entry is skipped (older smaller ones may
+ * still fit), and the first/newest candidate is always taken so a dream never stalls. The result
+ * is chronological (oldest first, file order preserved among equal timestamps) for the prompt.
+ * Candidates beyond the budget are simply not sent — the caller consumes only the sent ones, so
+ * the leftovers survive to the next dream.
+ */
+export function selectCandidatesForDream(candidates: DreamCandidate[], budgetChars: number): DreamCandidate[] {
+  if (candidates.length === 0) return []
+  const rank = new Map(candidates.map((candidate, index) => [candidate, index] as const))
+  const byNewest = [...candidates].sort(
+    (a, b) => b.collectedAt - a.collectedAt || (rank.get(a) ?? 0) - (rank.get(b) ?? 0),
+  )
+  const chosen: DreamCandidate[] = []
+  let remaining = budgetChars
+  for (const candidate of byNewest) {
+    const size = candidatePayloadChars(candidate)
+    if (chosen.length > 0 && size > remaining) continue
+    chosen.push(candidate)
+    remaining -= size
+    if (remaining <= 0) break
+  }
+  return chosen.sort((a, b) => a.collectedAt - b.collectedAt || (rank.get(a) ?? 0) - (rank.get(b) ?? 0))
+}
+
 export type DreamOutputRejectionReason = 'not_json' | 'shape' | 'blank' | 'over_cap' | 'over_budget'
 
 /**
@@ -462,12 +525,12 @@ export function parseDreamModelOutput(raw: string, budget: number): { memory: st
   let parsed: unknown
   try {
     parsed = JSON.parse(text)
-  } catch (err) {
+  } catch {
+    // No JSON.parse message here: it embeds a verbatim snippet of the raw output. Only the
+    // machine-readable reason and the output length enter the diagnostic.
     throw dreamOutputError(
       'not_json',
-      `model output is not a single raw JSON object (fenced or wrapped replies are rejected): ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+      `model output is not a single raw JSON object (fenced or wrapped replies are rejected): ${text.length} chars do not parse as JSON`,
     )
   }
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
@@ -700,19 +763,12 @@ export class DreamFiles {
     await mkdir(dir, { recursive: true })
     const name = `${snapshot.ranAt}-${randomUUID().slice(0, 8)}.json`
     // Redaction choke point: every diagnostic byte lands on disk only after `redact` (idempotent
-    // with the collector-side redaction) and bounded per field.
+    // with the collector-side redaction) and bounded per field. Diagnostics carry bounded
+    // redacted short text only — raw model output is never dumped to disk.
     const bounded: DreamSnapshot = {
       ...snapshot,
       ...(snapshot.error !== undefined ? { error: this.redact(snapshot.error).slice(0, 300) } : {}),
       ...(snapshot.reason !== undefined ? { reason: this.redact(snapshot.reason).slice(0, 300) } : {}),
-      ...(snapshot.modelOutput !== undefined
-        ? {
-            modelOutput:
-              snapshot.modelOutput.length > MAX_SNAPSHOT_MODEL_OUTPUT_CHARS
-                ? `${this.redact(snapshot.modelOutput.slice(0, MAX_SNAPSHOT_MODEL_OUTPUT_CHARS))}…[truncated]`
-                : this.redact(snapshot.modelOutput),
-          }
-        : {}),
     }
     await this.atomicWrite(join(dir, name), JSON.stringify(bounded))
     try {
@@ -868,39 +924,48 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
    */
   const sweep = async (): Promise<void> => {
     if (stopping) return
+    let claimed = false
     try {
-      if (!(await claimNextDaily())) return
-    } catch (err) {
-      // A claim persistence failure must not hot-loop on the expired point: retry after a floor.
-      ports.emitError('memory dream schedule claim failed; retrying later', err)
-      scheduleNext(clock.now() + CLAIM_RETRY_FLOOR_MS)
-      return
-    }
-    const profileIds = await files.profileIds()
-    const existing = new Set((await ports.profiles.list()).map((p) => p.id))
-    for (const profileId of profileIds) {
-      if (stopping) return
-      // Disk-level TTL housekeeping (candidates actually leave the file, not just the read view).
       try {
-        await serialized(profileId, async () => {
-          await files.pruneExpired(profileId, clock.now())
-        })
+        claimed = await claimNextDaily()
       } catch (err) {
-        ports.emitError(`memory dream candidate pruning of profile '${profileId}' failed`, err)
+        // A claim persistence failure must not hot-loop on the expired point: retry after a floor.
+        ports.emitError('memory dream schedule claim failed; retrying later', err)
+        scheduleNext(clock.now() + CLAIM_RETRY_FLOOR_MS)
+        return
       }
-      if (stopping) return
-      // A pause landing mid-sweep stops the loop: no further profile dream is started (the
-      // already-claimed point stays claimed; housekeeping resumes at the next enabled sweep).
-      if (!readDoc().config.enabled) return
-      if (!existing.has(profileId) || !ports.isMemoryEnabled(profileId)) continue
-      try {
-        await dreamFor(profileId)
-      } catch (err) {
-        // Per-profile failures are recorded inside runDream; only truly unexpected escapees land here.
-        ports.emitError(`memory dream of profile '${profileId}' failed unexpectedly`, err)
+      if (!claimed) return
+      const profileIds = await files.profileIds()
+      const existing = new Set((await ports.profiles.list()).map((p) => p.id))
+      for (const profileId of profileIds) {
+        if (stopping) return
+        // Disk-level TTL housekeeping (candidates actually leave the file, not just the read view).
+        try {
+          await serialized(profileId, async () => {
+            await files.pruneExpired(profileId, clock.now())
+          })
+        } catch (err) {
+          ports.emitError(`memory dream candidate pruning of profile '${profileId}' failed`, err)
+        }
+        if (stopping) return
+        // A pause landing mid-sweep stops the loop: no further profile dream is started (the
+        // already-claimed point stays claimed; housekeeping resumes at the next enabled sweep).
+        if (!readDoc().config.enabled) return
+        if (!existing.has(profileId) || !ports.isMemoryEnabled(profileId)) continue
+        try {
+          await dreamFor(profileId)
+        } catch (err) {
+          // Per-profile failures are recorded inside runDream; only truly unexpected escapees land here.
+          ports.emitError(`memory dream of profile '${profileId}' failed unexpectedly`, err)
+        }
       }
+    } finally {
+      // A claimed sweep always converges to the next schedule: a transient error AFTER the claim
+      // (profile listing, candidate-dir read, doc parse) must not leave the daily timer dead until
+      // a restart. Paused/stopped exits stay timer-free (scheduleNext re-checks both); the
+      // claim-flush failure path above keeps its retry floor and is not overridden here.
+      if (claimed) scheduleNext()
     }
-    scheduleNext()
   }
 
   /** Bind completeText to a real existing top-level human-owned conversation of this profile. */
@@ -956,21 +1021,24 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
       }
       throw err
     }
-    controller.signal.throwIfAborted()
+    throwIfDreamAborted(controller.signal)
 
-    // 2) Candidates (TTL-pruned view); zero candidates = legal skip, no model call.
+    // 2) Candidates (TTL-pruned view); zero candidates = legal skip, no model call. One call sends
+    //    only what fits in the send budget: whole entries, newest first, chronological order; the
+    //    rest stay on disk for the next dream (and are NOT consumed by this one).
     const candidates = await files.listCandidates(profileId, now)
+    if (candidates.length === 0) {
+      await recordRun(profileId, { lastRunAt: now, ran: false, reason: 'no_candidates', beforeChars: memory.content.length })
+      return { profileId, ran: false, reason: 'no_candidates', candidateCount: 0, beforeChars: memory.content.length }
+    }
+    const sent = selectCandidatesForDream(candidates, DREAM_CANDIDATE_SEND_BUDGET_CHARS)
     const snapshotBase: DreamSnapshot = {
       ranAt: now,
       profileId,
       candidateCount: candidates.length,
-      candidateIds: candidates.map((c) => c.id),
+      candidateIds: sent.map((c) => c.id),
       beforeChars: memory.content.length,
       sourceHash: memory.hash,
-    }
-    if (candidates.length === 0) {
-      await recordRun(profileId, { lastRunAt: now, ran: false, reason: 'no_candidates', beforeChars: memory.content.length })
-      return { profileId, ran: false, reason: 'no_candidates', candidateCount: 0, beforeChars: memory.content.length }
     }
 
     // 2.5) Switch re-check before spending a model call on a since-disabled profile.
@@ -1012,21 +1080,27 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
       }
     }
 
-    // 4) Consolidation call (single-shot, no conversation turn; stop aborts; bounded deadline and
-    //    explicit output budget: a truncated reply fails the strict JSON contract honestly).
-    controller.signal.throwIfAborted()
+    // 4) Consolidation call (single-shot, no conversation turn; stop/deadline aborts; bounded
+    //    deadline and explicit output budget: a truncated reply fails the strict JSON contract
+    //    honestly). The call is raced against the abort signal: even a port that ignores the
+    //    signal cannot hold stop() or the deadline open, and its late result is dropped — never
+    //    written back.
+    throwIfDreamAborted(controller.signal)
     const deadline = setTimeout(() => controller.abort(), modelTimeoutMs)
     deadline.unref?.()
     let raw = ''
     let failure: HelmxError | undefined
     try {
-      raw = await ports.completeText({
-        conversationId: modelConversation.id,
-        systemPrompt: DREAM_SYSTEM_PROMPT,
-        text: buildDreamUserText(memory.content, candidates),
-        maxTokens: DREAM_MAX_TOKENS,
-        signal: controller.signal,
-      })
+      raw = await raceModelWithAbort(
+        ports.completeText({
+          conversationId: modelConversation.id,
+          systemPrompt: DREAM_SYSTEM_PROMPT,
+          text: buildDreamUserText(memory.content, sent),
+          maxTokens: DREAM_MAX_TOKENS,
+          signal: controller.signal,
+        }),
+        controller.signal,
+      )
     } catch (err) {
       failure =
         err instanceof HelmxError
@@ -1038,7 +1112,7 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
 
     if (failure !== undefined) {
       const diagnostic = `${failure.code}: ${failure.message}`.slice(0, 300)
-      await files.writeSnapshot(profileId, { ...snapshotBase, error: diagnostic, ...(raw === '' ? {} : { modelOutput: raw }) }, now)
+      await files.writeSnapshot(profileId, { ...snapshotBase, error: diagnostic }, now)
       await recordRun(profileId, {
         lastRunAt: now,
         ran: true,
@@ -1058,7 +1132,7 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
       const rejection =
         err instanceof HelmxError ? err : new HelmxError('dream_output_invalid', 'unknown parse failure', 502)
       const diagnostic = `${rejection.code}: ${rejection.message}`.slice(0, 300)
-      await files.writeSnapshot(profileId, { ...snapshotBase, error: diagnostic, modelOutput: raw }, now)
+      await files.writeSnapshot(profileId, { ...snapshotBase, error: diagnostic }, now)
       await recordRun(profileId, {
         lastRunAt: now,
         ran: true,
@@ -1071,8 +1145,10 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
     }
 
     // 6) Pre-write switch re-check + guarded CAS: MemoryStore re-reads and re-hashes inside the
-    //    same file lock, then re-evaluates the switch guard adjacent to the write — a profile
-    //    disabled mid-run (even while this call waits for the lock) never receives a write-back.
+    //    same file lock, then re-evaluates the guard adjacent to the write — a profile disabled
+    //    mid-run (even while this call waits for the lock) never receives a write-back, and the
+    //    guard also covers this run's abort state (stop / deadline landing while the commit
+    //    waits for the lock never writes either).
     if (!ports.isMemoryEnabled(profileId)) {
       await files.writeSnapshot(profileId, { ...snapshotBase, reason: 'memory_disabled' }, now)
       await recordRun(profileId, {
@@ -1092,17 +1168,18 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
         beforeChars: memory.content.length,
       }
     }
-    controller.signal.throwIfAborted()
+    throwIfDreamAborted(controller.signal)
     const committed = await ports.store.commitDreamMemory(profileId, memory.hash, nextMemory, {
-      guard: () => ports.isMemoryEnabled(profileId),
+      guard: () => !controller.signal.aborted && !stopping && ports.isMemoryEnabled(profileId),
     })
     if (committed.guarded === true) {
-      await files.writeSnapshot(profileId, { ...snapshotBase, reason: 'memory_disabled' }, now)
+      const reason = controller.signal.aborted || stopping ? 'aborted' : 'memory_disabled'
+      await files.writeSnapshot(profileId, { ...snapshotBase, reason }, now)
       await recordRun(profileId, {
         lastRunAt: now,
         ran: true,
         applied: false,
-        reason: 'memory_disabled',
+        reason,
         candidateCount: candidates.length,
         beforeChars: memory.content.length,
       })
@@ -1110,7 +1187,7 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
         profileId,
         ran: true,
         applied: false,
-        reason: 'memory_disabled',
+        reason,
         candidateCount: candidates.length,
         beforeChars: memory.content.length,
       }
@@ -1143,11 +1220,11 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
       }
     }
 
-    // 7) MEMORY.md is committed. Post-commit bookkeeping (consume exactly the folded candidates,
+    // 7) MEMORY.md is committed. Post-commit bookkeeping (consume exactly the SENT candidates,
     //    journal, record) is best-effort: a failure here must not misreport the applied dream as
     //    failed -- unconsumed candidates simply re-fold harmlessly on the next dream (the model
     //    deduplicates against the memory that already contains them).
-    const consumedIds = candidates.map((c) => c.id)
+    const consumedIds = sent.map((c) => c.id)
     await bestEffort('candidate consumption', () =>
       serialized(profileId, () => files.removeCandidates(profileId, consumedIds)),
     )
@@ -1169,7 +1246,8 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
       ran: true,
       applied: true,
       candidateCount: candidates.length,
-      consumed: candidates.length,
+      sentCount: sent.length,
+      consumed: sent.length,
       beforeChars: memory.content.length,
       afterChars: nextMemory.length,
     }
@@ -1193,33 +1271,46 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
 
     const task = (async (): Promise<void> => {
       const now = clock.now()
+      // Redact the FULL excerpt first, truncate after: a secret straddling the cap would survive
+      // truncation-first as a cut-open fragment that no longer matches any redaction pattern.
       const candidate: DreamCandidate = {
         id: randomUUID(),
         conversationId: conversation.id,
-        conversationTitle: ports.redact(boundExcerpt(conversation.title ?? '', MAX_CANDIDATE_TITLE_CHARS)),
-        humanText: ports.redact(boundExcerpt(humanText, MAX_CANDIDATE_HUMAN_CHARS)),
+        conversationTitle: boundExcerpt(ports.redact(conversation.title ?? ''), MAX_CANDIDATE_TITLE_CHARS),
+        humanText: boundExcerpt(ports.redact(humanText), MAX_CANDIDATE_HUMAN_CHARS),
         collectedAt: now,
       }
       // Optional bounded final-assistant-text excerpt (auxiliary context for the dream model);
-      // tool outputs / thinking are structurally excluded by extractFinalAssistantText, which also
-      // strips fenced code blocks and command/log noise. The memory switch is re-checked before
-      // the enrichment call AND before the append: a profile disabled while this collector was
-      // in flight never lands a candidate.
+      // tool outputs / thinking are structurally excluded by extractFinalAssistantText, which
+      // takes only the LAST assistant entry of the settled turn (entries beyond the payload's
+      // lastEntryId watermark — an already-running next turn — are dropped first, and there is
+      // no backward fallback to a pre-tool-call reply). The memory switch is re-checked before
+      // the enrichment call AND inside the candidate critical section adjacent to the write: a
+      // profile disabled while this collector was in flight (or waiting for the chain) never
+      // lands a candidate.
       try {
         if (!ports.isMemoryEnabled(conversation.profileId)) return
         const detail = await ports.getConversationDetail(conversation.id, { limit: 6 })
-        const text = extractFinalAssistantText(detail.entries, MAX_CANDIDATE_ASSISTANT_CHARS)
-        if (text !== undefined && text !== '') candidate.assistantText = ports.redact(text)
+        const text = extractFinalAssistantText(
+          entriesUpToSettledTurn(detail.entries, conversation.lastEntryId),
+        )
+        if (text !== undefined && text !== '') {
+          candidate.assistantText = boundExcerpt(ports.redact(text), MAX_CANDIDATE_ASSISTANT_CHARS)
+        }
       } catch {
         // The excerpt is auxiliary enrichment; the human input stays a valid candidate without it.
         candidate.assistantText = undefined
       }
       if (!ports.isMemoryEnabled(conversation.profileId)) return
-      // Serialized against the same profile's dream consumption (never interleaved RMW). The
-      // collector stays best-effort: a candidate-file failure reports loudly but never fails the
-      // settled turn it observes.
+      // Serialized against the same profile's dream consumption (never interleaved RMW), with
+      // the switch re-check INSIDE the critical section, adjacent to the write. The collector
+      // stays best-effort: a candidate-file failure reports loudly but never fails the settled
+      // turn it observes.
       try {
-        await serialized(conversation.profileId, () => files.appendCandidate(conversation.profileId, candidate, now))
+        await serialized(conversation.profileId, async () => {
+          if (!ports.isMemoryEnabled(conversation.profileId)) return
+          await files.appendCandidate(conversation.profileId, candidate, now)
+        })
       } catch (err) {
         ports.emitError(
           `memory dream candidate collection of conversation ${conversation.id} failed`,
@@ -1372,6 +1463,44 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
 function redactedCause(ports: DreamHostPorts, err: unknown): string {
   const message = err instanceof Error ? `${err.name}: ${err.message}` : String(err)
   return ports.redact(message).slice(0, 300)
+}
+
+/** Uniform honest abort error: nothing was written back; the run never lingers past stop/deadline. */
+function dreamAbortedError(): HelmxError {
+  return new HelmxError(
+    'dream_aborted',
+    'the dream was aborted (service stop or model deadline) before it could finish; nothing was written back',
+    409,
+    {},
+  )
+}
+
+/** Checkpoint abort: throws the uniform dream_aborted error instead of a bare DOMException. */
+function throwIfDreamAborted(signal: AbortSignal): void {
+  if (signal.aborted) throw dreamAbortedError()
+}
+
+/**
+ * Race a model promise against its abort signal: a port that ignores the signal (or settles
+ * late) can never hold stop() or the deadline open — the dream rejects here, and any late
+ * result is dropped without write-back. The signal stays passed through to the port (well-behaved
+ * ports stop on it); the race only bounds how long we are willing to wait. No unhandled
+ * rejection can escape: Promise.race attaches handlers to both participants, and the losing
+ * abort side is additionally pre-caught.
+ */
+async function raceModelWithAbort(promise: Promise<string>, signal: AbortSignal): Promise<string> {
+  let onAbort: (() => void) | undefined
+  const aborted = new Promise<never>((_, reject) => {
+    onAbort = () => reject(dreamAbortedError())
+    if (signal.aborted) onAbort()
+    else signal.addEventListener('abort', onAbort, { once: true })
+  })
+  aborted.catch(() => undefined)
+  try {
+    return await Promise.race([promise, aborted])
+  } finally {
+    if (onAbort !== undefined) signal.removeEventListener('abort', onAbort)
+  }
 }
 
 function defaultClock(): DreamClock {

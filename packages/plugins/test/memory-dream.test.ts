@@ -32,17 +32,22 @@ import { createPluginBuildProvider } from '@helmx/plugin-build'
 import { MemoryDocStore, makeConversationSummary, waitFor, type Deferred, deferred } from './helpers/plugin-test-env.js'
 import { MAX_MEMORY_CHARS, MemoryStore, MEMORY_DEFAULT } from '../src/memory/store.js'
 import {
+  DREAM_CANDIDATE_SEND_BUDGET_CHARS,
   DREAM_MAX_TOKENS,
   DREAM_TARGET_CHARS,
   MAX_CANDIDATE_HUMAN_CHARS,
+  candidatePayloadChars,
   createDreamEngine,
   dreamBudgetChars,
+  entriesUpToSettledTurn,
   extractFinalAssistantText,
   looksLikeLowValueHumanInput,
   nextDailyRunAt,
   parseDreamModelOutput,
+  selectCandidatesForDream,
   stripExcerptNoise,
   stripFencedCodeBlocks,
+  type DreamCandidate,
   type DreamClock,
   type DreamDoc,
   type DreamHostPorts,
@@ -90,6 +95,42 @@ test('dream 纯函数：parseDreamModelOutput 严格校验（单一裸 JSON 对�
   // 预算边界：目标预算 max(2x 目标, 当前 + 1000)
   assert.equal(dreamBudgetChars(0), DREAM_TARGET_CHARS * 2)
   assert.equal(dreamBudgetChars(60_000), 61_000)
+})
+
+test('dream 纯函数：selectCandidatesForDream 新近优先选整条、按时间送出、预算内有界', { timeout: 60_000 }, () => {
+  const make = (id: string, collectedAt: number, human: string, assistant?: string): DreamCandidate => ({
+    id,
+    conversationId: 1,
+    conversationTitle: 't',
+    humanText: human,
+    ...(assistant !== undefined ? { assistantText: assistant } : {}),
+    collectedAt,
+  })
+  // 大小 = human + assistant + title
+  const a = make('a', 1, 'x'.repeat(1_000))
+  assert.equal(candidatePayloadChars(a), 1_000 + 't'.length)
+  const b = make('b', 2, 'y'.repeat(2_000), 'z'.repeat(500))
+  const c = make('c', 3, 'w'.repeat(3_000))
+  const d = make('d', 4, 'v'.repeat(4_000))
+  // 预算 5_500：新近优先 d(4000+t) -> 剩 ~1_499 -> c/b 放不下 -> a(1000+t) 放得下
+  const chosen = selectCandidatesForDream([a, b, c, d], 5_500)
+  assert.deepEqual(chosen.map((x) => x.id), ['a', 'd'], '新近优先整条选取，放不下的跳过但更旧更小的仍可入选')
+  assert.ok(
+    chosen.reduce((sum, x) => sum + candidatePayloadChars(x), 0) <= 5_500,
+    '总发送字符在预算内',
+  )
+  // 同预算再验证输出按时间升序（oldest first）
+  assert.ok(chosen[0]!.collectedAt <= chosen[1]!.collectedAt, '送出顺序为时间序')
+  // 全部放得下：保持文件顺序（同 collectedAt 也保持原顺序）
+  const all = selectCandidatesForDream([a, b, c, d], 100_000)
+  assert.deepEqual(all.map((x) => x.id), ['a', 'b', 'c', 'd'])
+  const sameTime = [make('n1', 7, 'one'), make('n2', 7, 'two'), make('n3', 7, 'three')]
+  assert.deepEqual(selectCandidatesForDream(sameTime, 100_000).map((x) => x.id), ['n1', 'n2', 'n3'], '同时间戳保持文件顺序')
+  // 首条（最新）超预算也必须入选（进度保证；正常候选受单条上限不会触发）
+  const huge = make('huge', 9, 'h'.repeat(30_000))
+  assert.deepEqual(selectCandidatesForDream([a, huge], 5_000).map((x) => x.id), ['huge'])
+  // 空列表
+  assert.deepEqual(selectCandidatesForDream([], 20_000), [])
 })
 
 test('dream 纯函数：stripExcerptNoise 剥离围栏代码块与命令/日志行', { timeout: 60_000 }, () => {
@@ -143,17 +184,22 @@ test('dream 纯函数：nextDailyRunAt 每日时区计算', { timeout: 60_000 },
   )
 })
 
-test('dream 纯函数：extractFinalAssistantText 只取最终 assistant 文本块并剥离代码/日志噪声', { timeout: 60_000 }, () => {
+test('dream 纯函数：extractFinalAssistantText 只取最后一个 assistant 条目，绝不回退更早回复', { timeout: 60_000 }, () => {
   const entries = [
     { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'thinking', thinking: 'inner' }, { type: 'text', text: 'early' }] }] },
     { id: '2', kind: 'pi.tool_result', data: {} },
     { id: '3', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', name: 'bash' }, { type: 'text', text: 'final answer' }] }] },
   ]
-  assert.equal(extractFinalAssistantText(entries as never, 800), 'final answer')
-  // 截断
-  assert.ok(extractFinalAssistantText(entries as never, 3)!.endsWith('[truncated]'))
+  assert.equal(extractFinalAssistantText(entries as never), 'final answer')
+  // 最终 assistant 条目无文本（工具调用结尾）-> 不回退 tool-call 前的更早回复
+  const toolOnlyEnd = [
+    { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'pre-tool reply' }] }] },
+    { id: '2', kind: 'pi.tool_result', data: {} },
+    { id: '3', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', name: 'bash' }] }] },
+  ]
+  assert.equal(extractFinalAssistantText(toolOnlyEnd as never), undefined, '无最终 assistant 文本时不回落 pre-tool 回复')
   // 无 assistant 文本
-  assert.equal(extractFinalAssistantText([{ id: '1', kind: 'pi.user' }], 800), undefined)
+  assert.equal(extractFinalAssistantText([{ id: '1', kind: 'pi.user' }]), undefined)
   // 助理复述工具输出/代码块：围栏与命令/日志行剥离后才持久化
   const quoted = [
     '已记好你的偏好：默认使用中文回复。',
@@ -166,10 +212,25 @@ test('dream 纯函数：extractFinalAssistantText 只取最终 assistant 文本�
   const quotedEntries = [
     { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: quoted }] }] },
   ]
-  assert.equal(extractFinalAssistantText(quotedEntries as never, 800), '已记好你的偏好：默认使用中文回复。')
-  // 剥离后为空 -> 无摘录（继续向更旧条目找文本，全无则 undefined）
+  assert.equal(extractFinalAssistantText(quotedEntries as never), '已记好你的偏好：默认使用中文回复。')
+  // 剥离后为空 -> 无摘录（同样不回退更早条目）
   const codeOnly = [{ id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '```\nls -la\n```' }] }] }]
-  assert.equal(extractFinalAssistantText(codeOnly as never, 800), undefined, '纯代码回复无摘录')
+  assert.equal(extractFinalAssistantText(codeOnly as never), undefined, '纯代码回复无摘录')
+})
+
+test('dream 纯函数：entriesUpToSettledTurn 按 lastEntryId 截断（下一回合条目排除）', { timeout: 60_000 }, () => {
+  const entries = [
+    { id: '1', kind: 'pi.user' },
+    { id: '2', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '本回合回复' }] }] },
+    { id: '3', kind: 'pi.user' },
+    { id: '4', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '下一回合回复' }] }] },
+  ]
+  assert.equal(entriesUpToSettledTurn(entries as never, 2).length, 2, '越过水位的条目被排除')
+  assert.equal(extractFinalAssistantText(entriesUpToSettledTurn(entries as never, 2)), '本回合回复', '取结算回合的最终回复')
+  // 水位缺失（旧内核/缺省）：不过滤
+  assert.equal(entriesUpToSettledTurn(entries as never, undefined).length, 4)
+  // 非数字 id 无排序信息：保守放行
+  assert.equal(entriesUpToSettledTurn([{ id: 'x', kind: 'pi.user' }] as never, 2).length, 1)
 })
 
 // ---------------------------------------------------------------------------
@@ -268,6 +329,8 @@ interface DreamBackendFixture {
   detailEntries: Map<number, ConversationDetail['entries']>
   /** 可选注入：接管 getConversationDetail（测试采集期竞态窗口）。 */
   detailImpl?: (id: number) => Promise<ConversationDetail>
+  /** 可选注入：接管原子写（测试候选串行临界区窗口）。 */
+  atomicWriteImpl?: (path: string, content: string) => Promise<void>
   events: Array<{ title: string; body: string }>
 }
 
@@ -316,6 +379,10 @@ async function makeHarness(t: test.TestContext, options: { startMs?: number } = 
   const backend = {
     redact: (text: string) => text.replaceAll('sk-secret-123', '[redacted]'),
     atomicWriteFile: async (path: string, content: string) => {
+      if (fixture.atomicWriteImpl !== undefined) {
+        await fixture.atomicWriteImpl(path, content)
+        return
+      }
       writeFileSync(path, content, 'utf8')
     },
     completeText: async (input: { conversationId: number; systemPrompt: string; text: string; maxTokens?: number; signal?: AbortSignal }) => {
@@ -344,7 +411,9 @@ async function makeHarness(t: test.TestContext, options: { startMs?: number } = 
     buildProvider: createPluginBuildProvider(),
     dataDir,
     docs,
-    host: Object.assign(backend, createProfileFileHost(dataDir, profiles)) as never,
+    // backend (fixture-gated writes / scripted model ports) wins over the profile file host's
+    // same-name atomicWriteFile; the profile host fills in profiles/skills/withFileLock.
+    host: { ...createProfileFileHost(dataDir, profiles), ...backend } as never,
   })
   await host.register(createMemoryPlugin({ dream: { clock: clock.api } }), { enabled: true })
 
@@ -423,6 +492,14 @@ test('dream 采集：turn_settled 过滤与脱敏/有界', { timeout: 60_000 }, 
   // 去重：同会话同文本不重复
   await h.host.runHook('turn_settled', makeSettled(conversation, [{ text: long, origin: 'human' }]) as never)
   assert.equal(readCandidates(h, 'assistant').length, 1)
+
+  // 脱敏先于截断：秘密跨截断点时不得以剖开片段存活（placeholder 起点在 1498，跨越 1500 截断点）
+  const straddling = `${'偏好铺垫。'.repeat(299)}密钥 sk-secret-123`
+  await h.host.runHook('turn_settled', makeSettled(conversation, [{ text: straddling, origin: 'human' }]) as never)
+  const straddlingCandidates = readCandidates(h, 'assistant')
+  const straddlingCandidate = straddlingCandidates[straddlingCandidates.length - 1]!
+  assert.ok(!straddlingCandidate.humanText.includes('{{SE'), '先脱敏再截断：跨点秘密不残留剖开片段')
+  assert.ok(!straddlingCandidate.humanText.includes('sk-secret-123'), '秘密全文不出现')
 
   // 人类输入中的围栏代码块剥离后才入候选（散文保留）
   const withCode = '以后回复都用中文。\n```bash\nrm -rf /tmp/x\n```\n另外偏好深色主题。'
@@ -816,6 +893,72 @@ test('dream 复核：采集 enrichment 在途期间关闭记忆 -> 不落候选'
   await h.host.dispose().catch(() => {})
 })
 
+test('dream 采集：lastEntryId 过滤下一回合条目；无最终文本不回退 pre-tool 回复', { timeout: 60_000 }, async (t) => {
+  const h = await makeHarness(t)
+  // 结算回合水位 = 2：3/4 是已提交的下一回合条目，不得进入摘录
+  const conversation = makeConversationSummary({ id: 1, profileId: 'assistant', lastEntryId: 2 })
+  h.backend.conversations.set(1, conversation)
+  h.backend.detailEntries.set(1, [
+    { id: '1', kind: 'pi.user' },
+    { id: '2', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '本回合最终回复' }] }] },
+    { id: '3', kind: 'pi.user' },
+    { id: '4', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: '下一回合回复' }] }] },
+  ] as ConversationDetail['entries'])
+  await h.host.runHook('turn_settled', makeSettled(conversation, [{ text: '以后都用中文回复我', origin: 'human' }]) as never)
+  let candidates = readCandidates(h, 'assistant')
+  assert.equal(candidates[0]!.assistantText, '本回合最终回复', '摘录取结算回合的最终回复（越过水位的下一回合条目排除）')
+
+  // 无最终 assistant 文本（工具调用结尾）：不回退 tool-call 前的更早回复
+  const conversation2 = makeConversationSummary({ id: 2, profileId: 'assistant', lastEntryId: 3 })
+  h.backend.conversations.set(2, conversation2)
+  h.backend.detailEntries.set(2, [
+    { id: '1', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'text', text: 'tool 之前的回复' }] }] },
+    { id: '2', kind: 'pi.tool_result', data: {} },
+    { id: '3', kind: 'pi.assistant', model: [{ role: 'assistant', content: [{ type: 'toolCall', name: 'bash' }] }] },
+  ] as ConversationDetail['entries'])
+  await h.host.runHook('turn_settled', makeSettled(conversation2, [{ text: '另外偏好深色主题', origin: 'human' }]) as never)
+  candidates = readCandidates(h, 'assistant')
+  const second = candidates.find((c) => c.conversationId === 2)!
+  assert.equal(second.assistantText, undefined, '无最终 assistant 文本不回落 pre-tool 回复')
+  assert.ok(second.humanText.includes('深色主题'), 'human 输入照常落候选')
+  await h.host.dispose().catch(() => {})
+})
+
+test('dream 复核：等候选串行临界区期间关闭记忆 -> 临界区内复核不落候选', { timeout: 60_000 }, async (t) => {
+  const h = await makeHarness(t)
+  const first = makeConversationSummary({ id: 1, profileId: 'assistant' })
+  const second = makeConversationSummary({ id: 2, profileId: 'assistant' })
+  h.backend.conversations.set(1, first)
+  h.backend.conversations.set(2, second)
+  h.backend.detailEntries.set(1, makeDetailEntries('第一条回复'))
+  h.backend.detailEntries.set(2, makeDetailEntries('第二条回复'))
+  // 第一个采集者占据临界区（原子写挂起）；第二个采集者外层复核通过后在链上排队
+  const enteredWrite = deferred()
+  const releaseWrite = deferred()
+  let heldFirst = false
+  h.backend.atomicWriteImpl = async (path, content) => {
+    if (!heldFirst) {
+      heldFirst = true
+      enteredWrite.resolve()
+      await releaseWrite.promise
+    }
+    writeFileSync(path, content, 'utf8')
+  }
+  const settlingFirst = h.host.runHook('turn_settled', makeSettled(first, [{ text: '第一条：以后都用中文回复', origin: 'human' }]) as never)
+  await enteredWrite.promise
+  const settlingSecond = h.host.runHook('turn_settled', makeSettled(second, [{ text: '第二条：偏好深色主题', origin: 'human' }]) as never)
+  await new Promise((resolve) => setImmediate(resolve))
+  // 排队期间关闭记忆：临界区内紧邻写入的复核必须拦下第二个候选
+  await h.host.invokeAction('builtin:memory', 'configure', { profileId: 'assistant', enabled: false })
+  releaseWrite.resolve()
+  await Promise.all([settlingFirst, settlingSecond])
+  const candidates = readCandidates(h, 'assistant')
+  assert.equal(candidates.length, 1, '只落临界区内已过复核的第一条')
+  assert.ok(candidates[0]!.humanText.includes('第一条'), '占据临界区的候选正常落盘')
+  assert.ok(!candidates.some((c) => c.humanText.includes('第二条')), '等链期间关闭的候选不落盘')
+  await h.host.dispose().catch(() => {})
+})
+
 test('dream 诊断：失败错误/通知/快照全链过 redact，通知接线可见', { timeout: 60_000 }, async (t) => {
   const h = await makeHarness(t)
   await h.store.updateMemory('assistant', '# Memory', 'replace')
@@ -839,6 +982,28 @@ test('dream 诊断：失败错误/通知/快照全链过 redact，通知接线�
     readFileSync(join(dreamDirOf(h, 'assistant'), 'snapshots', snapshotFiles[0]!), 'utf8'),
   ) as { error?: string }
   assert.ok(snapshot.error !== undefined && snapshot.error.includes('[redacted]') && !snapshot.error.includes('sk-secret-123'), '快照诊断脱敏')
+  await h.host.dispose().catch(() => {})
+})
+
+test('dream 诊断：坏输出快照零 raw dump，parse 错误不回显原始内容', { timeout: 60_000 }, async (t) => {
+  const h = await makeHarness(t)
+  await h.store.updateMemory('assistant', '# Memory\n旧偏好。', 'replace')
+  await seedCandidate(h, 'assistant', '偏好深色主题', 5)
+  // 非 JSON 输出内嵌「秘密」：诊断只能给限长脱敏短文本，绝不含原始内容
+  h.backend.completeTextImpl = async () => 'leaked raw sk-secret-123 marker — definitely not JSON'
+  await assert.rejects(
+    () => h.host.invokeAction('builtin:memory', 'dream', { profileId: 'assistant' }),
+    (err: unknown) => err instanceof HelmxError && (err.details as { reason?: string })?.reason === 'not_json',
+  )
+  const raw = readFileSync(join(dreamDirOf(h, 'assistant'), 'snapshots', readdirSync(join(dreamDirOf(h, 'assistant'), 'snapshots'))[0]!), 'utf8')
+  assert.ok(!raw.includes('modelOutput'), '快照不再持久化 raw model output')
+  assert.ok(!raw.includes('leaked raw') && !raw.includes('{{SECRET'), '快照零原始内容')
+  const doc = h.docs.peek<{ runs: Record<string, { error?: string }> }>('builtin:memory:dream')
+  const recorded = doc!.runs.assistant!.error ?? ''
+  assert.ok(!recorded.includes('leaked raw') && !recorded.includes('{{SECRET'), '运行记录错误不回显原始内容')
+  assert.ok(recorded.includes('not_json'), '机器可读 reason 保留')
+  assert.equal(await h.store.getMemory('assistant'), '# Memory\n旧偏好。', '零写回')
+  assert.equal(readCandidates(h, 'assistant').length, 1, '候选保留')
   await h.host.dispose().catch(() => {})
 })
 
@@ -894,6 +1059,7 @@ interface EngineHarness {
   events: Array<{ title: string; detail: string }>
   setCompleteText(impl: (input: { signal?: AbortSignal }) => Promise<string>): void
   setMemoryEnabled(enabled: boolean): void
+  setProfilesList(impl: () => Promise<Array<{ id: string }>>): void
 }
 
 const ENGINE_DOC_KEY = 'builtin:memory:dream'
@@ -922,13 +1088,14 @@ function seedEngineCandidates(
 
 function makeEngineHarness(
   t: test.TestContext,
-  options: { startMs?: number; memoryEnabled?: boolean; reuse?: { dir: string; docs: MemoryDocStore; clock: FakeClock } } = {},
+  options: { startMs?: number; memoryEnabled?: boolean; modelTimeoutMs?: number; reuse?: { dir: string; docs: MemoryDocStore; clock: FakeClock } } = {},
 ): EngineHarness {
   const dir = options.reuse?.dir ?? scratchDir(t, 'memory-dream-engine')
   const docs = options.reuse?.docs ?? new MemoryDocStore()
   const clock = options.reuse?.clock ?? new FakeClock(options.startMs ?? Date.parse('2026-01-15T00:00:00Z'))
   let memoryEnabled = options.memoryEnabled ?? true
   let completeTextImpl: (input: { signal?: AbortSignal }) => Promise<string> = async () => '{"memory":"# Memory"}'
+  let profilesListImpl: () => Promise<Array<{ id: string }>> = async () => [{ id: 'assistant' }]
   const calls: EngineHarness['calls'] = []
   const events: EngineHarness['events'] = []
   const store = new MemoryStore(createProfileFileHost(dir, new ProfileService(dir)))
@@ -947,13 +1114,13 @@ function makeEngineHarness(
       listConversations: () => [makeConversationSummary({ id: 1, profileId: 'assistant' })],
       getConversationDetail: async () => ({ entries: [] }) as never,
       store,
-      profiles: { list: async () => [{ id: 'assistant' }] },
+      profiles: { list: () => profilesListImpl() },
       isMemoryEnabled: () => memoryEnabled,
       emitError: (title, detail) => {
         events.push({ title, detail: detail instanceof Error ? detail.message : String(detail) })
       },
     },
-    { clock: clock.api },
+    { clock: clock.api, ...(options.modelTimeoutMs !== undefined ? { modelTimeoutMs: options.modelTimeoutMs } : {}) },
   )
   return {
     engine,
@@ -968,6 +1135,9 @@ function makeEngineHarness(
     },
     setMemoryEnabled: (enabled) => {
       memoryEnabled = enabled
+    },
+    setProfilesList: (impl) => {
+      profilesListImpl = impl
     },
   }
 }
@@ -1065,6 +1235,154 @@ test('dream 调度（引擎级）：TTL 过期候选在每日 sweep 实际清除
   ) as { candidates: Array<{ id: string }> }
   assert.deepEqual(raw.candidates.map((c) => c.id), ['fresh'], 'TTL 过期候选被实际清除，新鲜候选保留')
   assert.equal(h.calls.length, 0, '关闭记忆的 Profile 持候选零模型调用')
+  await h.engine.stop()
+})
+
+test('dream 发送预算（引擎级）：~20k 整条新近优先、按时间送出、仅消费已发送候选', { timeout: 60_000 }, async (t) => {
+  const t0 = Date.parse('2026-01-15T00:00:00Z')
+  const h = makeEngineHarness(t, { startMs: t0 })
+  await h.store.updateMemory('assistant', '# Memory', 'replace')
+  // 30 条 x ~1500 字符 = ~45k：远超 20k 预算；collectedAt 递增（越后越新）
+  const seeded = Array.from({ length: 30 }, (_, i) => ({
+    id: `c${i}`,
+    conversationId: 1,
+    conversationTitle: 't',
+    humanText: `候选 ${i}：${'x'.repeat(1_490)}`,
+    collectedAt: t0 + i * 1_000,
+  }))
+  seedEngineCandidates(h.dir, 'assistant', seeded)
+  h.setCompleteText(async () => '{"memory":"# Memory\\n- 整理完成"}')
+  const result = (await h.engine.dreamFor('assistant')) as {
+    ran: boolean; applied: boolean; candidateCount: number; sentCount?: number; consumed?: number
+  }
+  assert.equal(result.ran, true)
+  assert.equal(result.applied, true)
+  assert.equal(result.candidateCount, 30, 'candidateCount 如实报告全部在场候选')
+  assert.ok(result.sentCount !== undefined && result.sentCount < 30, '发送子集（预算内）')
+  assert.equal(result.consumed, result.sentCount, '仅消费实际发送的候选')
+  // 单次发送的候选摘录总量在预算内（text 里 candidates 段 = 预算内整条）
+  const sentText = h.calls[0]!.text
+  const sentMarkers = [...sentText.matchAll(/候选 (\d+)[：:]/g)].map((m) => Number(m[1]))
+  assert.equal(sentMarkers.length, result.sentCount, '送出的候选条数与 sentCount 一致')
+  // 新近优先：sentMarkers 应是最新的一段（升序送出，但集合来自最新侧）
+  assert.deepEqual(sentMarkers, Array.from({ length: sentMarkers.length }, (_, k) => 30 - sentMarkers.length + k), '新近优先选整条、按时间序送出')
+  // 预算核算：送出候选的摘录字符总量 ≤ 20k（human + title）
+  const sentPayload = seeded
+    .filter((c) => sentMarkers.includes(Number(c.id.slice(1))))
+    .reduce((sum, c) => sum + c.humanText.length + c.conversationTitle.length, 0)
+  assert.ok(sentPayload <= DREAM_CANDIDATE_SEND_BUDGET_CHARS, `发送总量 ${sentPayload} 在预算内`)
+  // 只消费已发送：最旧的候选留在盘上等待下次整理
+  const left = (
+    JSON.parse(readFileSync(join(h.dir, 'plugins', 'builtin%3Amemory', 'dream', 'assistant', 'candidates.json'), 'utf8')) as {
+      candidates: Array<{ id: string }>
+    }
+  ).candidates.map((c) => c.id)
+  assert.equal(left.length, 30 - result.sentCount!, '未发送候选保留')
+  assert.deepEqual(left, Array.from({ length: left.length }, (_, k) => `c${k}`), '留下的恰是最旧一侧')
+  // 快照 candidateIds = 实际发送的候选（保留既有元数据语义）
+  const snapshot = JSON.parse(
+    readFileSync(join(h.dir, 'plugins', 'builtin%3Amemory', 'dream', 'assistant', 'snapshots', readdirSync(join(h.dir, 'plugins', 'builtin%3Amemory', 'dream', 'assistant', 'snapshots'))[0]!), 'utf8'),
+  ) as { candidateCount: number; candidateIds: string[] }
+  assert.equal(snapshot.candidateCount, 30)
+  assert.equal(snapshot.candidateIds.length, result.sentCount)
+  await h.engine.stop()
+})
+
+test('dream 取消（引擎级）：port 无视 signal 时 stop/deadline 有界返回、迟到结果永不写回', { timeout: 60_000 }, async (t) => {
+  const unhandled: unknown[] = []
+  const onUnhandled = (reason: unknown) => {
+    unhandled.push(reason)
+  }
+  process.on('unhandledRejection', onUnhandled)
+  t.after(() => {
+    process.off('unhandledRejection', onUnhandled)
+  })
+  const t0 = Date.parse('2026-01-15T00:00:00Z')
+  const h = makeEngineHarness(t, { startMs: t0 })
+  await h.store.updateMemory('assistant', '# Memory\n旧偏好。', 'replace')
+  seedEngineCandidates(h.dir, 'assistant', [
+    { id: 'c1', conversationId: 1, conversationTitle: 't', humanText: '偏好深色主题', collectedAt: t0 },
+  ])
+  // 无视 abort signal、只在手动放行才返回的模型端口（迟到结果为完全合法的 JSON）
+  let lateResolve: ((value: string) => void) | undefined
+  h.setCompleteText(
+    () =>
+      new Promise<string>((resolve) => {
+        lateResolve = resolve
+      }),
+  )
+  const pending = h.engine.dreamFor('assistant')
+  await new Promise((resolve) => setImmediate(resolve))
+  await h.engine.stop()
+  await assert.rejects(
+    () => pending,
+    (err: unknown) => err instanceof HelmxError && err.code === 'dream_aborted',
+    'stop 无须等待模型即有界拒绝',
+  )
+  assert.equal(await h.store.getMemory('assistant'), '# Memory\n旧偏好。', 'stop 路径零写回')
+  assert.equal(readFileSync(join(h.dir, 'plugins', 'builtin%3Amemory', 'dream', 'assistant', 'candidates.json'), 'utf8').includes('c1'), true, '候选保留')
+  // 迟到结果放行：合法 JSON 也绝不写回，且不产生未处理拒绝
+  lateResolve?.('{"memory":"# Memory\\n- 不该写回"}')
+  await h.engine.settle()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(await h.store.getMemory('assistant'), '# Memory\n旧偏好。', '迟到结果永不写回')
+
+  // deadline 路径共用同一竞速：modelTimeoutMs 到点 abort，即使端口不响应 signal 也必须返回
+  const h2 = makeEngineHarness(t, { startMs: t0, modelTimeoutMs: 60, reuse: { dir: h.dir, docs: h.docs, clock: h.clock } })
+  let lateResolve2: ((value: string) => void) | undefined
+  h2.setCompleteText(
+    () =>
+      new Promise<string>((resolve) => {
+        lateResolve2 = resolve
+      }),
+  )
+  const pending2 = h2.engine.dreamFor('assistant')
+  await assert.rejects(
+    () => pending2,
+    (err: unknown) => err instanceof HelmxError && err.code === 'dream_aborted',
+    'deadline 到点有界拒绝（无视 signal 的端口）',
+  )
+  assert.equal(await h2.store.getMemory('assistant'), '# Memory\n旧偏好。', 'deadline 路径零写回')
+  lateResolve2?.('{"memory":"# Memory\\n- 同样不该写回"}')
+  await h2.engine.settle()
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(await h2.store.getMemory('assistant'), '# Memory\n旧偏好。', '迟到结果同样永不写回')
+  await h2.engine.stop()
+  assert.deepEqual(unhandled, [], '全程无未处理拒绝')
+})
+
+test('dream 调度（引擎级）：claim 后瞬时报错也必须重挂下次排程', { timeout: 60_000 }, async (t) => {
+  const t0 = Date.parse('2026-01-15T00:00:00Z')
+  const h = makeEngineHarness(t, { startMs: t0 })
+  await h.store.updateMemory('assistant', '# Memory', 'replace')
+  seedEngineCandidates(h.dir, 'assistant', [
+    { id: 'c1', conversationId: 1, conversationTitle: 't', humanText: '偏好深色主题', collectedAt: t0 },
+  ])
+  h.docs.set(ENGINE_DOC_KEY, { version: 1, config: { enabled: true, hour: 3, timezone: 'UTC' }, runs: {}, nextRunAt: t0 + 10 })
+  const entered = deferred()
+  h.setCompleteText(gatedModelCall(entered))
+  // 第一次扫掠：claim 成功后 profiles.list 瞬时报错（此前会静默死掉 timer，直到重启）
+  let failFirst = true
+  h.setProfilesList(async () => {
+    if (failFirst) {
+      failFirst = false
+      throw new Error('transient profile store hiccup')
+    }
+    return [{ id: 'assistant' }]
+  })
+  await h.engine.start()
+  await h.clock.advance(20)
+  await waitFor(() => h.clock.activeTimers() >= 1, { timeoutMs: 10_000, message: '瞬时报错后仍重挂下次排程' })
+  assert.ok(
+    h.events.some((e) => e.title.includes('memory dream sweep failed')),
+    '扫掠失败显式报告',
+  )
+  const claimed = h.docs.peek<{ nextRunAt?: number }>(ENGINE_DOC_KEY)
+  assert.ok(claimed?.nextRunAt !== undefined && claimed.nextRunAt > t0 + 20, 'claim 已推进（该点不重跑）')
+  // 恢复后到点正常整理
+  await h.clock.advance(claimed!.nextRunAt! - h.clock.api.now() + 10)
+  await entered.promise
+  await waitFor(() => h.calls.length === 1, { timeoutMs: 10_000, message: '下个调度点正常整理' })
   await h.engine.stop()
 })
 

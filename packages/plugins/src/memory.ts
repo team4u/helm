@@ -445,6 +445,8 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
         id: 'dream',
         description:
           'Run the memory Dream (consolidation) for one Profile now: merges collected candidates into MEMORY.md via a strict model JSON contract with CAS write-back; skips honestly with a reason when there are no candidates or no model conversation (pass --profile-id, or use --current for the current conversation)',
+        // The model call has its own deadline (and abort); the CLI must not add a 30s cap.
+        cli: { timeoutMs: 0 },
         inputSchema: {
           type: 'object',
           properties: { profileId: { type: 'string', minLength: 1 } },
@@ -461,6 +463,7 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
             candidateCount: { type: 'number' },
             beforeChars: { type: 'number' },
             afterChars: { type: 'number' },
+            sentCount: { type: 'number' },
             consumed: { type: 'number' },
           },
           required: ['profileId', 'ran', 'candidateCount'],
