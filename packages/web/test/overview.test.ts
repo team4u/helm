@@ -258,6 +258,34 @@ test('ConversationOverview renders the card grid with honest facts and reuses th
   }
 })
 
+test('ConversationOverview hides the unread completion light as soon as the conversation becomes viewed', { timeout: 60_000 }, async () => {
+  const store = overviewStore({
+    conversations: [
+      conv({ id: 8, status: 'done', unread: true }),
+      conv({ id: 9, status: 'done', unread: false }),
+    ],
+    primaryTarget: { kind: 'overview' },
+  })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  let root: Root | undefined
+  try {
+    await act(async () => {
+      root = createRoot(container)
+      root.render(e(HelmxExternalStoreContext.Provider, { value: store }, e(ConversationOverview)))
+    })
+    const unreadCard = [...container.querySelectorAll<HTMLElement>('.overview-card')].find((card) => card.textContent?.includes('#8'))
+    const readCard = [...container.querySelectorAll<HTMLElement>('.overview-card')].find((card) => card.textContent?.includes('#9'))
+    assert.ok(unreadCard?.querySelector('.status-dot-done'), 'unread completed card has a done light')
+    assert.ok(readCard?.querySelector('.status-dot-done') === null, 'read completed card has no unread light')
+    await act(async () => store.openTarget({ kind: 'conversation', conversationId: 8 }))
+    assert.ok(unreadCard?.querySelector('.status-dot-done') === null, 'opening the conversation hides its light immediately before the PATCH response')
+  } finally {
+    await act(async () => root?.unmount())
+    container.remove()
+  }
+})
+
 test('ConversationOverview bucket filter narrows the grid (segmented control)', { timeout: 60_000 }, async () => {
   const store = overviewScenarioStore()
   const container = document.createElement('div')

@@ -268,8 +268,11 @@ export function TaskCreateDialog(props: TaskCreateDialogProps): ReactNode {
   return (
     <Dialog open={props.open} onOpenChange={(open) => { if (!open && !submitting) props.onClose() }}>
       <DialogPortal>
-        <DialogOverlay />
-        <DialogContent className="modal task-modal" aria-label={taskCreateDialogAria(locale)}>
+        <DialogOverlay className="modal-backdrop">
+          <DialogContent
+            className="modal task-modal"
+            aria-label={taskCreateDialogAria(locale)}
+          >
           <div className="modal-header">
             <div className="task-modal-title-row">
               <HelmxIcon name="check-square" size={15} />
@@ -393,7 +396,8 @@ export function TaskCreateDialog(props: TaskCreateDialogProps): ReactNode {
               <span>{submitting ? t(TASK_CREATING) : t(TASK_CREATE_SUBMIT)}</span>
             </button>
           </div>
-        </DialogContent>
+          </DialogContent>
+        </DialogOverlay>
       </DialogPortal>
     </Dialog>
   )
@@ -453,8 +457,8 @@ export function TaskReworkDialog(props: TaskReworkDialogProps): ReactNode {
   return (
     <Dialog open={props.open} onOpenChange={(open) => { if (!open && !submitting) props.onClose() }}>
       <DialogPortal>
-        <DialogOverlay />
-        <DialogContent className="modal task-modal" aria-label={taskReworkDialogAria(props.taskId, locale)}>
+        <DialogOverlay>
+          <DialogContent className="modal task-modal" aria-label={taskReworkDialogAria(props.taskId, locale)}>
           <div className="modal-header">
             <div className="task-modal-title-row">
               <HelmxIcon name="rotate-ccw" size={15} />
@@ -492,7 +496,8 @@ export function TaskReworkDialog(props: TaskReworkDialogProps): ReactNode {
               <span>{submitting ? t(TASK_REWORK_SENDING) : t(TASK_REWORK_SUBMIT)}</span>
             </button>
           </div>
-        </DialogContent>
+          </DialogContent>
+        </DialogOverlay>
       </DialogPortal>
     </Dialog>
   )
@@ -525,8 +530,8 @@ export function TaskMergeConfirmDialog(props: TaskMergeConfirmDialogProps): Reac
   return (
     <Dialog open={props.open} onOpenChange={(open) => { if (!open && !props.busy) props.onClose() }}>
       <DialogPortal>
-        <DialogOverlay />
-        <DialogContent className="modal task-modal" aria-label={taskMergeConfirmAria(props.taskId, locale)}>
+        <DialogOverlay>
+          <DialogContent className="modal task-modal" aria-label={taskMergeConfirmAria(props.taskId, locale)}>
           <div className="modal-header">
             <div className="task-modal-title-row">
               <HelmxIcon name="git-pull-request" size={15} />
@@ -579,7 +584,8 @@ export function TaskMergeConfirmDialog(props: TaskMergeConfirmDialogProps): Reac
               <span>{t(TASK_MERGE_CONFIRM_SUBMIT)}</span>
             </button>
           </div>
-        </DialogContent>
+          </DialogContent>
+        </DialogOverlay>
       </DialogPortal>
     </Dialog>
   )

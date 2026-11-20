@@ -48,9 +48,11 @@ type BucketFilterValue = OverviewBucketFilter
 function OverviewCardView({
   card,
   onOpenConversation,
+  viewedConversationIds,
 }: {
   card: OverviewCard
   onOpenConversation: (conversationId: number) => void
+  viewedConversationIds: ReadonlySet<number>
 }): ReactNode {
   const { t } = useWebLocale()
   const subParts = card.profileLabel === '' ? [] : [card.profileLabel]
@@ -66,6 +68,7 @@ function OverviewCardView({
           <ConversationStatusDot
             conv={card.representative}
             background={{ active: card.backgroundActive, summary: card.backgroundSummary }}
+            showDone={card.representative.unread && !viewedConversationIds.has(card.representative.id)}
           />
         </span>
         <span className="overview-card-title">
@@ -95,6 +98,7 @@ function OverviewCardView({
               <ConversationStatusDot
                 conv={descendant.conv}
                 background={descendant.backgroundActive ? { active: true, summary: '' } : undefined}
+                showDone={descendant.conv.unread && !viewedConversationIds.has(descendant.conv.id)}
               />
               <span className="overview-chip-label">
                 {descendant.conv.title || t('shell.conversationFallback', { id: descendant.conv.id })}
@@ -115,7 +119,7 @@ function OverviewCardView({
 export function ConversationOverview({ isSplit = false, onCloseSplit }: ConversationOverviewProps): ReactNode {
   const { t } = useWebLocale()
   const { openTarget, closeSplit, setActiveModal } = useStoreActions()
-  const { background } = useGlobalAttention()
+  const { background, viewedConversationIds } = useGlobalAttention()
   const conversations = useConversations()
   const plugins = usePlugins()
   const { profiles } = useProfilesSlice()
@@ -229,7 +233,12 @@ export function ConversationOverview({ isSplit = false, onCloseSplit }: Conversa
           <div className="overview-empty">{t('shell.overview.empty')}</div>
         ) : (
           visibleCards.map((card) => (
-            <OverviewCardView key={card.root.id} card={card} onOpenConversation={openConversationDrawer} />
+            <OverviewCardView
+              key={card.root.id}
+              card={card}
+              onOpenConversation={openConversationDrawer}
+              viewedConversationIds={viewedConversationIds}
+            />
           ))
         )}
       </div>
