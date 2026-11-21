@@ -103,7 +103,7 @@ export function ModelPickerControl({
 
   const filteredModels = models.filter((model) => model.available && model.disabled !== true && model.id.toLowerCase().includes(query.toLowerCase()))
   const filteredKeys = filteredModels.map((model) => model.id).join('|')
-  const [activeIndex, setActiveIndex] = useState(() => initialModelActiveIndex(filteredModels, effectiveModel))
+  const [activeIndex, setActiveIndex] = useState(-1)
 
   useEffect(() => {
     setQuery('')
@@ -111,11 +111,14 @@ export function ModelPickerControl({
   }, [open])
 
   useEffect(() => {
-    if (!open) return
-    setActiveIndex(initialModelActiveIndex(filteredModels, effectiveModel))
+    if (!open) {
+      setActiveIndex(-1)
+      return
+    }
+    setActiveIndex(initialModelActiveIndex(filteredModels, query))
     // filteredKeys precisely expresses changes of the filtered result set
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, query, filteredKeys, effectiveModel])
+  }, [open, query, filteredKeys])
 
   useEffect(() => {
     if (!open || activeIndex < 0) return
@@ -292,7 +295,7 @@ export function ModelPickerControl({
                 </button>
               </Tooltip>
             </div>
-            <div className="composer-model-scroll">
+            <div className="composer-model-scroll" onMouseLeave={() => setActiveIndex(-1)}>
             <div className="popover-header">
               <span>{t('composer.model.listHeader')}</span>
               <span className="kbd-hint popover-kbd-hint">{t('composer.kbd.navConfirm')}</span>
@@ -300,9 +303,10 @@ export function ModelPickerControl({
             {filteredModels.map((m, idx) => {
               const levels = m.thinkingLevels ?? ['off']
               const supportsThinking = levels.some((level) => level !== 'off')
+              const isCurrent = m.id === effectiveModel
               // Level highlight only for the effective model's row: for other
               // models the default chain resolves server-side.
-              const activeRowLevel = m.id === effectiveModel
+              const activeRowLevel = isCurrent
                 ? resolveEffectiveThinkingLevel(levels, activeThinkingLevel)
                 : ''
               const display = formatModelRowDisplay(m)
@@ -320,10 +324,13 @@ export function ModelPickerControl({
                     className="composer-model-row-main"
                     title={t('composer.model.rowDefaultTitle', { model: m.id })}
                     disabled={disabled}
-                    aria-current={m.id === effectiveModel ? 'true' : undefined}
+                    aria-current={isCurrent ? 'true' : undefined}
                     onClick={() => applySelection(m.id, null)}
                   >
-                    <span className="mono composer-model-row-name">{display.name}</span>
+                    <span className="composer-model-row-name-line">
+                      <span className="mono composer-model-row-name">{display.name}</span>
+                      {isCurrent ? <HelmxIcon name="check" size={12} className="composer-model-row-check" /> : null}
+                    </span>
                     <span className="popover-item-meta composer-model-row-source">{display.source}</span>
                   </button>
                   {supportsThinking ? (

@@ -124,9 +124,12 @@ test('keybindings-model: effective thinking level falls back to a supported leve
 
 test('keybindings-model: initialModelActiveIndex / stepActiveIndex and panel matching', { timeout: 60_000 }, () => {
   const items = [{ id: 'a/1' }, { id: 'b/2' }, { id: 'c/3' }]
-  assert.equal(initialModelActiveIndex(items, 'b/2'), 1)
-  assert.equal(initialModelActiveIndex(items, 'missing'), 0)
-  assert.equal(initialModelActiveIndex([], 'a/1'), -1)
+  assert.equal(initialModelActiveIndex(items, ''), -1)
+  assert.equal(initialModelActiveIndex(items, '   '), -1)
+  assert.equal(initialModelActiveIndex(items, 'b'), 0)
+  assert.equal(initialModelActiveIndex([], 'b'), -1)
+  assert.equal(stepActiveIndex(-1, 3, 1), 0)
+  assert.equal(stepActiveIndex(-1, 3, -1), 2)
   assert.equal(stepActiveIndex(2, 3, 1), 0)
   assert.equal(stepActiveIndex(0, 3, -1), 2)
 
@@ -299,24 +302,31 @@ test('Ctrl+L: precisely toggles the ModelPicker per data-helmx-panel in split vi
   assert.ok(searchInput !== null, 'the search input exists')
   assert.ok(document.activeElement === searchInput, 'opening auto-focuses the search input (not the first reset button)')
 
-  // The initial highlight points at the current model faux/m2 (index 1)
+  // On initial open (empty query), no row has a forced default highlight bar;
+  // the current model row is gently marked via aria-current + check icon only.
   const modelRows = Array.from(popover.querySelectorAll<HTMLElement>('.composer-model-row'))
   assert.equal(modelRows.length, 3)
-  assert.equal(modelRows[1]!.classList.contains('popover-item-active'), true, 'the initial highlight points at the effective model m2')
+  assert.equal(
+    modelRows.some((row) => row.classList.contains('popover-item-active')),
+    false,
+    'opening with an empty query does not pre-highlight any row with popover-item-active',
+  )
   const rowMainByTitle = (pop: Element, id: string): HTMLButtonElement => {
     const btn = Array.from(pop.querySelectorAll<HTMLButtonElement>('.composer-model-row-main'))
       .find((b) => b.title.includes(id))
     assert.ok(btn !== undefined, `the row main button for ${id} exists`)
     return btn!
   }
-  assert.equal(rowMainByTitle(popover, 'faux/m2').getAttribute('aria-current'), 'true', 'the effective model row is marked current')
+  const currentMain = rowMainByTitle(popover, 'faux/m2')
+  assert.equal(currentMain.getAttribute('aria-current'), 'true', 'the effective model row is marked current')
+  assert.ok(currentMain.querySelector('.composer-model-row-check') !== null, 'the effective model row shows a subtle check icon')
 
-  // ArrowDown inside the search moves to m3; Enter applies the model with the
-  // default level (no explicit thinking override) and closes the popover
+  // ArrowUp from the unhighlighted state lands on m3 (last row); Enter applies
+  // the model with the default level (no explicit thinking override) and closes
   await act(async () => {
-    searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true, cancelable: true }))
+    searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', bubbles: true, cancelable: true }))
   })
-    assert.equal(modelRows[2]!.classList.contains('popover-item-active'), true, 'ArrowDown moves the highlight to m3')
+  assert.equal(modelRows[2]!.classList.contains('popover-item-active'), true, 'ArrowUp moves the highlight to m3')
 
   await act(async () => {
     searchInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
