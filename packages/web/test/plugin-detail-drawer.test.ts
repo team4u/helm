@@ -11,13 +11,13 @@ import {
 } from '../src/modals/plugin-config-form-model.js'
 import { groupUiContributions } from '../src/lib/types.js'
 import { makeTestStore } from './helpers/store.js'
-import { HostStoreProviders } from './helpers/host-store.js'
 
 ensureHappyDom()
 const ReactDOMClient = await import('react-dom/client')
 const e = React.createElement
 
-// 动态导入待测组件
+// 动态导入待测组件与携带 Radix 的 Provider（必须晚于 ensureHappyDom()）
+const { HostStoreProviders } = await import('./helpers/host-store.js')
 const { PluginDetailDrawer, PluginConfigForm } = await import('../src/plugins/PluginDetailDrawer.js')
 
 // ---------------------------------------------------------------------------
@@ -1054,4 +1054,90 @@ test('PluginDetailDrawer & PluginConfigForm：zh-CN locale 渲染中文状态、
   assert.match(configHtml, /清除/)
   assert.match(configHtml, /保存配置/)
   assert.match(configHtml, /开启/)
+})
+
+test('PluginConfigForm：format="model" 渲染宿主模型目录 Select 下拉，过滤不可用/禁用项并提交所选模型 ID', { timeout: 60_000 }, async () => {
+  const store = makeTestStore({
+    models: [
+      { id: 'openai/gpt-5', provider: 'openai', modelId: 'gpt-5', label: 'GPT-5', available: true, thinkingLevels: ['off'] },
+      { id: 'anthropic/claude-disabled', provider: 'anthropic', modelId: 'claude-disabled', available: true, disabled: true, thinkingLevels: ['off'] },
+      { id: 'google/gemini-unconfigured', provider: 'google', modelId: 'gemini-unconfigured', available: false, thinkingLevels: ['off'] },
+    ],
+  })
+  const container = document.createElement('div')
+  document.body.appendChild(container)
+  const root = ReactDOMClient.createRoot(container)
+
+  const originalSetConfig = pluginsApi.setConfig
+  const savedPayloads: Array<Record<string, unknown>> = []
+  pluginsApi.setConfig = async (_id: string, values: Record<string, unknown>) => {
+    savedPayloads.push(values)
+    return { ok: true }
+  }
+
+  try {
+    await act(async () => {
+      root.render(
+        e(
+          HostStoreProviders,
+          { value: store },
+          e(PluginConfigForm, {
+            pluginId: 'builtin:memory',
+            locale: 'zh-CN',
+            inline: true,
+            config: {
+              values: { dreamModel: '' },
+              sources: { dreamModel: 'default' },
+              schema: {
+                dreamModel: {
+                  type: 'string',
+                  format: 'model',
+                  default: '',
+                  label: { en: 'Dream model', 'zh-CN': 'Dream 整理模型' },
+                },
+              },
+            },
+            onSaved: () => {},
+          }),
+        ),
+      )
+    })
+
+    // 1. 不再渲染普通文本输入框，而是 Radix Select trigger
+    assert.ok(container.querySelector('input[type="text"]') === null, 'format="model" 不应渲染普通文本输入')
+    const trigger = container.querySelector('button[aria-haspopup="listbox"]') as HTMLButtonElement | null
+    assert.ok(trigger !== null, '应渲染 Select 触发按钮')
+    assert.equal(trigger.getAttribute('aria-label'), 'Dream 整理模型')
+
+    // 2. 打开下拉检查选项过滤：含“跟随系统默认”与可用模型，不含未配置/禁用模型
+    await act(async () => {
+      trigger.click()
+    })
+    const options = Array.from(container.querySelectorAll('[role="option"]'))
+    const optionTexts = options.map((el) => el.textContent ?? '')
+    assert.ok(optionTexts.some((t) => t.includes('跟随系统默认')), '首项应包含跟随默认选项')
+    assert.ok(optionTexts.some((t) => t.includes('openai/gpt-5')), '应列出可用模型')
+    assert.ok(!optionTexts.some((t) => t.includes('claude-disabled')), '不应列出已禁用模型')
+    assert.ok(!optionTexts.some((t) => t.includes('gemini-unconfigured')), '不应列出未配置模型')
+
+    // 3. 选择模型并保存：提交选中的 model ID
+    const gptOption = options.find((el) => (el.textContent ?? '').includes('openai/gpt-5')) as HTMLElement | undefined
+    assert.ok(gptOption !== undefined)
+    await act(async () => {
+      gptOption.click()
+    })
+    const saveBtn = Array.from(container.querySelectorAll('button')).find((b) => (b.textContent ?? '').includes('保存配置'))
+    assert.ok(saveBtn !== undefined)
+    await act(async () => {
+      saveBtn.click()
+    })
+    assert.equal(savedPayloads.length, 1)
+    assert.deepEqual(savedPayloads[0], { dreamModel: 'openai/gpt-5' })
+  } finally {
+    pluginsApi.setConfig = originalSetConfig
+    await act(async () => {
+      root.unmount()
+    })
+    container.remove()
+  }
 })

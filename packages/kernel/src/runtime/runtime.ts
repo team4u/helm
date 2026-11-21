@@ -835,6 +835,7 @@ export class KernelRuntime {
 
   async completeConversationText(input: {
     conversationId: number
+    model?: string
     systemPrompt: string
     text: string
     maxTokens?: number

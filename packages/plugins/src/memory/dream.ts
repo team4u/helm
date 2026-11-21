@@ -223,11 +223,14 @@ export interface DreamHostPorts {
   atomicWriteFile(path: string, content: string): Promise<void>
   completeText(input: {
     conversationId: number
+    model?: string
     systemPrompt: string
     text: string
     maxTokens?: number
     signal?: AbortSignal
   }): Promise<string>
+  /** Optional explicit Dream model override from builtin:memory config (`dreamModel`). */
+  getDreamModel?(): string | undefined
   listConversations(filter?: ConversationListFilter): ConversationSummary[]
   getConversationDetail(id: number, options?: { limit?: number }): Promise<ConversationDetail>
   store: MemoryDreamStorePort
@@ -1090,10 +1093,12 @@ export function createDreamEngine(ports: DreamHostPorts, options: DreamEngineOpt
     deadline.unref?.()
     let raw = ''
     let failure: HelmxError | undefined
+    const configuredModel = ports.getDreamModel?.()?.trim()
     try {
       raw = await raceModelWithAbort(
         ports.completeText({
           conversationId: modelConversation.id,
+          ...(configuredModel !== undefined && configuredModel !== '' ? { model: configuredModel } : {}),
           systemPrompt: DREAM_SYSTEM_PROMPT,
           text: buildDreamUserText(memory.content, sent),
           maxTokens: DREAM_MAX_TOKENS,

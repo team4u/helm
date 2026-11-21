@@ -87,6 +87,15 @@ function assertConfigSchemaDisplayCopy(
         );
       }
     }
+    // Optional host-rendered control marker: only 'model' exists today, string fields only.
+    if (field.format !== undefined && (field.type !== 'string' || field.format !== 'model')) {
+      throw new HelmxError(
+        'invalid_config_schema',
+        `Plugin ${pluginId} config field ${key} format 'model' is only valid on string fields`,
+        400,
+        { pluginId, field: key },
+      );
+    }
   }
 }
 

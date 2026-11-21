@@ -202,6 +202,8 @@ export interface PluginInUseItem {
 /** Plugin config field schema; secret: true is automatically split into credentials.json. */
 export interface PluginConfigFieldSchema {
   type: 'string' | 'number' | 'boolean'
+  /** Optional host-rendered semantic control for string fields. */
+  format?: 'model'
   /** Display copy for the config form field (resolved by the active UI locale). */
   label?: LocalizedText
   /** Display copy describing the field purpose (resolved by the active UI locale). */
