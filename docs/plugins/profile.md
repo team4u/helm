@@ -62,10 +62,11 @@ Web 技能中心与 `helmx skills list/read` 的作用域模型一致，核心�
 - **缺省 Hub 全局**：不带任何作用域参数时展示 Hub 全局目录（`GET /api/skills`，含受管技能与机器级共享根），与旧语义完全兼容。
 - **会话坐标（`--current`）**：CLI `helmx skills list/read --current` 读取 `HELMX_CONVERSATION_ID`，先经 `GET /api/conversations/:id` 解析该会话绑定的 `(nodeId, cwd)`，再以**显式坐标**调用动作——动作请求本身不携带 conversationId（CLI 不自行猜测 cwd，只取会话真实绑定值；会话无绑定 cwd 时显式报错）。Web 技能中心在会话内的作用域选择同理按物理坐标传参。
 - **显式坐标（`--node <id> --cwd <dir>`）**：CLI 与 Web（经会话列表与显式 Profile cwd 去重得到候选）可直接指定任意物理坐标；两个参数必须成对出现，且与 `--current` 互斥。
-- **两个只读幂等动作承载全部能力**（`exposeToPrompt: false`，不进模型提示目录，Agent 侧仍只有 `load_skill`）：
-  - `skill_catalog`：输入 `{ nodeId?, cwd? }`（成对可选）；输出 `{ nodeId, cwd, skills, shadowedNodeSkillIds, nodeUnavailable? }`——`skills` 为该坐标合并生效目录（节点条目 `source: 'node'`），`shadowedNodeSkillIds` 显式列出被同名高优先级版本遮蔽的节点技能 id，`nodeUnavailable` 在节点侧扫描失败（离线、IO 故障、超上限）时携带脱敏诊断（正常时缺省，**绝不静默当作无节点技能**）。
-  - `skill_read`：输入 `{ skillId, path?, nodeId?, cwd? }`；解析顺序镜像 `load_skill`（Hub 目录命中优先，否则读节点 `.helmx/skills/<id>/<path>`），输出 `{ text }`，错误语义沿用 `404 not_found` / `409 node_offline` / `502 node_skill_read_failed`。
-- **越权边界**：动作带会话上下文（`run_action` / workflow）时，input 中的显式 `nodeId`/`cwd` 一律拒绝、强制绑定会话自身坐标——模型不能借动作探测任意节点工作区；无会话上下文的显式坐标走可信管理面（CLI 令牌与 `helmx api` 同级信任，CLI `--current` 亦先在客户端解析会话坐标、以显式坐标调用）。
+- **两个只读幂等动作承载全部能力**（`exposeToPrompt: false` + `scope: { conversationIds: [] }`，不进模型提示目录，Agent 侧仍只有 `load_skill`）：
+  - `skill_catalog`：输入 `{ nodeId?, cwd? }`（成对必填）；输出 `{ nodeId, cwd, skills, shadowedNodeSkillIds, nodeUnavailable? }`——`skills` 为该坐标合并生效目录（节点条目 `source: 'node'`），`shadowedNodeSkillIds` 显式列出被同名高优先级版本遮蔽的节点技能 id；`nodeUnavailable` 仅覆盖边界核验通过后的掉线竞态（TOCTOU）与扫描中的 IO 故障/超上限（正常时缺省，**绝不静默当作无节点技能**）。
+  - `skill_read`：输入 `{ skillId, path?, nodeId?, cwd? }`；解析顺序镜像 `load_skill`（Hub 目录命中优先，否则读节点 `.helmx/skills/<id>/<path>`），输出 `{ text }`；错误语义：`400 validation_error`（坐标不成对 / cwd 非绝对路径或 normalize 含 `..` 逃逸 / **节点未注册或已断线**）/ `404 not_found` / `409 node_offline`（仅边界核验后的掉线竞态）/ `502 node_skill_read_failed`。
+- **输入边界（唯一裁决点）**：`nodeId` 必须是本 Hub 当前已注册的节点（`local` 恒有效）——内核 `nodeIpc.isOnline` 以注册+连接为准，未注册与已断线在插件层不可区分、同措辞 400（**因此「节点离线」的常见路径是显式 400 报错，而非 nodeUnavailable 局部降级**）；`cwd` 必须是目标节点自身形状的绝对路径（POSIX `/`、Windows 盘符/UNC/根反斜杠）且词法 normalize 后无 `..` 逃逸——非法输入显式拒绝，绝不静默修剪。
+- **越权边界（scope ACL）**：两个动作带 `scope: { conversationIds: [] }`——一切携带会话上下文的调用（`run_action` / workflow `action()` / HTTP `body.conversationId`）在宿主层 `403 conversation_scope_violation` 拒绝，模型连 manifest/describe 都不可见；会话坐标绑定路径**不存在**（即便绑定会话坐标，`skill_read` 也会绕过仅约束 `load_skill` 的 `Profile.skills` 白名单）。唯一调用形态 = 无会话上下文 + 显式成对坐标，走可信管理面（CLI 令牌与 `helmx api` 同级信任；CLI `--current` 先在客户端解析会话坐标、再以显式坐标调用，请求不携带 conversationId）。
 - **同名优先级在整个链路一致**：Hub dataDir（含受管技能）> 机器级共享根 `~/.agents/skills` > 节点 `.helmx/skills`。同名时合并目录只保留生效版本并显式报告 `shadowedNodeSkillIds`；`skill_read` 无来源参数、永远读到生效版本。节点来源只读：技能中心与 CLI 均不提供对节点 `.helmx/skills` 的写入面。
 
 ## 配置与数据边界
