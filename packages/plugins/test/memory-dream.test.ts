@@ -1446,3 +1446,37 @@ test('dream 真实组合层：faux 模型输出经 completeText 写回 MEMORY.md
     await app.close()
   }
 })
+
+test('dream 配置：dreamModel 声明为 format="model" 且显式设置后透传给 completeText', { timeout: 60_000 }, async (t) => {
+  const h = await makeHarness(t)
+  const schema = h.host.getConfigSchema('builtin:memory')
+  assert.equal(schema.dreamModel?.type, 'string')
+  assert.equal(schema.dreamModel?.format, 'model')
+
+  // 默认未配置：不传 model 字段（沿用会话模型）
+  await h.store.updateMemory('assistant', '# Memory', 'replace')
+  await seedCandidate(h, 'assistant', '偏好简洁输出', 11)
+  h.backend.completeTextImpl = async () => '{"memory":"# Memory\\n- 偏好简洁输出"}'
+  await h.host.invokeAction('builtin:memory', 'dream', { profileId: 'assistant' })
+  assert.equal((h.backend.completeTextCalls[0] as { model?: string }).model, undefined)
+
+  // 配置 dreamModel：透传到 completeText
+  const dreamCfg = new Map<string, Record<string, unknown>>([['builtin:memory', { dreamModel: 'openai/gpt-5-mini' }]])
+  const hostWithConfig = new PluginHost({
+    buildProvider: createPluginBuildProvider(),
+    dataDir: h.dataDir,
+    docs: h.docs,
+    config: {
+      get: (id) => dreamCfg.get(id) ?? {},
+      set: async (id, val) => { dreamCfg.set(id, val) },
+    },
+    host: (h.host as unknown as { options: { host: unknown } }).options.host as never,
+  })
+  await hostWithConfig.register(createMemoryPlugin({ dream: { clock: h.clock.api } }), { enabled: true })
+  await seedCandidate(h, 'assistant', '使用 pnpm', 11)
+  h.backend.completeTextCalls.length = 0
+  await hostWithConfig.invokeAction('builtin:memory', 'dream', { profileId: 'assistant' })
+  assert.equal((h.backend.completeTextCalls[0] as { model?: string }).model, 'openai/gpt-5-mini')
+  await hostWithConfig.dispose().catch(() => {})
+  await h.host.dispose().catch(() => {})
+})

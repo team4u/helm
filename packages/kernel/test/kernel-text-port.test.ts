@@ -241,6 +241,38 @@ describe('completeConversationText (generic kernel model port)', () => {
     }
   })
 
+  it('explicit model parameter overrides conversation/Profile/global model and enforces model lookup/disabled checks', { timeout: 60_000 }, async () => {
+    const env = await openEnv()
+    try {
+      env.fauxB.setResponses([fauxAssistantMessage('from explicit model')])
+      const text = await env.kernel.completeConversationText({
+        conversationId: 1,
+        model: 'faux-b/override-model',
+        systemPrompt: 's',
+        text: 't',
+      })
+      assert.equal(text, 'from explicit model')
+      assert.equal(env.capturedA.length, 0, 'global/conversation model must not be called when explicit model is given')
+      assert.equal(env.capturedB.length, 1, 'explicit model provider receives the call')
+      await env.kernel.setDisabledModels('faux-b', ['override-model'])
+      await assert.rejects(
+        env.kernel.completeConversationText({
+          conversationId: 1,
+          model: 'faux-b/override-model',
+          systemPrompt: 's',
+          text: 't',
+        }),
+        (e: unknown) => {
+          assert.ok(e instanceof HelmxError)
+          assert.equal(e.code, 'model_disabled')
+          return true
+        },
+      )
+    } finally {
+      await env.close()
+    }
+  })
+
   it('throws as expected when global model is unconfigured without silently switching to another registered model', { timeout: 60_000 }, async () => {
     const models = createModels()
     const fauxB = fauxProvider({ provider: 'faux-b', models: [{ id: 'other' }] })

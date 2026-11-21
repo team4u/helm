@@ -558,6 +558,7 @@ export async function completeConversationTextHelper(
   },
   input: {
     conversationId: number
+    model?: string
     systemPrompt: string
     text: string
     maxTokens?: number
@@ -569,7 +570,11 @@ export async function completeConversationTextHelper(
   if (meta === undefined) {
     throw new HelmxError('not_found', `Conversation not found: ${input.conversationId}`, 404, { conversationId: input.conversationId })
   }
-  const effective = await deps.conversations.resolveEffectiveModel(meta.modelOverride, meta.profileId)
+  const explicitModel = input.model?.trim()
+  const effective =
+    explicitModel !== undefined && explicitModel !== ''
+      ? explicitModel
+      : await deps.conversations.resolveEffectiveModel(meta.modelOverride, meta.profileId)
   if (effective === undefined || effective === '') {
     throw new HelmxError('model_not_configured', `Conversation ${input.conversationId} has no effective model resolved; cannot run text completion`, 409, { conversationId: input.conversationId })
   }

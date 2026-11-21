@@ -739,12 +739,13 @@ export interface HelmxHostApi {
    */
   redact(text: string): string
   /**
-   * 通用无工具单次文本补全（机制，无业务策略）：按会话解析生效模型
-   * （会话覆盖 > profile.model > 全局），输入输出均过全局脱敏；
-   * stopReason 非成功终态显式拒绝，不返回部分文本。
+   * 通用无工具单次文本补全（机制，无业务策略）：未传 `model` 时按会话解析生效模型
+   * （会话覆盖 > profile.model > 全局），显式传入非空 `model` 时覆盖本次调用模型；
+   * 输入输出均过全局脱敏；stopReason 非成功终态显式拒绝，不返回部分文本。
    */
   completeText(input: {
     conversationId: number
+    model?: string
     systemPrompt: string
     text: string
     maxTokens?: number

@@ -680,6 +680,12 @@ test('ctx.configSchema: label/description display copy validated at declaration 
           label: { en: 'Token', 'zh-CN': '令牌' },
           description: 'API token for upstream service',
         },
+        model: {
+          type: 'string',
+          format: 'model',
+          default: '',
+          label: { en: 'Model', 'zh-CN': '模型' },
+        },
       });
     },
   });
@@ -688,6 +694,23 @@ test('ctx.configSchema: label/description display copy validated at declaration 
     label: { en: 'Token', 'zh-CN': '令牌' },
     description: 'API token for upstream service',
   });
+  assert.equal(host.getConfigSchema('p:cfg-copy-ok').model?.format, 'model');
+
+  // format: 'model' is only valid on string fields; unknown format or non-string rejects explicitly
+  for (const badField of [
+    { type: 'number', format: 'model' },
+    { type: 'string', format: 'unknown' },
+  ] as unknown as PluginConfigFieldSchema[]) {
+    await assert.rejects(
+      host.register({
+        id: `p:cfg-format-bad-${badField.type}`,
+        definePlugin: (ctx) => {
+          ctx.configSchema({ target: badField });
+        },
+      }),
+      (err: unknown) => err instanceof HelmxError && err.code === 'invalid_config_schema',
+    );
+  }
 });
 
 // ---------------------------------------------------------------------------

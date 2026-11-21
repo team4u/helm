@@ -35,7 +35,7 @@
 | 接口 | 职责 | 关键约束 |
 | :--- | :--- | :--- |
 | `ctx.pluginId` / `ctx.dataDir` | 只读身份与专属数据目录 | `<dataDir>/plugins/<id>/` |
-| `ctx.getConfig()` / `ctx.configSchema(schema)` | 读取与声明配置 | `type: string/number/boolean`；`secret: true` 分离至 `credentials.json` |
+| `ctx.getConfig()` / `ctx.configSchema(schema)` | 读取与声明配置 | `type: string/number/boolean`（`string` 支持 `format: 'model'` 渲染宿主模型目录选择框）；`secret: true` 分离至 `credentials.json` |
 | `ctx.hook` | 注册 7 个生命周期 Hook | `trigger / input / before_turn / tool_call / tool_result / agent_spawn / turn_settled`，支持 `priority` |
 | `ctx.action(spec)` | 注册五端复用动作 | 强类型 `inputSchema` / `outputSchema`；可选 `cli.command` / `exposeAsTool` / `promptSnippet` / `promptGuidelines` / `scope` / `idempotent` |
 | `ctx.tool(spec)` | 注册仅对模型可见的工具 | 同样支持 `scope` 与提示词投射字段 |
