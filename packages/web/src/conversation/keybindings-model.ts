@@ -119,18 +119,15 @@ export function resolveEffectiveThinkingLevel(levels: ReadonlyArray<string>, act
   return levels.includes(activeLevel) ? activeLevel : fallback
 }
 
-/** When the ModelPicker opens or its filter changes, the highlight index
- * lands on the effective model first; on a miss, on the first item. */
+/** When the ModelPicker opens with no search filter, leave activeIndex at -1
+ * so no row carries a forced hover/focus highlight by default; once the user
+ * types a search query, pre-highlight the first match for instant Enter. */
 export function initialModelActiveIndex(
   models: ReadonlyArray<{ id: string }>,
-  currentModelId: string | undefined,
+  query = '',
 ): number {
   if (models.length === 0) return -1
-  if (currentModelId !== undefined && currentModelId !== '') {
-    const idx = models.findIndex((model) => model.id === currentModelId)
-    if (idx >= 0) return idx
-  }
-  return 0
+  return query.trim() !== '' ? 0 : -1
 }
 
 /** Step the ModelPicker highlight index cyclically with up/down arrows. */

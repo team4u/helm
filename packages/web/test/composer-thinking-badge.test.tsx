@@ -168,15 +168,24 @@ test('DOM: popover rows display the short model name consistent with the trigger
       name: row.querySelector('.composer-model-row-name')?.textContent ?? '',
       source: row.querySelector('.composer-model-row-source')?.textContent ?? '',
       title: row.querySelector<HTMLButtonElement>('.composer-model-row-main')?.title ?? '',
+      isCurrent: row.querySelector<HTMLButtonElement>('.composer-model-row-main')?.getAttribute('aria-current') === 'true',
+      hasCheck: row.querySelector('.composer-model-row-check') !== null,
+      hasActiveBg: row.classList.contains('popover-item-active'),
     }))
     const deepseek = rows.find((r) => r.title.includes('magpie/auto/deepseek-v4.1-flash'))
     const gemini = rows.find((r) => r.title.includes('magpie/antigravity-bridge/gemini-4-neon'))
     assert.ok(deepseek, 'deepseek row must render with full canonical id in title')
     assert.equal(deepseek.name, 'deepseek-v4.1-flash')
     assert.equal(deepseek.source, 'magpie/auto')
+    assert.equal(deepseek.isCurrent, true)
+    assert.equal(deepseek.hasCheck, true)
+    assert.equal(deepseek.hasActiveBg, false, 'current model row must not get a default popover-item-active highlight')
     assert.ok(gemini, 'gemini row must render with full canonical id in title')
     assert.equal(gemini.name, 'gemini-4-neon')
     assert.equal(gemini.source, 'magpie/antigravity-bridge')
+    assert.equal(gemini.isCurrent, false)
+    assert.equal(gemini.hasCheck, false)
+    assert.equal(gemini.hasActiveBg, false)
   } finally {
     unmount()
   }
