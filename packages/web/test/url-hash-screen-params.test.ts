@@ -467,7 +467,7 @@ test('overview 筛选参数：sp.* 写入默认 replace 不入栈，跨坐标 pu
 // skills 作用域环境：物理坐标 (node, cwd) 沿 agent 待命目标的顶层查询参数先例
 // ---------------------------------------------------------------------------
 
-test('skills 作用域环境：深链还原、openTarget replace 切换、详情开合保留作用域、后退/前进可恢复', { timeout: 60_000 }, async (t) => {
+test('skills 作用域环境：深链还原、作用域切换 push、详情开合保留作用域、后退/前进可恢复', { timeout: 60_000 }, async (t) => {
   stubFetch()
   t.after(() => (globalThis.fetch as unknown as { restore: () => void }).restore())
   snapshotDelayMs = 0
@@ -509,21 +509,22 @@ test('skills 作用域环境：深链还原、openTarget replace 切换、详情
       '深链作用域环境从地址栏还原',
     )
 
-    // 作用域切换（环境变化，agent 草稿环境先例）默认 replace，不新增历史记录
+    // 作用域切换（环境变化）是数据源级变化：push 入栈（返回键回上一作用域）
     const before = probe()
     await act(async () => {
       openTargetFn!({ kind: 'skills', nodeId: 'local', cwd: '/root/code/helm' })
     })
     await settle()
     let current = probe()
-    assert.equal(current.historyLength, before.historyLength, '仅作用域环境变化 replace')
+    assert.equal(current.historyLength, before.historyLength + 1, '作用域切换 push 入栈')
     assert.equal(current.hash, '#/settings/skills?node=local&cwd=%2Froot%2Fcode%2Fhelm')
 
-    // 回 Hub：环境清空，地址栏收敛回无参形态
+    // 回 Hub：环境清空同样 push，地址栏收敛回无参形态
     await act(async () => {
       openTargetFn!({ kind: 'skills' })
     })
     await settle()
+    assert.equal(window.history.length, before.historyLength + 2, '回 Hub 亦 push')
     assert.equal(window.location.hash, '#/settings/skills')
 
     // 带作用域打开详情（SkillCenter 的 handleSelectSkill 同构入口）push 入栈
@@ -537,7 +538,7 @@ test('skills 作用域环境：深链还原、openTarget replace 切换、详情
       current.primaryTarget,
       { kind: 'skills', skillId: 'deploy-runbook', nodeId: 'remote-1', cwd: '/remote/work' },
     )
-    assert.equal(current.historyLength, before.historyLength + 1, '打开详情 push 入栈')
+    assert.equal(current.historyLength, before.historyLength + 3, '打开详情 push 入栈（两次作用域切换之后）')
 
     // 关闭详情（保留作用域环境）后浏览器后退：还原 Hub 列表；前进还原带作用域的列表
     await act(async () => {
@@ -571,4 +572,3 @@ test('skills 作用域环境：深链还原、openTarget replace 切换、详情
     host.remove()
   }
 })
-

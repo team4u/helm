@@ -1423,11 +1423,13 @@ test('skill-scope-model: buildSkillScopeCandidates 会话在前按 updatedAt 倒
     // 与会话 2 同坐标（不同会话）：去重
     convSummary(4, { nodeId: 'remote-1', cwd: '/remote/work', updatedAt: 5 }),
   ]
-  const profiles: Array<Pick<Profile, 'id' | 'nodeId' | 'cwd'>> = [
-    { id: 'assistant', nodeId: undefined, cwd: '/tmp' },            // 显式 cwd，local
-    { id: 'coder', nodeId: 'remote-1', cwd: '/remote/work' },       // 与会话 2 同坐标：去重
-    { id: 'wanderer', nodeId: 'remote-2', cwd: undefined },          // 无显式 cwd：不产候选
-    { id: 'blank', nodeId: '  ', cwd: '   ' },                       // 空白：不产候选
+  const profiles: Array<Pick<Profile, 'id' | 'nodeId' | 'cwd' | 'runtime'>> = [
+    { id: 'assistant', nodeId: undefined, cwd: '/tmp', runtime: undefined },          // 显式 cwd，local
+    { id: 'coder', nodeId: 'remote-1', cwd: '/remote/work', runtime: undefined },     // 与会话 2 同坐标：去重
+    { id: 'wanderer', nodeId: 'remote-2', cwd: undefined, runtime: undefined },       // 无显式 cwd：不产候选
+    { id: 'blank', nodeId: '  ', cwd: '   ', runtime: undefined },                    // 空白：不产候选
+    // 外部运行时角色（如 Herdr CLI pane）：不注入 Helmx 技能目录，不产「角色来源」候选
+    { id: 'herdr-runner', nodeId: 'remote-3', cwd: '/external/work', runtime: { kind: 'herdr', agent: 'claude' } },
   ]
   const candidates = buildSkillScopeCandidates(conversations, profiles)
   assert.deepEqual(
@@ -1506,6 +1508,8 @@ test('skill-center-model: source=node 技能独立分类（tab、计数、徽章
 
 test('skill-scope-api: parseSkillCatalogResult 边界校验（合法全形状 / 各字段非法显式拒绝）', { timeout: 60_000 }, () => {
   const valid = parseSkillCatalogResult({
+    nodeId: 'remote-1',
+    cwd: '/remote/work',
     skills: [
       { id: 'hub-skill', name: 'Hub', references: ['references/a.md'], managedByPlugin: 'builtin:profile' },
       { id: 'node-skill', name: '节点', references: [], source: 'node', description: '来自节点工作区' },
@@ -1518,27 +1522,32 @@ test('skill-scope-api: parseSkillCatalogResult 边界校验（合法全形状 / 
   assert.deepEqual(valid.shadowedNodeSkillIds, ['dup'])
   assert.equal(valid.nodeUnavailable, '目标节点 remote-1 当前离线')
 
-  // 可省字段缺省
-  const minimal = parseSkillCatalogResult({ skills: [] })
+  // 可省字段缺省（echo 坐标为 required）
+  const minimal = parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: [] })
   assert.deepEqual(minimal, { skills: [], shadowedNodeSkillIds: [] })
 
   // 非法形状显式拒绝（绝不静默截断/编造）
   assert.throws(() => parseSkillCatalogResult(null), /skill_catalog/)
-  assert.throws(() => parseSkillCatalogResult({}), /skills/)
-  assert.throws(() => parseSkillCatalogResult({ skills: 'x' }), /skills/)
-  assert.throws(() => parseSkillCatalogResult({ skills: [{ id: '', name: 'x', references: [] }] }), /id/)
-  assert.throws(() => parseSkillCatalogResult({ skills: [{ id: 'a', name: 1, references: [] }] }), /name/)
-  assert.throws(() => parseSkillCatalogResult({ skills: [{ id: 'a', name: 'x', references: [1] }] }), /references/)
-  assert.throws(() => parseSkillCatalogResult({ skills: [], shadowedNodeSkillIds: [1] }), /shadowedNodeSkillIds/)
-  assert.throws(() => parseSkillCatalogResult({ skills: [], nodeUnavailable: 5 }), /nodeUnavailable/)
-  assert.throws(() => parseSkillCatalogResult({ skills: [{ id: 'a', name: 'x', references: [], source: 'weird' }] }), /source/)
+  assert.throws(() => parseSkillCatalogResult({}), /nodeId/)
+  assert.throws(() => parseSkillCatalogResult({ skills: [] }), /nodeId/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: '  ', cwd: '/w', skills: [] }), /nodeId/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', skills: [] }), /cwd/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: 5, skills: [] }), /cwd/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w' }), /skills/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: 'x' }), /skills/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: [{ id: '', name: 'x', references: [] }] }), /id/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: [{ id: 'a', name: 1, references: [] }] }), /name/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: [{ id: 'a', name: 'x', references: [1] }] }), /references/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: [], shadowedNodeSkillIds: [1] }), /shadowedNodeSkillIds/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: [], nodeUnavailable: 5 }), /nodeUnavailable/)
+  assert.throws(() => parseSkillCatalogResult({ nodeId: 'local', cwd: '/w', skills: [{ id: 'a', name: 'x', references: [], source: 'weird' }] }), /source/)
 })
 
 test('skill-scope-api: fetch/read 调用形状（pluginId、actionId、input 边界）', { timeout: 60_000 }, async () => {
   const calls: Array<{ pluginId: string; actionId: string; input: unknown }> = []
   const invoke = async (pluginId: string, actionId: string, input: unknown): Promise<unknown> => {
     calls.push({ pluginId, actionId, input })
-    if (actionId === 'skill_catalog') return { skills: [], shadowedNodeSkillIds: [] }
+    if (actionId === 'skill_catalog') return { nodeId: 'remote-1', cwd: '/w', skills: [], shadowedNodeSkillIds: [] }
     return { text: '# SKILL' }
   }
   const catalog = await fetchScopedSkillCatalog(invoke, { nodeId: 'remote-1', cwd: '/w' })
@@ -1590,7 +1599,14 @@ function stubSkillActions(overrides: Partial<Pick<ScopeFetchStub, 'catalogRespon
   const calls: CapturedActionCall[] = []
   const stub: ScopeFetchStub = {
     calls,
-    catalogResponse: overrides.catalogResponse ?? (() => ({ skills: [], shadowedNodeSkillIds: [] })),
+    catalogResponse:
+      overrides.catalogResponse ??
+      ((input: Record<string, unknown>) => ({
+        nodeId: String(input.nodeId ?? ''),
+        cwd: String(input.cwd ?? ''),
+        skills: [],
+        shadowedNodeSkillIds: [],
+      })),
     readResponse: overrides.readResponse ?? (() => ({ text: '' })),
     restore: () => {
       globalThis.fetch = originalFetch
@@ -1662,6 +1678,8 @@ test('SkillCenter: 作用域深链渲染合并目录、节点分类与显式诊�
     catalogResponse: (input) => {
       assert.deepEqual(input, { nodeId: 'remote-1', cwd: '/remote/work' }, '目录请求携带物理坐标')
       return {
+        nodeId: 'remote-1',
+        cwd: '/remote/work',
         skills: [scopedHubSkill, scopedNodeSkill],
         shadowedNodeSkillIds: ['code-review'],
         nodeUnavailable: '目标节点 remote-1 当前离线，未能读取其工作区技能库。',
@@ -1701,6 +1719,8 @@ test('SkillCenter: 作用域深链渲染合并目录、节点分类与显式诊�
 test('SkillCenter: 节点技能详情经 action 读取并展示节点来源；关闭详情保留作用域参数', { timeout: 60_000 }, async () => {
   const stub = stubSkillActions({
     catalogResponse: () => ({
+      nodeId: 'remote-1',
+      cwd: '/remote/work',
       skills: [scopedHubSkill, scopedNodeSkill],
       shadowedNodeSkillIds: [],
     }),
@@ -1764,11 +1784,15 @@ test('SkillCenter: 节点技能详情经 action 读取并展示节点来源；�
 
 test('SkillCenter: 作用域目录加载失败显式报错并可重试；Hub 默认作用域不经 action', { timeout: 60_000 }, async () => {
   const stub = stubSkillActions({
-    catalogResponse: () => ({ skills: [], shadowedNodeSkillIds: [] }),
+    catalogResponse: () => ({ nodeId: 'local', cwd: '/local/work', skills: [], shadowedNodeSkillIds: [] }),
   })
   // 先用失败响应渲染
   const originalCatalog = stub.catalogResponse
-  stub.catalogResponse = () => ({ skills: [{ id: 'broken', name: 'x', references: 'not-an-array' }] })
+  stub.catalogResponse = () => ({
+    nodeId: 'local',
+    cwd: '/local/work',
+    skills: [{ id: 'broken', name: 'x', references: 'not-an-array' }],
+  })
   try {
     const store = makeScopedStore({ nodeId: 'local', cwd: '/local/work' })
     const { host, root } = await renderSkillCenter(store)
@@ -1834,7 +1858,12 @@ test('SkillCenter: 切换作用域的代数竞争保护——慢的旧目录不�
     gates.set(key, { promise, resolve })
     await promise
     return new Response(
-      JSON.stringify({ skills: catalogSkills[key] ?? [], shadowedNodeSkillIds: [] }),
+      JSON.stringify({
+        nodeId: String(body.input?.nodeId ?? ''),
+        cwd: String(body.input?.cwd ?? ''),
+        skills: catalogSkills[key] ?? [],
+        shadowedNodeSkillIds: [],
+      }),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     )
   }) as typeof fetch

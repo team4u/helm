@@ -535,6 +535,15 @@ const isSameAgentSlot = (a: ResolvedTarget | null, b: ResolvedTarget | null): bo
   return a.profileId === b.profileId
 }
 
+/** Skills center physical-scope switch (nodeId/cwd change): a data-source
+ * change, not a filter keystroke — push so browser back returns to the
+ * previous scope instead of leaving the center. Drawer-only skillId changes
+ * keep the center-slot replace semantics below. */
+const isSkillsScopeChanged = (a: ResolvedTarget | null, b: ResolvedTarget | null): boolean => {
+  if (a === null || b === null || a.kind !== 'skills' || b.kind !== 'skills') return false
+  return (a.nodeId ?? undefined) !== (b.nodeId ?? undefined) || (a.cwd ?? undefined) !== (b.cwd ?? undefined)
+}
+
 /** The same center coordinate (both kinds being that first-level full-screen center) is the same primary-stage slot; drawer switches or closes are not coordinate-level switches. */
 const isSamePrimaryCenterSlot = (a: ResolvedTarget | null, b: ResolvedTarget | null): boolean => {
   if (a === null || b === null) return a === b
@@ -589,6 +598,10 @@ export function shouldPushLocationHistory(prev: WorkspaceLocationState, next: Wo
   if (isOpeningDrawer(prev.primaryTarget, next.primaryTarget)) {
     return true
   }
+  // Skills center scope switches (primary or split pane) are coordinate-level
+  // data-source changes -> push (back returns to the previous scope).
+  if (isSkillsScopeChanged(prev.primaryTarget, next.primaryTarget)) return true
+  if (isSkillsScopeChanged(prev.splitTarget, next.splitTarget)) return true
   // Params-only changes (screen coordinate unchanged) or switching/closing inside a center drawer -> replace, so filter keystrokes do not pollute the back stack; force a push explicitly at the call site (the setScreenParams push flag).
   if (isTargetSlotChanged(prev.primaryTarget, next.primaryTarget)) return true
   if (isTargetSlotChanged(prev.splitTarget, next.splitTarget)) return true

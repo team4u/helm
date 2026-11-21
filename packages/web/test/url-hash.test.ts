@@ -572,7 +572,7 @@ test('skills scope env: 顶层 node/cwd 归主屏技能中心，split 值内编�
   assert.deepEqual(away.primaryTarget, { kind: 'conversation', conversationId: 1 })
 })
 
-test('skills scope env: 仅环境变化 replace 不入栈；isSameResolvedTarget 逐坐标比较', { timeout: 60_000 }, () => {
+test('skills scope env: 作用域切换 push 入栈（数据源级变化）；isSameResolvedTarget 逐坐标比较', { timeout: 60_000 }, () => {
   const base = conversation(1)
   const skillsTarget = (env: { nodeId?: string; cwd?: string }, skillId?: string) => ({
     kind: 'skills' as const,
@@ -583,9 +583,9 @@ test('skills scope env: 仅环境变化 replace 不入栈；isSameResolvedTarget
   const scoped = { ...base, primaryTarget: skillsTarget({ nodeId: 'local', cwd: '/w' }) }
   const otherScope = { ...base, primaryTarget: skillsTarget({ nodeId: 'remote', cwd: '/w' }) }
   const hubScope = { ...base, primaryTarget: skillsTarget({}) }
-  // 同技能中心坐标仅作用域环境变化：replace（agent 草稿环境先例）
-  assert.equal(shouldPushLocationHistory(scoped, otherScope), false)
-  assert.equal(shouldPushLocationHistory(scoped, hubScope), false)
+  // 作用域环境变化是数据源级切换：push（返回键回上一作用域而非退出技能中心）
+  assert.equal(shouldPushLocationHistory(scoped, otherScope), true)
+  assert.equal(shouldPushLocationHistory(scoped, hubScope), true)
   // isSameResolvedTarget 感知环境差异
   assert.equal(isSameResolvedTarget(scoped.primaryTarget, otherScope.primaryTarget), false)
   assert.equal(isSameResolvedTarget(scoped.primaryTarget, hubScope.primaryTarget), false)
