@@ -1104,11 +1104,21 @@ button.attachment-chip:disabled {
   flex-direction: column;
   overflow: hidden;
 }
+.composer-model-popover > .popover-item,
+.composer-model-search-bar {
+  flex-shrink: 0;
+}
 .composer-model-scroll {
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
+  gap: 2px;
+}
+/* 禁止列表子项在 flex 纵列内被压缩（移动端键盘弹出压缩 60dvh 时，压缩行高会导致双行模型来源文字溢出并被下一行背景遮挡） */
+.composer-model-scroll > * {
+  flex-shrink: 0;
 }
 /* 模型行：左侧上下双行（上=模型名、下=供应商/路由前缀）避免与右侧思考档位争抢同一行宽度；
  * 窄屏多档位时允许档位条折行落到第二行，保证模型名称始终完整可读。 */
@@ -1118,8 +1128,19 @@ button.attachment-chip:disabled {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 4px 10px;
-  padding: 4px 6px 4px 0;
+  padding: 5px 6px 5px 0;
   white-space: nowrap;
+}
+.composer-model-popover .popover-item.composer-model-row:hover,
+.composer-model-popover .popover-item.composer-model-row.popover-item-active {
+  background: var(--nav-list-hover-bg);
+  color: var(--fg);
+}
+@media (hover: none) {
+  .composer-model-popover .popover-item.composer-model-row:hover:not(.popover-item-active) {
+    background: transparent;
+    color: var(--fg-secondary);
+  }
 }
 .composer-model-row-main {
   flex: 1 1 160px;
@@ -1139,13 +1160,29 @@ button.attachment-chip:disabled {
   text-align: left;
   cursor: pointer;
 }
+.composer-model-row-name-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  min-width: 0;
+}
 .composer-model-row-name {
   display: block;
+  min-width: 0;
   max-width: 100%;
   line-height: 1.3;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.composer-model-row-main[aria-current='true'] .composer-model-row-name {
+  font-weight: 500;
+  color: var(--fg);
+}
+.composer-model-row-check {
+  flex-shrink: 0;
+  color: var(--accent);
 }
 .composer-model-popover .popover-item-meta.composer-model-row-source {
   display: block;
