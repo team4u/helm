@@ -1423,11 +1423,13 @@ test('skill-scope-model: buildSkillScopeCandidates 会话在前按 updatedAt 倒
     // 与会话 2 同坐标（不同会话）：去重
     convSummary(4, { nodeId: 'remote-1', cwd: '/remote/work', updatedAt: 5 }),
   ]
-  const profiles: Array<Pick<Profile, 'id' | 'nodeId' | 'cwd'>> = [
-    { id: 'assistant', nodeId: undefined, cwd: '/tmp' },            // 显式 cwd，local
-    { id: 'coder', nodeId: 'remote-1', cwd: '/remote/work' },       // 与会话 2 同坐标：去重
-    { id: 'wanderer', nodeId: 'remote-2', cwd: undefined },          // 无显式 cwd：不产候选
-    { id: 'blank', nodeId: '  ', cwd: '   ' },                       // 空白：不产候选
+  const profiles: Array<Pick<Profile, 'id' | 'nodeId' | 'cwd' | 'runtime'>> = [
+    { id: 'assistant', nodeId: undefined, cwd: '/tmp', runtime: undefined },          // 显式 cwd，local
+    { id: 'coder', nodeId: 'remote-1', cwd: '/remote/work', runtime: undefined },     // 与会话 2 同坐标：去重
+    { id: 'wanderer', nodeId: 'remote-2', cwd: undefined, runtime: undefined },       // 无显式 cwd：不产候选
+    { id: 'blank', nodeId: '  ', cwd: '   ', runtime: undefined },                    // 空白：不产候选
+    // 外部运行时角色（如 Herdr CLI pane）：不注入 Helmx 技能目录，不产「角色来源」候选
+    { id: 'herdr-runner', nodeId: 'remote-3', cwd: '/external/work', runtime: { kind: 'herdr', agent: 'claude' } },
   ]
   const candidates = buildSkillScopeCandidates(conversations, profiles)
   assert.deepEqual(

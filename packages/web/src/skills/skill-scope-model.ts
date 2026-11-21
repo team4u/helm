@@ -53,10 +53,15 @@ export function conversationSkillScope(
  * 作用域候选去重列表：会话坐标在前（按 updatedAt 倒序，最近使用的最先），
  * 角色显式 cwd（profile.cwd 有值）在后；同一 (nodeId, cwd) 只保留一个候选，
  * 会话来源优先。Hub 默认项不由本函数产出（恒为选择器第一项）。
+ *
+ * 外部运行时角色（profile.runtime 已设，如 Herdr CLI pane）被排除：其
+ * 提示词是原始请求文本，不注入 Helmx 技能目录（含节点合并目录），
+ * 「角色来源」候选标注会失真；该类工作区坐标仍可经会话候选或手填
+ * 深链浏览（合并目录 action 对任意坐标照常可用）。
  */
 export function buildSkillScopeCandidates(
   conversations: ReadonlyArray<Pick<ConversationSummary, 'nodeId' | 'cwd' | 'updatedAt'>>,
-  profiles: ReadonlyArray<Pick<Profile, 'nodeId' | 'cwd'>>,
+  profiles: ReadonlyArray<Pick<Profile, 'nodeId' | 'cwd' | 'runtime'>>,
 ): SkillScopeCandidate[] {
   const seen = new Set<string>()
   const out: SkillScopeCandidate[] = []
@@ -72,6 +77,7 @@ export function buildSkillScopeCandidates(
     out.push({ ...scope, origin: 'conversation' })
   }
   for (const profile of profiles) {
+    if (profile.runtime !== undefined) continue
     const cwd = (profile.cwd ?? '').trim()
     if (cwd === '') continue
     const scope: SkillScope = { nodeId: normalizeSkillScopeNodeId(profile.nodeId), cwd }
