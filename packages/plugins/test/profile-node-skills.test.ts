@@ -664,3 +664,234 @@ test('node catalog name/description are redacted before entering the system prom
   assert.ok(catalog.includes('[REDACTED]'))
   assert.ok(!catalog.includes('sk-secret-value'))
 })
+
+// ---------------------------------------------------------------------------
+// 坐标作用域 action：skill_catalog / skill_read（scope ACL + 输入边界）
+// ---------------------------------------------------------------------------
+
+/** 触发 action 并断言失败，返回 HelmxError（与 loadSkillErr 同源校验）。 */
+async function actionErr(
+  env: Env,
+  actionId: 'skill_catalog' | 'skill_read',
+  input: unknown,
+  context?: { conversationId: number },
+): Promise<HelmxError> {
+  try {
+    await env.host.invokeAction('builtin:profile', actionId, input, context)
+  } catch (err) {
+    assert.ok(err instanceof HelmxError, `expected HelmxError, got: ${String(err)}`)
+    return err
+  }
+  assert.fail(`expected action ${actionId} to throw`)
+}
+
+test('skill_catalog / skill_read action manifests: exposeToPrompt:false, scope excludes sessions, idempotent, no cli.command override', { timeout: 60_000 }, async (t) => {
+  const env = await makeEnv()
+  t.after(() => env.close())
+  const manifests = env.host
+    .listActions()
+    .filter((m) => m.pluginId === 'builtin:profile' && (m.id === 'skill_catalog' || m.id === 'skill_read'))
+  assert.equal(manifests.length, 2, 'both actions declared on the enabled plugin')
+  for (const manifest of manifests) {
+    // exposeToPrompt:false 由内核 renderActionDirectory 统一跳过（kernel 通用行为已由
+    // kernel 测试锁定），此处锁定 manifest 结构不变量：不进 <available_actions> 目录。
+    assert.equal(manifest.exposeToPrompt, false, `${manifest.id} must stay out of the model prompt catalog`)
+    // scope:{conversationIds:[]} 是真正的 ACL：显式空数组排除一切带 conversationId 的调用
+    // （run_action / workflow / HTTP body.conversationId）——模型连 manifest 都拿不到。
+    assert.deepEqual(manifest.scope, { conversationIds: [] }, `${manifest.id} excludes every session-context call`)
+    assert.equal(manifest.idempotent, true, `${manifest.id} is a read-only idempotent action`)
+    assert.notEqual(manifest.exposeAsTool, true, `${manifest.id} is not a direct tool`)
+    assert.equal(manifest.cli, undefined, `${manifest.id} keeps the default dynamic CLI path (no skills list/read conflict)`)
+  }
+})
+
+test('scope ACL: every conversation-carrying call is rejected 403 before the handler (run_action / workflow / HTTP body.conversationId paths)', { timeout: 60_000 }, async (t) => {
+  const ws = mkdtempSync(join(tmpdir(), 'helmx-node-skills-ws-'))
+  t.after(() => rmSync(ws, { recursive: true, force: true }))
+  writeNodeSkill(ws, 'ws-skill', SKILL_MD('WS Skill', 'never reached through a session context'))
+  const env = await makeEnv()
+  t.after(() => env.close())
+  env.backend.conversations.set(1, makeConversation(1, { cwd: ws }))
+
+  // 会话上下文（无论是否携带显式坐标）一律 403——会话坐标绑定路径已按安全裁定移除
+  for (const input of [{}, { nodeId: 'local' }, { nodeId: 'local', cwd: ws }]) {
+    const err = await actionErr(env, 'skill_catalog', input, { conversationId: 1 })
+    assert.equal(err.code, 'conversation_scope_violation', `session-context call rejected: ${JSON.stringify(input)}`)
+    assert.equal(err.status, 403)
+  }
+  const steered = await actionErr(env, 'skill_read', { skillId: 'ws-skill', nodeId: 'local', cwd: ws }, { conversationId: 1 })
+  assert.equal(steered.code, 'conversation_scope_violation')
+  assert.equal(steered.status, 403)
+  // 失效会话目标 → scope 判定前 getConversation 显式 404（不猜测）
+  const missing = await actionErr(env, 'skill_catalog', {}, { conversationId: 404 })
+  assert.equal(missing.code, 'not_found')
+})
+
+test('skill_catalog: context-free calls require the explicit pair; relative cwd, extra properties and unregistered nodeIds are rejected', { timeout: 60_000 }, async (t) => {
+  const ws = mkdtempSync(join(tmpdir(), 'helmx-node-skills-ws-'))
+  t.after(() => rmSync(ws, { recursive: true, force: true }))
+  writeNodeSkill(ws, 'explicit-skill', SKILL_MD('Explicit', 'discovered via explicit coordinates'))
+  // 默认桩对一切 nodeId 报在线；显式关闭后 ghost-node 在边界被拒（local 恒不查 isOnline）
+  const env = await makeEnv({ online: () => false })
+  t.after(() => env.close())
+
+  for (const input of [{}, { nodeId: 'local' }, { cwd: ws }]) {
+    const err = await actionErr(env, 'skill_catalog', input)
+    assert.equal(err.code, 'validation_error', `missing half of the pair rejected: ${JSON.stringify(input)}`)
+  }
+  const relative = await actionErr(env, 'skill_catalog', { nodeId: 'local', cwd: 'relative/path' })
+  assert.equal(relative.code, 'validation_error')
+  assert.ok(relative.message.includes('absolute'))
+  const extra = await actionErr(env, 'skill_catalog', { nodeId: 'local', cwd: ws, bogus: true })
+  assert.equal(extra.code, 'validation_error', 'input boundary: additionalProperties rejected')
+  // 未注册 nodeId（与已断线不可区分）在输入边界显式 400，绝不进入扫描
+  const ghost = await actionErr(env, 'skill_catalog', { nodeId: 'ghost-node', cwd: ws })
+  assert.equal(ghost.code, 'validation_error')
+  assert.ok(ghost.message.includes('not currently registered'), `honest registration diagnostic: ${ghost.message}`)
+  assert.deepEqual(env.backend.envCalls, [], 'an unregistered nodeId never reaches executionEnv')
+
+  const catalog = (await env.host.invokeAction('builtin:profile', 'skill_catalog', { nodeId: 'local', cwd: ws })) as {
+    nodeId: string
+    cwd: string
+    skills: SkillSummary[]
+    shadowedNodeSkillIds: string[]
+    nodeUnavailable?: string
+  }
+  assert.equal(catalog.nodeId, 'local')
+  assert.equal(catalog.cwd, ws)
+  assert.ok(catalog.skills.some((s) => s.id === 'explicit-skill' && s.source === 'node'))
+  assert.deepEqual(catalog.shadowedNodeSkillIds, [])
+  assert.ok(catalog.nodeUnavailable === undefined)
+})
+
+test('skill_catalog: same-name node skill is shadowed — the Hub version stays effective and shadowedNodeSkillIds reports it explicitly', { timeout: 60_000 }, async (t) => {
+  const ws = mkdtempSync(join(tmpdir(), 'helmx-node-skills-ws-'))
+  t.after(() => rmSync(ws, { recursive: true, force: true }))
+  writeNodeSkill(ws, 'shared-name', SKILL_MD('Node Variant', 'node description must not surface'))
+  writeNodeSkill(ws, 'node-only', SKILL_MD('Node Only', 'node supplement'))
+  const env = await makeEnv()
+  t.after(() => env.close())
+  writeHubSkill(env.dataDir, 'shared-name', SKILL_MD('Hub Variant', 'hub description wins'))
+
+  const catalog = (await env.host.invokeAction('builtin:profile', 'skill_catalog', { nodeId: 'local', cwd: ws })) as {
+    skills: SkillSummary[]
+    shadowedNodeSkillIds: string[]
+  }
+  const shared = catalog.skills.find((s) => s.id === 'shared-name')
+  assert.ok(shared !== undefined)
+  assert.equal(shared.name, 'Hub Variant', 'the Hub version is the effective one')
+  assert.notEqual(shared.source, 'node')
+  assert.ok(!catalog.skills.some((s) => s.id === 'shared-name' && s.source === 'node'), 'node variant never enters the merged catalog')
+  assert.deepEqual(catalog.shadowedNodeSkillIds, ['shared-name'], 'the shadowed node id is reported explicitly')
+  assert.ok(catalog.skills.some((s) => s.id === 'node-only' && s.source === 'node'), 'non-shadowed node skills still supplement')
+})
+
+test('skill_catalog: an offline remote nodeId is rejected at the input boundary; a post-boundary offline race still surfaces nodeUnavailable', { timeout: 60_000 }, async (t) => {
+  const ws = mkdtempSync(join(tmpdir(), 'helmx-node-skills-ws-'))
+  t.after(() => rmSync(ws, { recursive: true, force: true }))
+  writeNodeSkill(ws, 'remote-skill', SKILL_MD('Remote', 'unreachable while offline'))
+  const env = await makeEnv({ online: () => false })
+  t.after(() => env.close())
+  writeHubSkill(env.dataDir, 'hub-skill', SKILL_MD('Hub Skill', 'hub side'))
+
+  // 未注册/已断线（isOnline 语义下不可区分）→ 输入边界 400，诚实措辞不谎称能区分
+  const rejected = await actionErr(env, 'skill_catalog', { nodeId: 'remote-1', cwd: ws })
+  assert.equal(rejected.code, 'validation_error')
+  assert.ok(rejected.message.includes('not currently registered'))
+  assert.deepEqual(env.backend.envCalls, [], 'offline stops before entering executionEnv')
+
+  // TOCTOU 竞态：边界核验时在线、扫描预检时掉线 → 扫描层显式 nodeUnavailable（Hub 目录仍返回）
+  let onlineCalls = 0
+  const envRace = await makeEnv({ online: () => (onlineCalls += 1) === 1 })
+  t.after(() => envRace.close())
+  writeHubSkill(envRace.dataDir, 'hub-skill', SKILL_MD('Hub Skill', 'still listed through the race'))
+  const catalog = (await envRace.host.invokeAction('builtin:profile', 'skill_catalog', { nodeId: 'remote-1', cwd: ws })) as {
+    nodeId: string
+    skills: SkillSummary[]
+    nodeUnavailable?: string
+  }
+  assert.equal(onlineCalls, 2, 'boundary precheck + scan precheck are the two registration probes')
+  assert.ok(catalog.nodeUnavailable !== undefined, 'the post-boundary race surfaces an explicit diagnostic')
+  assert.ok(catalog.nodeUnavailable.includes('remote-1'))
+  assert.ok(catalog.skills.some((s) => s.id === 'hub-skill'), 'Hub skills are still returned')
+  assert.ok(!catalog.skills.some((s) => s.id === 'remote-skill'))
+  assert.deepEqual(envRace.backend.envCalls, [], 'offline stops before entering executionEnv')
+})
+
+test('skill_read: Hub hit wins first; node-only ids read live from the node (SKILL.md and references); boundary rejections', { timeout: 60_000 }, async (t) => {
+  const ws = mkdtempSync(join(tmpdir(), 'helmx-node-skills-ws-'))
+  t.after(() => rmSync(ws, { recursive: true, force: true }))
+  writeNodeSkill(ws, 'shared-name', SKILL_MD('Node Variant', 'unreachable node body'))
+  writeNodeSkill(ws, 'node-only', SKILL_MD('Node Only', 'node body'), { 'references/guide.md': '# node guide\n' })
+  const env = await makeEnv()
+  t.after(() => env.close())
+  writeHubSkill(env.dataDir, 'shared-name', SKILL_MD('Hub Variant', 'hub body wins'))
+
+  const hubRead = (await env.host.invokeAction('builtin:profile', 'skill_read', { skillId: 'shared-name', nodeId: 'local', cwd: ws })) as { text: string }
+  assert.ok(hubRead.text.includes('Hub Variant'), 'Hub catalog hit reads the Hub version first')
+  assert.ok(!hubRead.text.includes('Node Variant'))
+  const callsAfterHubRead = env.backend.envCalls.length
+  await env.host.invokeAction('builtin:profile', 'skill_read', { skillId: 'shared-name', nodeId: 'local', cwd: ws })
+  assert.equal(env.backend.envCalls.length, callsAfterHubRead, 'Hub-resolved reads never touch the node env')
+
+  const nodeRead = (await env.host.invokeAction('builtin:profile', 'skill_read', { skillId: 'node-only', nodeId: 'local', cwd: ws })) as { text: string }
+  assert.ok(nodeRead.text.includes('Node Only'))
+  const refRead = (await env.host.invokeAction('builtin:profile', 'skill_read', { skillId: 'node-only', path: 'references/guide.md', nodeId: 'local', cwd: ws })) as { text: string }
+  assert.ok(refRead.text.includes('# node guide'))
+
+  const notFound = await actionErr(env, 'skill_read', { skillId: 'missing-everywhere', nodeId: 'local', cwd: ws })
+  assert.equal(notFound.code, 'not_found')
+  assert.equal(notFound.status, 404)
+  const traversal = await actionErr(env, 'skill_read', { skillId: 'node-only', path: '../escape.md', nodeId: 'local', cwd: ws })
+  assert.equal(traversal.code, 'validation_error')
+  assert.equal(traversal.status, 400)
+})
+
+test('skill_read: session-context calls are excluded by scope; context-free explicit coordinates are the only path', { timeout: 60_000 }, async (t) => {
+  const wsA = mkdtempSync(join(tmpdir(), 'helmx-node-skills-ws-'))
+  const wsB = mkdtempSync(join(tmpdir(), 'helmx-node-skills-ws-'))
+  t.after(() => {
+    rmSync(wsA, { recursive: true, force: true })
+    rmSync(wsB, { recursive: true, force: true })
+  })
+  writeNodeSkill(wsA, 'ws-a-skill', SKILL_MD('A Skill', 'from workspace A'))
+  writeNodeSkill(wsB, 'ws-b-skill', SKILL_MD('B Skill', 'from workspace B'))
+  // online:()=>false 使未注册 nodeId 在边界被拒；local 靶点恒不查 isOnline
+  const env = await makeEnv({ online: () => false })
+  t.after(() => env.close())
+  env.backend.conversations.set(1, makeConversation(1, { cwd: wsA }))
+
+  // 会话上下文（无论 body 给什么坐标）一律 403——Profile.skills 白名单语义只归 load_skill
+  for (const input of [{ skillId: 'ws-a-skill' }, { skillId: 'ws-b-skill', nodeId: 'local', cwd: wsB }]) {
+    const err = await actionErr(env, 'skill_read', input, { conversationId: 1 })
+    assert.equal(err.code, 'conversation_scope_violation')
+    assert.equal(err.status, 403)
+  }
+
+  // 无会话上下文 + 显式成对坐标：人类调用方自由选择靶点（CLI --current 由客户端解析坐标后走此路径）
+  const readA = (await env.host.invokeAction('builtin:profile', 'skill_read', { skillId: 'ws-a-skill', nodeId: 'local', cwd: wsA })) as { text: string }
+  assert.ok(readA.text.includes('from workspace A'))
+  const readB = (await env.host.invokeAction('builtin:profile', 'skill_read', { skillId: 'ws-b-skill', nodeId: 'local', cwd: wsB })) as { text: string }
+  assert.ok(readB.text.includes('from workspace B'))
+
+  const missingCoords = await actionErr(env, 'skill_read', { skillId: 'ws-b-skill' })
+  assert.equal(missingCoords.code, 'validation_error')
+  const relative = await actionErr(env, 'skill_read', { skillId: 'ws-b-skill', nodeId: 'local', cwd: 'relative/path' })
+  assert.equal(relative.code, 'validation_error')
+  const ghost = await actionErr(env, 'skill_read', { skillId: 'ws-b-skill', nodeId: 'ghost-node', cwd: wsB })
+  assert.equal(ghost.code, 'validation_error')
+  assert.ok(ghost.message.includes('not currently registered'))
+})
+
+test('skill_read: an offline race after the boundary still fails explicitly (409 node_offline)', { timeout: 60_000 }, async (t) => {
+  const ws = mkdtempSync(join(tmpdir(), 'helmx-node-skills-ws-'))
+  t.after(() => rmSync(ws, { recursive: true, force: true }))
+  writeNodeSkill(ws, 'node-tool', SKILL_MD('Node Tool', 'drops offline mid-call'))
+  let onlineCalls = 0
+  const env = await makeEnv({ online: () => (onlineCalls += 1) === 1 })
+  t.after(() => env.close())
+
+  const err = await actionErr(env, 'skill_read', { skillId: 'node-tool', nodeId: 'remote-1', cwd: ws })
+  assert.equal(err.code, 'node_offline', 'the read layer keeps its explicit offline semantics for races')
+  assert.equal(err.status, 409)
+})
