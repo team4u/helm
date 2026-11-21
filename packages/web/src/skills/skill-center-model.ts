@@ -9,8 +9,9 @@
 import type { SkillSummary } from '@helmx/protocol/browser'
 import { assetsApi } from '../lib/api.js'
 import { englishWebTranslator, type WebMessageTranslator } from '../i18n/catalog.js'
+import { isNodeSourceSkill } from './skill-scope-model.js'
 
-export type SkillCategoryTab = 'all' | 'builtin' | 'plugins' | 'agents' | 'workspace'
+export type SkillCategoryTab = 'all' | 'builtin' | 'plugins' | 'agents' | 'node' | 'workspace'
 
 export interface SkillFilterOptions {
   query: string
@@ -22,6 +23,7 @@ export interface SkillSummaryStats {
   builtin: number
   plugins: number
   agents: number
+  node: number
   workspace: number
 }
 
@@ -52,10 +54,10 @@ export function isSkillAgents(skill: SkillSummary): boolean {
 
 /**
  * Whether the skill is private to the local workspace:
- * - no managedByPlugin and not from the machine-level shared root
+ * - no managedByPlugin and not from a discovery source root (shared / node)
  */
 export function isSkillWorkspace(skill: SkillSummary): boolean {
-  return !skill.managedByPlugin && !isSkillAgents(skill)
+  return !skill.managedByPlugin && !isSkillAgents(skill) && !isNodeSourceSkill(skill)
 }
 
 /** Whether the skill matches the given category pill tab. */
@@ -65,6 +67,7 @@ export function isSkillInTab(skill: SkillSummary, tab: SkillCategoryTab): boolea
   if (tab === 'workspace') return isSkillWorkspace(skill)
   if (tab === 'plugins') return isSkillPlugin(skill)
   if (tab === 'agents') return isSkillAgents(skill)
+  if (tab === 'node') return isNodeSourceSkill(skill)
   return false
 }
 
@@ -114,9 +117,12 @@ export function buildSkillCategoryCounts(skills: SkillSummary[]): Record<SkillCa
   let workspace = 0
   let plugins = 0
   let agents = 0
+  let node = 0
 
   for (const s of list) {
-    if (isSkillAgents(s)) {
+    if (isNodeSourceSkill(s)) {
+      node++
+    } else if (isSkillAgents(s)) {
       agents++
     } else if (isSkillBuiltin(s)) {
       builtin++
@@ -133,6 +139,7 @@ export function buildSkillCategoryCounts(skills: SkillSummary[]): Record<SkillCa
     workspace,
     plugins,
     agents,
+    node,
   }
 }
 
@@ -144,23 +151,27 @@ export function summarizeSkills(skills: SkillSummary[]): SkillSummaryStats {
     builtin: counts.builtin,
     plugins: counts.plugins,
     agents: counts.agents,
+    node: counts.node,
     workspace: counts.workspace,
   }
 }
 
 /**
- * Resolve the skill's source badge label and variant (agents checked first:
- * shared skills never carry managedByPlugin, but they are semantically their
- * own category, not folded into the plugin dimension).
+ * Resolve the skill's source badge label and variant (node / agents checked
+ * first: discovery-source skills never carry managedByPlugin, but they are
+ * semantically their own categories, not folded into the plugin dimension).
  */
 export function getSkillSourceBadge(
   skill: SkillSummary,
   t?: WebMessageTranslator,
 ): {
   label: string
-  variant: 'builtin' | 'workspace' | 'plugin' | 'agents'
+  variant: 'builtin' | 'workspace' | 'plugin' | 'agents' | 'node'
 } {
   const tt = t ?? englishWebTranslator
+  if (isNodeSourceSkill(skill)) {
+    return { label: tt('skills.category.node'), variant: 'node' }
+  }
   if (isSkillAgents(skill)) {
     return { label: tt('skills.category.shared'), variant: 'agents' }
   }
@@ -185,6 +196,8 @@ export function skillCategoryTabLabel(tab: SkillCategoryTab, t?: WebMessageTrans
       return tt('skills.category.plugins')
     case 'agents':
       return tt('skills.category.shared')
+    case 'node':
+      return tt('skills.category.node')
     case 'workspace':
       return tt('skills.category.workspace')
   }

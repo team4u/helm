@@ -61,7 +61,7 @@ export type ResolvedTarget =
   | { kind: 'overview'; params?: Record<string, string> }
   | { kind: 'plugins'; pluginId?: string }
   | { kind: 'profiles'; profileId?: string }
-  | { kind: 'skills'; skillId?: string }
+  | { kind: 'skills'; skillId?: string; nodeId?: string; cwd?: string }
   | { kind: 'nodes'; nodeId?: string }
   | { kind: 'models'; providerId?: string; tab?: ModelsCenterTab }
 
@@ -376,7 +376,7 @@ export function isSameResolvedTarget(a: ResolvedTarget | null, b: ResolvedTarget
     return a.profileId === b.profileId
   }
   if (a.kind === 'skills' && b.kind === 'skills') {
-    return a.skillId === b.skillId
+    return a.skillId === b.skillId && (a.nodeId ?? undefined) === (b.nodeId ?? undefined) && (a.cwd ?? undefined) === (b.cwd ?? undefined)
   }
   if (a.kind === 'nodes' && b.kind === 'nodes') {
     return a.nodeId === b.nodeId

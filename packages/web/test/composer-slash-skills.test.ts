@@ -26,7 +26,7 @@ const { act } = await import('react')
 const { createRoot } = await import('react-dom/client')
 import type { ConversationSummary, PluginSummary, Profile, SkillSummary } from '@helmx/protocol'
 import type { HelmxExternalStore } from '../src/lib/helmx-store.js'
-import { slashMenuSkills } from '../src/conversation/slash-menu-skills.js'
+import { slashMenuSkills, slashMenuSkillsWithScope } from '../src/conversation/slash-menu-skills.js'
 
 /** Real user typing path: native setter assignment + value tracker reset + input dispatch. */
 function typeInto(ta: HTMLTextAreaElement, text: string): void {
@@ -91,6 +91,52 @@ test('slashMenuSkills: skills of a disabled plugin are always unavailable (even 
     ['review'],
     'whitelisted skills of a disabled plugin stay unavailable',
   )
+})
+
+// ---------------------------------------------------------------------------
+// Pure model: slashMenuSkillsWithScope（会话/待命坐标的节点技能合并）
+// ---------------------------------------------------------------------------
+
+test('slashMenuSkillsWithScope: 节点来源技能补入，Hub 同名胜出，白名单与启用态同样生效', { timeout: 60_000 }, () => {
+  const enabled = new Set(['builtin:profile'])
+  const profile: Profile = { id: 'p', skills: undefined }
+  const hubSkills: SkillSummary[] = [
+    { id: 'review', name: '审查', references: [] },
+    { id: 'deploy', name: '部署', references: [], managedByPlugin: 'builtin:profile' },
+  ]
+  const scoped: SkillSummary[] = [
+    // 节点补充技能（合法新增）
+    { id: 'node-runbook', name: '节点规程', references: [], source: 'node' },
+    // 与 Hub 同名的节点条目（后端契约已排除；前端再防御一次）
+    { id: 'review', name: '节点同名审查', references: [], source: 'node' },
+    // 合并目录里的 Hub 条目（source 缺省）不得重复补入
+    { id: 'deploy', name: '部署', references: [], managedByPlugin: 'builtin:profile' },
+  ]
+  assert.deepEqual(
+    slashMenuSkillsWithScope(profile, hubSkills, enabled, scoped).map((s) => s.id),
+    ['review', 'deploy', 'node-runbook'],
+    '节点技能追加在 Hub 基底之后；同名与 Hub 条目去重',
+  )
+
+  // 白名单过滤同样作用于节点技能
+  assert.deepEqual(
+    slashMenuSkillsWithScope({ id: 'p', skills: ['review'] }, hubSkills, enabled, scoped).map((s) => s.id),
+    ['review'],
+    'Profile 白名单过滤节点补充技能（与会话目录同一规则源）',
+  )
+
+  // 目录未加载（null/undefined）：保持 Hub 基底不动
+  assert.deepEqual(
+    slashMenuSkillsWithScope(profile, hubSkills, enabled, null).map((s) => s.id),
+    ['review', 'deploy'],
+  )
+  assert.deepEqual(
+    slashMenuSkillsWithScope(profile, hubSkills, enabled, undefined).map((s) => s.id),
+    ['review', 'deploy'],
+  )
+
+  // 缺 Profile：与 slashMenuSkills 同语义，空列表
+  assert.deepEqual(slashMenuSkillsWithScope(undefined, hubSkills, enabled, scoped), [])
 })
 
 // ---------------------------------------------------------------------------

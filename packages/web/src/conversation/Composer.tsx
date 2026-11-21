@@ -12,10 +12,13 @@ import {
   usePlugins,
   useProfilesSlice,
   useSkills,
+  useStoreActions,
 } from '../lib/store-context.js'
 import { useWebLocale } from '../i18n/use-web-locale.js'
 import { collectEnabledPluginIds } from '../shell/sidebar-model.js'
-import { slashMenuSkills } from './slash-menu-skills.js'
+import { conversationSkillScope } from '../skills/skill-scope-model.js'
+import { useScopedSkillCatalog } from '../skills/use-scoped-skills.js'
+import { slashMenuSkillsWithScope } from './slash-menu-skills.js'
 import { PluginUiView } from '../ui/PluginUiView.js'
 import { AskDock } from './AskDock.js'
 import { CompletionPopover } from './CompletionPopover.js'
@@ -201,14 +204,28 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
 
   // 斜杠菜单三源合并：宿主内置命令 + 当前会话可用技能（profile.skills 白名单 +
   // 插件启用双过滤，缺 Profile 时先不展示技能）+ 满足作用域的插件命令。
+  // 会话物理坐标 (nodeId, cwd) 的节点工作区技能经合并目录补入（Hub 基底
+  // 恒在；目录未加载/失败/离线不回退移除 Hub 技能）。
   const enabledPluginIds = useMemo(() => collectEnabledPluginIds(plugins), [plugins])
   const conversationProfile = useMemo(
     () => profiles.find((p) => p.id === conversation.profileId),
     [profiles, conversation.profileId],
   )
+  const { invokePluginAction } = useStoreActions()
+  const conversationScope = useMemo(
+    () => conversationSkillScope(conversation),
+    [conversation.nodeId, conversation.cwd],
+  )
+  const scopedSkillCatalog = useScopedSkillCatalog(conversationScope, invokePluginAction)
   const availableSkills = useMemo(
-    () => slashMenuSkills(conversationProfile, skills, enabledPluginIds),
-    [conversationProfile, skills, enabledPluginIds],
+    () =>
+      slashMenuSkillsWithScope(
+        conversationProfile,
+        skills,
+        enabledPluginIds,
+        scopedSkillCatalog.catalog?.skills,
+      ),
+    [conversationProfile, skills, enabledPluginIds, scopedSkillCatalog.catalog],
   )
   useEffect(() => {
     setSlashMenuItems(

@@ -122,6 +122,15 @@ function installApiStub(captured: CapturedRequest[]): void {
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const path = String(input)
     const method = String(init?.method ?? 'GET')
+    // The Composer '/' menu now probes the merged node-skill catalog of the
+    // conversation coordinates via a plugin action; answer it out-of-band so
+    // the captured submit assertions stay about conversation input.
+    if (path.startsWith('/api/actions/')) {
+      return new Response(JSON.stringify({ skills: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    }
     const body = init?.body !== undefined ? (JSON.parse(String(init.body)) as Record<string, unknown>) : {}
     captured.push({ method, path, body })
     if (path.endsWith('/compact')) {

@@ -243,6 +243,44 @@
   margin: 0;
 }
 
+/* 技能中心作用域选择器与诊断横幅（物理坐标 nodeId+cwd 作用域） */
+.skill-scope-picker {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.skill-scope-select {
+  width: min(260px, 60vw);
+}
+
+.skill-scope-select .helmx-select-trigger {
+  font-size: 12.5px;
+}
+
+.skill-scope-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+}
+
+.skill-scope-diagnostics .callout {
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.skill-scope-loading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+}
+
 /* 弹窗常用无内联布局原语 */
 .flex-1 { flex: 1; min-width: 0; }
 .flex-row { display: flex; align-items: center; gap: 6px; }
