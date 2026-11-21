@@ -8,9 +8,10 @@ import {
 import type { HelmxLocale, PluginSummary } from '@helmx/protocol/browser'
 import { DEFAULT_HELMX_LOCALE, resolveLocalizedText } from '@helmx/protocol/browser'
 import { ApiClientError, pluginsApi, type PluginConfigResponse } from '../lib/api.js'
-import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Switch } from '@helmx/plugin-client'
+import { HelmxIcon, Dialog, DialogClose, DialogContent, DialogOverlay, DialogPortal, DialogTitle, Select, Switch } from '@helmx/plugin-client'
 import { createWebTranslator } from '../i18n/catalog.js'
-import { useOptionalGroupedUi, useOptionalLocale, useOptionalStoreActions } from '../lib/store-context.js'
+import { useOptionalGroupedUi, useOptionalLocale, useOptionalModels, useOptionalStoreActions } from '../lib/store-context.js'
+import { buildProfileModelOptions } from '../profiles/profile-center-model.js'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -63,6 +64,8 @@ export interface PluginConfigFormProps {
   /** 配置字段 label/description（LocalizedText）的解析 locale。 */
   locale: HelmxLocale
   onSaved: () => void
+  /** 内联渲染下拉菜单（便于测试与抽屉内断言）。 */
+  inline?: boolean
 }
 
 /**
@@ -86,8 +89,10 @@ export function PluginConfigForm({
   config,
   locale,
   onSaved,
+  inline = false,
 }: PluginConfigFormProps): React.JSX.Element {
   const t = useMemo(() => createWebTranslator(locale), [locale])
+  const models = useOptionalModels() ?? []
   const entries = Object.entries(config.schema ?? {})
   const [values, setValues] = useState<Record<string, ConfigValue>>(() => initialFormValues(config))
   const [saving, setSaving] = useState(false)
@@ -185,6 +190,18 @@ export function PluginConfigForm({
                         [key]: Number((e.target as HTMLInputElement).value),
                       }))
                     }
+                  />
+                ) : schema.format === 'model' ? (
+                  <Select
+                    id={fieldId}
+                    inline={inline}
+                    popoverClassName="helmx-select-popover-wide"
+                    aria-label={
+                      schema.label !== undefined ? resolveLocalizedText(schema.label, locale) || key : key
+                    }
+                    value={String(values[key] ?? '')}
+                    options={buildProfileModelOptions(models, String(values[key] ?? ''), t)}
+                    onChange={(event) => setValues((prev) => ({ ...prev, [key]: event.target.value }))}
                   />
                 ) : (
                   <input
@@ -778,6 +795,7 @@ export function PluginDetailDrawer({
                       pluginId={plugin.id}
                       config={config}
                       locale={locale}
+                      inline={inline}
                       onSaved={() => void reloadConfig(plugin.id)}
                     />
                   ) : (

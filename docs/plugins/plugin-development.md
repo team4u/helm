@@ -237,7 +237,7 @@ ctx.service({
 
 ## 配置、数据与错误边界
 
-- **配置**：`ctx.configSchema` 声明字段（`type: string/number/boolean` + `label` / `description` / `default`）；`secret: true` 自动分离至 `credentials.json` `pluginSecrets.<pluginId>` 并入 SecretStash 脱敏。插件中心与 `helmx plugins config <id>` 同权读写。
+- **配置**：`ctx.configSchema` 声明字段（`type: string/number/boolean` + `label` / `description` / `default`，`string` 字段支持 `format: 'model'` 渲染宿主可用模型下拉框）；`secret: true` 自动分离至 `credentials.json` `pluginSecrets.<pluginId>` 并入 SecretStash 脱敏。插件中心与 `helmx plugins config <id>` 同权读写。
 - **数据**：专属数据目录 `<dataDir>/plugins/<id>/`；`ctx.doc` / `ctx.sessionDoc` 按 <id> 划分命名空间；单文档超 2 MiB 显式 `413 plugin_doc_too_large`，大体量内容落盘文件资产。
 - **错误边界**：所有外部输入（HTTP body、动作入参、事件载荷）在入口边界 Schema 校验，非法显式拒绝；能力不支持、节点离线（`409 node_offline`）、交接失败必须显式报错附诊断，绝不静默降级、绝不编造 fallback 数据；错误信封统一 `{ error: { code, message, details? } }`。加载/启用失败置 `status: failed` 附结构化 `error`（`stage: scan | load | define | enable`），不拖垮内核。
 

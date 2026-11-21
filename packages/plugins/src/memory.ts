@@ -123,6 +123,18 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
     locked: false,
     ...resolvePluginClientAssets(MEMORY_PLUGIN_ID, 'memory', 'memory_plugin_client_missing'),
     definePlugin(ctx) {
+      ctx.configSchema({
+        dreamModel: {
+          type: 'string',
+          format: 'model',
+          default: '',
+          label: { en: 'Dream model', 'zh-CN': 'Dream 整理模型' },
+          description: {
+            en: 'Optional model used for daily memory Dream consolidation (leave default to follow the conversation/Profile model).',
+            'zh-CN': '每日记忆 Dream 整理使用的模型（留空则沿用会话/Profile 生效模型）。',
+          },
+        },
+      })
       const { profiles } = ctx.host
       const store = new MemoryStore(ctx.host)
       // Private compact state: disabledProfiles + initializedProfiles (the on-disk full text is the single authority).
@@ -422,6 +434,10 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
         redact: (text) => ctx.host.redact(text),
         atomicWriteFile: (path, content) => ctx.host.atomicWriteFile(path, content),
         completeText: (input) => ctx.host.completeText(input),
+        getDreamModel: () => {
+          const raw = (ctx.getConfig() as { dreamModel?: unknown }).dreamModel
+          return typeof raw === 'string' && raw.trim() !== '' ? raw.trim() : undefined
+        },
         listConversations: (filter) => ctx.host.listConversations(filter),
         getConversationDetail: (id, options) => ctx.host.getConversationDetail(id, options),
         store,
