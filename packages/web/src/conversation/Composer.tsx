@@ -55,8 +55,8 @@ export interface ComposerProps {
 }
 
 // ---------------------------------------------------------------------------
-// 上下文用量只读状态（ModelPicker 右侧；对齐 pi footer 展示，不可交互）。
-// 速率类只读指标（如 builtin:token-speed）经下方 COMPOSER_STATUS_SLOT 插槽
+// 上下文用量只读状态（输入框下方遥测状态行；不可交互）。
+// 速率类只读指标（如 builtin:token-speed）经同行的 COMPOSER_STATUS_SLOT 插槽
 // 由可选插件贡献，宿主不再内置任何响应速率计算与展示。
 // ---------------------------------------------------------------------------
 
@@ -445,18 +445,6 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
                 </button>
               </Tooltip>
               <ModelPicker conversation={conversation} />
-              <ContextUsageStatus conversation={conversation} />
-              {/* Reserved host status row slot: plugins contribute read-only content to the context usage status area
-                  (e.g. builtin:token-speed live/final decode rates); on mobile it also stays
-                  in the toolbar (never tucked into the more menu). */}
-              <PluginSlot
-                ownerPluginId="builtin:composer"
-                name={COMPOSER_STATUS_SLOT}
-                conversationId={conversation.id}
-                composer={composer}
-                className="composer-status-slot"
-                slotProps={{ conversation, composer } satisfies ComposerScopeProps}
-              />
               <input
                 ref={fileInputRef}
                 type="file"
@@ -538,6 +526,20 @@ export function Composer({ conversation, prefill, onSendingChange, onNewThread }
               abortTurn={abortTurn}
             />
           </div>
+        </div>
+        {/* Read-only telemetry row below .composer-box: decouples status indicators
+            from interactive toolbar controls so desktop, split panes, and mobile never
+            clip or crowd controls; collapses to zero height when empty. */}
+        <div className="composer-status-row">
+          <ContextUsageStatus conversation={conversation} />
+          <PluginSlot
+            ownerPluginId="builtin:composer"
+            name={COMPOSER_STATUS_SLOT}
+            conversationId={conversation.id}
+            composer={composer}
+            className="composer-status-slot"
+            slotProps={{ conversation, composer } satisfies ComposerScopeProps}
+          />
         </div>
       </div>
     </div>

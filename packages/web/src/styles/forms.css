@@ -853,40 +853,58 @@ button.attachment-chip:disabled {
 .composer-model-button > svg { flex-shrink: 0; }
 .composer-model-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: normal; }
 .composer-model-level { flex-shrink: 0; color: var(--fg-muted); font-size: 11px; white-space: nowrap; }
-/* 上下文用量只读状态（模型选择器右侧）：不可点击，仅色调差异。
- * 色调类与基础规则同 specificity（.composer-toolbar 前缀一致），
- * 声明在后覆盖默认灰，否则 0,1,0 < 0,2,0 黄红永远不生效。
- * 窄工具栏时优先于模型选择按钮让出空间，避免模型名被挤成前几个字。 */
-.composer-toolbar .composer-context-status {
+/* 输入框下方只读遥测状态行（ContextUsageStatus + COMPOSER_STATUS_SLOT 插件贡献）；
+ * 与框内交互控件解耦，桌面、分屏与移动端统一流式排布；无有效内容时完全隐藏。 */
+.composer-status-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  min-width: 0;
+  padding: 0 14px;
+  margin-bottom: -4px;
+  color: var(--fg-muted);
+  font-size: 11.5px;
+  line-height: 1.4;
+  user-select: none;
+}
+.composer-status-row:not(:has(.composer-context-status)):not(:has(.composer-status-slot:not(:empty))) {
+  display: none;
+}
+/* 上下文用量只读状态：不可点击，仅色调差异。
+ * 色调类与基础规则同 specificity（.composer-status-row 前缀一致），
+ * 声明在后覆盖默认灰，否则 0,1,0 < 0,2,0 黄红永远不生效。 */
+.composer-status-row .composer-context-status {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   min-width: 0;
-  flex-shrink: 2;
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  padding: 0 2px;
   color: var(--fg-muted);
   font-size: 11.5px;
-  line-height: normal;
+  line-height: 1.4;
   user-select: none;
 }
-.composer-toolbar .composer-context-status-warn { color: var(--warn); }
-.composer-toolbar .composer-context-status-high { color: var(--err); }
-/* 宿主状态行插件插槽（上下文用量旁，如 builtin:token-speed 速率贡献）
- * ：状态贡献非操作项，移动端同样保留在工具栏状态区（不收入 more 菜单）；
- * 窄屏下先于模型选择按钮收缩防挤压模型名与发送区。 */
-.composer-toolbar .composer-status-slot {
+.composer-status-row .composer-context-status-warn { color: var(--warn); }
+.composer-status-row .composer-context-status-high { color: var(--err); }
+/* 宿主状态行插件插槽（上下文用量旁，如 builtin:token-speed 速率贡献）：
+ * 不做收缩截断，窄容器下随行流式换行，无子内容时自动折叠。 */
+.composer-status-row .composer-status-slot {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  flex-wrap: wrap;
+  gap: 2px 12px;
   min-width: 0;
-  flex-shrink: 4;
-  overflow: hidden;
-  line-height: normal;
+  max-width: 100%;
+  line-height: 1.4;
   font-size: 11.5px;
   color: var(--fg-muted);
+}
+.composer-status-row .composer-status-slot:empty {
+  display: none;
 }
 .composer-thinking-row {
   margin: 4px 6px 8px;

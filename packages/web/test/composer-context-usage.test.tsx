@@ -179,29 +179,29 @@ test('first open of an idle conversation after restart: the merged list summary 
 })
 
 test('CSS specificity regression: load the real forms.css and verify tone classes truly override the default gray', { timeout: 60_000 }, () => {
-  // Regression background: the base rule `.composer-toolbar .composer-context-status` (0,2,0)
-  // once outranked the bare `.composer-context-status-warn/-high` (0,1,0), so yellow/red never
-  // applied. DOM class assertions cannot catch that bug: verify with computedStyle from the real stylesheet.
+  // Regression background: the base rule `.composer-status-row .composer-context-status` (0,2,0)
+  // must never outrank `.composer-status-row .composer-context-status-warn/-high` (0,2,0, declared later),
+  // otherwise yellow/red never apply. DOM class assertions cannot catch that bug: verify with computedStyle from the real stylesheet.
   const css = readFileSync(new URL('../src/styles/forms.css', import.meta.url), 'utf8')
   const style = document.createElement('style')
   style.textContent = `:root { --fg-muted: rgb(11, 12, 13); --warn: rgb(21, 22, 23); --err: rgb(31, 32, 33); }\n${css}`
   document.head.appendChild(style)
-  const toolbar = document.createElement('div')
-  toolbar.className = 'composer-toolbar'
+  const row = document.createElement('div')
+  row.className = 'composer-status-row'
   const base = document.createElement('span')
   base.className = 'composer-context-status'
   const warn = document.createElement('span')
   warn.className = 'composer-context-status composer-context-status-warn'
   const high = document.createElement('span')
   high.className = 'composer-context-status composer-context-status-high'
-  toolbar.append(base, warn, high)
-  document.body.appendChild(toolbar)
+  row.append(base, warn, high)
+  document.body.appendChild(row)
   try {
     assert.equal(getComputedStyle(base).color, 'rgb(11, 12, 13)')
     assert.equal(getComputedStyle(warn).color, 'rgb(21, 22, 23)', 'the warn tone must override the default gray (specificity must not fall below the base rule)')
     assert.equal(getComputedStyle(high).color, 'rgb(31, 32, 33)', 'the high tone must override the default gray')
   } finally {
-    toolbar.remove()
+    row.remove()
     style.remove()
   }
 })
@@ -255,15 +255,85 @@ test('composer/status host slot: PluginSlot mounts in the status area; contribut
   const probeAt = html.indexOf('data-probe="composer-status"')
   assert.ok(probeAt >= 0, 'slot contributions must render through PluginSlot')
   assert.match(html, /conv:1 draft:0 ctx-composer:true/, 'contributed components receive the standard conversation + composer Props; usePluginContext().composer also gets the host input controller')
-  // Mount position: the toolbar-left status area right after the context status; never inside the more menu (composer-extras).
-  const leftAt = html.indexOf('composer-toolbar-left')
+  // Mount position: dedicated read-only telemetry row below .composer-box (decoupled from .composer-toolbar controls and never inside .composer-extras).
+  const boxAt = html.indexOf('composer-box')
+  const toolbarAt = html.indexOf('composer-toolbar')
+  const rowAt = html.indexOf('composer-status-row')
   const statusAt = html.indexOf('composer-context-status')
   const slotAt = html.indexOf('composer-status-slot')
   const extrasAt = html.indexOf('composer-extras')
-    assert.ok(leftAt >= 0 && leftAt < slotAt, 'status contributions sit in the toolbar status area (mobile likewise keeps them out of the more menu)')
-  assert.ok(statusAt >= 0 && statusAt < slotAt, 'the slot sits right after ContextUsageStatus')
-  assert.ok(extrasAt < 0 || slotAt < extrasAt, 'the slot is not inside the more-menu container')
-  assert.ok(html.includes('probe-composer-status'), 'slot contributions render in the same area as the context status')
+  assert.ok(boxAt >= 0 && toolbarAt > boxAt && rowAt > toolbarAt, 'the status row sits below .composer-box and outside .composer-toolbar')
+  assert.ok(statusAt > rowAt && slotAt > statusAt, 'the slot sits inside .composer-status-row right after ContextUsageStatus')
+  assert.ok(extrasAt < 0 || extrasAt < rowAt, 'the status row is never inside the more-menu container')
+  assert.ok(html.includes('probe-composer-status'), 'slot contributions render in the same telemetry row as the context status')
+})
+
+test('composer/status DOM placement & empty collapse: telemetry row sits below .composer-box and collapses when empty', { timeout: 60_000 }, async () => {
+  function EmptyStatusProbe() {
+    return null
+  }
+  seedPluginClientModule('builtin:empty-status', 'index.tsx', { EmptyStatusProbe })
+  const css = readFileSync(new URL('../src/styles/forms.css', import.meta.url), 'utf8')
+  const style = document.createElement('style')
+  style.textContent = css
+  document.head.appendChild(style)
+
+  const conversation = conv(undefined)
+  const store = makeTestStore({
+    conversations: [conversation],
+    plugins: [
+      {
+        id: 'builtin:empty-status',
+        name: 'empty-status',
+        version: '1.0.0',
+        locked: false,
+        enabled: true,
+        status: 'active',
+        hooks: [],
+        actions: [],
+        tools: [],
+        clientHashes: { 'index.tsx': 'seeded' },
+      },
+    ],
+    uiContributions: [
+      {
+        pluginId: 'builtin:empty-status',
+        surface: 'plugin.slot',
+        spec: {
+          id: 'empty-status',
+          target: COMPOSER_STATUS_SLOT,
+          client: { module: 'index.tsx', export: 'EmptyStatusProbe' },
+        },
+      },
+    ],
+  })
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  const root = createRoot(host)
+  try {
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: store }, e(Composer, { conversation, prefill: null })))
+    })
+    const row = host.querySelector<HTMLElement>('.composer-status-row')
+    assert.ok(row !== null)
+    assert.ok(row.previousElementSibling?.classList.contains('composer-box') === true, 'telemetry row is the sibling right below .composer-box')
+    assert.ok(host.querySelector('.composer-toolbar .composer-context-status') === null)
+    assert.ok(host.querySelector('.composer-toolbar .composer-status-slot') === null)
+    assert.equal(getComputedStyle(row).display, 'none', 'empty telemetry row (no contextUsage and null slot output) collapses to display:none')
+
+    const populated = conv({ tokens: 75_000, contextWindow: 200_000 })
+    const populatedStore = makeTestStore({ conversations: [populated] })
+    await act(async () => {
+      root.render(e(HostStoreProviders, { value: populatedStore }, e(Composer, { conversation: populated, prefill: null })))
+    })
+    const rowWithUsage = host.querySelector<HTMLElement>('.composer-status-row')
+    assert.ok(rowWithUsage !== null)
+    assert.equal(getComputedStyle(rowWithUsage).display, 'flex', 'telemetry row is visible when contextUsage renders')
+  } finally {
+    act(() => root.unmount())
+    host.remove()
+    style.remove()
+  }
 })
 
 test('composer/status renders no container without contributions (zero noise in the host status area)', { timeout: 60_000 }, async () => {
