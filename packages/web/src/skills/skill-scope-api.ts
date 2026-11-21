@@ -74,12 +74,20 @@ function parseSkillSummaryEntry(raw: unknown, index: number): SkillSummary {
   }
 }
 
-/** 边界校验 skill_catalog 输出（外部输入显式拒绝，绝不静默截断）。 */
+/** 边界校验 skill_catalog 输出（外部输入显式拒绝，绝不静默截断）。
+ * outputSchema 中的 required echo 字段 nodeId/cwd 一并校验：它们回显
+ * 服务端实际生效的物理坐标，缺失或非字符串即契约破坏，显式拒绝。 */
 export function parseSkillCatalogResult(raw: unknown): ScopedSkillCatalog {
   if (typeof raw !== 'object' || raw === null) {
     throw catalogError('返回值不是对象')
   }
   const record = raw as Record<string, unknown>
+  if (typeof record.nodeId !== 'string' || record.nodeId.trim() === '') {
+    throw catalogError('nodeId 必须是非空字符串（服务端回显的生效坐标）')
+  }
+  if (typeof record.cwd !== 'string' || record.cwd.trim() === '') {
+    throw catalogError('cwd 必须是非空字符串（服务端回显的生效坐标）')
+  }
   if (!Array.isArray(record.skills)) {
     throw catalogError('skills 必须是数组')
   }

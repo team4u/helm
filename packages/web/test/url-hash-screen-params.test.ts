@@ -571,4 +571,3 @@ test('skills 作用域环境：深链还原、openTarget replace 切换、详情
     host.remove()
   }
 })
-
