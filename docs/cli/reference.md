@@ -201,7 +201,7 @@ PUT 为整体替换契约：update 走语义化标志时 CLI 先 GET 完整 Prof
 
 **`helmx artifacts get <id> [--output <path>]`** — 读取产物内容；文本直出，二进制必须 `--output` 落盘；实际写入后回显绝对路径与实际字节数；传输中断返回 `download_failed`，已有目标文件保持原样。
 
-**`helmx skills list` / `helmx skills read <id> [--path <rel>]`** — 技能目录浏览；`--path` 读子文件，缺省 SKILL.md。
+**`helmx skills list` / `helmx skills read <id> [--path <rel>]`** — 技能目录浏览；`--path` 读子文件，缺省 SKILL.md。缺省展示 Hub 全局目录；`--current` 作用域到当前会话工作区（读 `HELMX_CONVERSATION_ID` 并先经 Hub 解析该会话真实 `nodeId`/`cwd`），显式 `--node <id> --cwd <dir>` 选择任意工作区（两参数必须成对，与 `--current` 互斥）。作用域结果合并该工作区只读 `.helmx/skills`（同名 Hub 版本优先，被遮蔽 id 与节点不可用诊断显式报告）。
 
 ---
 

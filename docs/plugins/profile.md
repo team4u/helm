@@ -40,6 +40,7 @@
 
 - **`load_skill` 工具**：读取技能 SKILL.md 或目录内参考文件（`path` 示例 `references/guide.md`）。可用性实时判定：Profile 白名单外或托管插件停用返回 `403 skill_not_available`；技能不存在 `404 not_found`。这是认知目录边界，不是权限沙箱——bash/API 仍可读文件。
 - **`list_mentionable` 动作**（幂等）：`@` 补全源。身份裁决以调用上下文会话为唯一可信来源，无上下文时接受显式 `--conversation-id` / `--profile-id`（待命草稿态），三者都缺显式 `400 validation_error`。CLI：`helmx profile list_mentionable`。
+- **`skill_catalog` / `skill_read` 动作**（幂等、`exposeToPrompt: false`，不进模型提示目录）：按物理坐标 `(nodeId, cwd)` 提供技能中心与 CLI 的合并目录与读取能力，契约见下文「技能中心与 CLI 的坐标作用域」。
 - **`composerCompleter`** `profile-mentions`：`@` 触发的补全源（复用宿主通用补全渲染）。
 - **`sidebarItem`** `assistant`：左栏个人助理站位，指向 `conversation:profile:assistant`（不依赖某一具体会话存在，会话全部删除后站位仍在）。
 
@@ -47,12 +48,25 @@
 
 会话靶点 `(nodeId, cwd)` 指向的节点可以在工作区 **`<cwd>/.helmx/skills/<id>/SKILL.md`**（+ 任意嵌套 references）下提供自己的技能库， builtin:profile 每回合 `before_turn` 重新发现、`load_skill` 每次直接读节点当前文件内容（无缓存、不回写历史上下文，节点上的修改下一回合即生效）。机制全部复用内核 EnvFabric：
 
-- **只读、不同步**：节点技能永远留在节点事实来源上，绝不复制进 Hub `SkillService` 的 dataDir；Web 技能中心与 `helmx skills` 展示的是 Hub 全局目录（无会话上下文），节点技能只对会话内 Agent 生效。
+- **只读、不同步**：节点技能永远留在节点事实来源上，绝不复制进 Hub `SkillService` 的 dataDir；Web 技能中心与 `helmx skills list/read` 缺省展示 Hub 全局目录，带作用域参数时按物理坐标合并展示（见下文「技能中心与 CLI 的坐标作用域」）。
 - **同名优先级契约**（明确顺序，不依赖目录枚举顺序）：Hub dataDir（含受管技能，永远最高）> 机器级共享根 `~/.agents/skills` > 节点 `.helmx/skills`。节点技能只能补充、不能覆盖：同名时目录不收录节点版本，`load_skill` 无来源参数、永远解析到高优先级版本——Agent 不会见到 namespace skill id，同名冲突也不会变成 Agent 选择题。
 - **可用性同规则**：节点技能与 Hub 技能共用 `isSkillAvailable`（Profile 白名单过滤；节点文件 frontmatter 的 `managedByPlugin` 强制剥离，节点不得冒充宿主受管技能，因此插件启停不影响节点技能）。
 - **安全纪律**（与 AGENTS.md 注入同款，全走 ExecutionEnv 安全原语）：远端在线预检（离线短路不进入 RPC 等待）、`canonicalPath` 解析后 `openBinaryReader({ noFollow: true })` 同句柄有界读取（单文件上限 256 KiB，读后同句柄复核 size/mtime，杜绝把被截断的旧前缀当完整快照）、路径词汇与 Hub 技能共用 `@helmx/protocol` skill-contract（穿越 / 绝对路径 / 反斜杠一律拒绝）、name/description 进系统提示前脱敏。软链技能目录在发现层跳过（`listDir` 不跟随软链）。
 - **显式失败语义**：工作区无 `.helmx/skills` 属常态（按空处理）；节点离线 / 宿主能力未接线 / 目录 IO 故障 / 条目数（256）或单技能 references 数（512）超上限，`before_turn` 注入 `profile.node-skills-unavailable` 显式说明段（技能目录退化为仅 Hub 来源），`load_skill` 对节点分支报 `409 node_offline` / `502 node_skill_read_failed`（含脱敏诊断），绝不静默 fallback、绝不伪造成功。
 - **边界如实**：这是发现与加载层的目录边界，不是 OS 沙箱——节点本地用软链组织技能目录属节点自身文件系统自由（读取时 `noFollow` 拒最终组件软链），模型可请求的路径被相对路径词汇限制在技能目录树内。
+
+### 技能中心与 CLI 的坐标作用域
+
+Web 技能中心与 `helmx skills list/read` 的作用域模型一致，核心是**物理坐标 `(nodeId, cwd)`，不是 conversationId**：
+
+- **缺省 Hub 全局**：不带任何作用域参数时展示 Hub 全局目录（`GET /api/skills`，含受管技能与机器级共享根），与旧语义完全兼容。
+- **会话坐标（`--current`）**：CLI `helmx skills list/read --current` 读取 `HELMX_CONVERSATION_ID`，先经 `GET /api/conversations/:id` 解析该会话绑定的 `(nodeId, cwd)`，再以**显式坐标**调用动作——动作请求本身不携带 conversationId（CLI 不自行猜测 cwd，只取会话真实绑定值；会话无绑定 cwd 时显式报错）。Web 技能中心在会话内的作用域选择同理按物理坐标传参。
+- **显式坐标（`--node <id> --cwd <dir>`）**：CLI 与 Web（经会话列表与显式 Profile cwd 去重得到候选）可直接指定任意物理坐标；两个参数必须成对出现，且与 `--current` 互斥。
+- **两个只读幂等动作承载全部能力**（`exposeToPrompt: false`，不进模型提示目录，Agent 侧仍只有 `load_skill`）：
+  - `skill_catalog`：输入 `{ nodeId?, cwd? }`（成对可选）；输出 `{ nodeId, cwd, skills, shadowedNodeSkillIds, nodeUnavailable? }`——`skills` 为该坐标合并生效目录（节点条目 `source: 'node'`），`shadowedNodeSkillIds` 显式列出被同名高优先级版本遮蔽的节点技能 id，`nodeUnavailable` 在节点侧扫描失败（离线、IO 故障、超上限）时携带脱敏诊断（正常时缺省，**绝不静默当作无节点技能**）。
+  - `skill_read`：输入 `{ skillId, path?, nodeId?, cwd? }`；解析顺序镜像 `load_skill`（Hub 目录命中优先，否则读节点 `.helmx/skills/<id>/<path>`），输出 `{ text }`，错误语义沿用 `404 not_found` / `409 node_offline` / `502 node_skill_read_failed`。
+- **越权边界**：动作带会话上下文（`run_action` / workflow）时，input 中的显式 `nodeId`/`cwd` 一律拒绝、强制绑定会话自身坐标——模型不能借动作探测任意节点工作区；无会话上下文的显式坐标走可信管理面（CLI 令牌与 `helmx api` 同级信任，CLI `--current` 亦先在客户端解析会话坐标、以显式坐标调用）。
+- **同名优先级在整个链路一致**：Hub dataDir（含受管技能）> 机器级共享根 `~/.agents/skills` > 节点 `.helmx/skills`。同名时合并目录只保留生效版本并显式报告 `shadowedNodeSkillIds`；`skill_read` 无来源参数、永远读到生效版本。节点来源只读：技能中心与 CLI 均不提供对节点 `.helmx/skills` 的写入面。
 
 ## 配置与数据边界
 
