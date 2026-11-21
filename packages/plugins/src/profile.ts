@@ -15,13 +15,14 @@
  *   idempotent list_mentionable action (the @ completion source, auto-mapped to HTTP / helmx
  *   list_mentionable CLI）；
  * - registers the idempotent coordinate-scoped discovery actions skill_catalog / skill_read
- *   (exposeToPrompt:false UI/CLI read paths; conversation context binds to the conversation
- *   coordinates and rejects explicit ones -- the model can only read its own conversation's
- *   workspace, same surface as load_skill / session bash);
+ *   (exposeToPrompt:false + scope:{conversationIds:[]} UI/CLI read paths: every session-context
+ *   call -- run_action / workflow / HTTP body.conversationId -- is excluded by the scope ACL,
+ *   so the model can never enumerate or read foreign coordinates; context-free human calls
+ *   carry an explicit registered (nodeId, cwd) pair validated at the input boundary);
  * - the left-sidebar assistant Profile standing navigation (conversation:profile:assistant, not
  *   dependent on any particular conversation existing).
  */
-import { HelmxError, escapeXml, isAbsoluteTargetPath, isSkillAvailable, type HelmxHostProfilesPort, type JsonSchema, type PluginActionContext, type PluginDefinition, type Profile, type SkillSummary } from '@helmx/protocol';
+import { HelmxError, escapeXml, isAbsoluteTargetPath, isSkillAvailable, pathRulesForShape, targetPathShape, type HelmxHostProfilesPort, type JsonSchema, type PluginDefinition, type Profile, type SkillSummary } from '@helmx/protocol';
 import { HELMX_CLI_SKILL_ASSET, PROFILE_MANAGED_BY } from './profile/assets.js';
 import {
   activeRuntimeKinds,
@@ -415,70 +416,94 @@ export function createProfilePlugin(): PluginDefinition {
       })
 
       // ---- coordinate-scoped skill discovery actions: skill_catalog / skill_read (idempotent
-      // read-only; Web skill center / CLI consumers; deliberately NOT in the model prompt
-      // directory -- exposeToPrompt:false only trims the prompt catalog and never limits
-      // run_action, so the coordinate gate below is the real security boundary) ----
+      // read-only; Web skill center / CLI consumers) ----
+      // Security model (per the coordinator's ruling): exposeToPrompt:false only trims the
+      // prompt catalog and NEVER limits run_action, so the real ACL is scope:{conversationIds:[]}
+      // -- an explicit empty list excludes every conversation-carrying call (run_action /
+      // workflow action() / HTTP body.conversationId) with 403 before the handler, while
+      // context-free human HTTP / CLI calls pass. Session-context calls are deliberately NOT
+      // supported at all: even bound to the conversation coordinates, skill_read would bypass
+      // the Profile.skills whitelist that governs the model-facing load_skill tool. CLI --current
+      // resolves the conversation coordinates client-side and calls with the explicit pair only.
 
       /**
-       * Coordinate adjudication (the single trusted-source rule, shared by both actions):
-       * - conversation context (run_action / workflow / Web session requests) is the ONLY
-       *   trusted coordinate source -- any explicit nodeId/cwd in the input is rejected (the
-       *   model must never steer reads to arbitrary coordinates), and the conversation's own
-       *   (nodeId ?? 'local', cwd) is used;
-       * - without a conversation context (human HTTP / CLI), a full explicit coordinate pair is
-       *   required (missing either half is a validation_error), and cwd must be an absolute
-       *   path in its own shape (POSIX /, Windows drive / UNC / root backslash).
+       * Input boundary (the single adjudication point shared by both actions; only reachable
+       * context-free thanks to the scope ACL): a full explicit coordinate pair is required --
+       * - nodeId must be a node currently registered on this Hub ('local', the Hub itself,
+       *   is always valid): nodeIpc.isOnline is registration+connection-based, so an unknown id
+       *   and a disconnected one are indistinguishable and both rejected with the same honest
+       *   wording (post-boundary races still surface as nodeUnavailable / 409 node_offline from
+       *   the scan/read layers);
+       * - cwd must be an absolute path in its own shape (POSIX '/', Windows drive/UNC/root
+       *   backslash) and lexically normalize without a '..' escape (absolute roots clamp, so
+       *   this is a guard, not a rewriter -- invalid input is rejected, never silently trimmed).
        */
-      const resolveScopedSkillTarget = (
-        context: PluginActionContext,
-        input: { nodeId?: string; cwd?: string },
-      ): { nodeId?: string; cwd: string } => {
-        if (context.conversationId !== undefined) {
-          if (input.nodeId !== undefined || input.cwd !== undefined) {
-            throw new HelmxError(
-              'validation_error',
-              'explicit nodeId/cwd are rejected in conversation context: the conversation coordinates are the only trusted source (use a context-free request for explicit coordinates)',
-              400,
-              { conversationId: context.conversationId },
-            )
-          }
-          const conversation = ctx.host.getConversation(context.conversationId)
-          return { nodeId: conversation.nodeId, cwd: conversation.cwd }
-        }
+      const resolveScopedSkillTarget = (input: { nodeId?: string; cwd?: string }): { nodeId: string; cwd: string } => {
         if (input.nodeId === undefined || input.cwd === undefined) {
           throw new HelmxError(
             'validation_error',
-            'missing explicit coordinates: without conversation context, both nodeId and cwd must be provided as a pair',
+            'missing explicit coordinates: these actions are context-free only, so both nodeId and cwd must be provided as a pair',
             400,
           )
         }
-        if (!isAbsoluteTargetPath(input.cwd)) {
+        const { nodeId, cwd } = input
+        if (!isAbsoluteTargetPath(cwd)) {
           throw new HelmxError(
             'validation_error',
-            `cwd must be an absolute path in the target node's own shape (POSIX '/', Windows drive/UNC): ${input.cwd}`,
+            `cwd must be an absolute path in the target node's own shape (POSIX '/', Windows drive/UNC): ${cwd}`,
             400,
-            { cwd: input.cwd },
+            { nodeId, cwd },
           )
         }
-        return { nodeId: input.nodeId, cwd: input.cwd }
+        const normalized = pathRulesForShape(targetPathShape(cwd)).normalize(cwd)
+        if (normalized.split(/[\\/]/).includes('..')) {
+          throw new HelmxError(
+            'validation_error',
+            `cwd must normalize without '..' escapes (got ${cwd} -> ${normalized}); refusing to target an arbitrary coordinate`,
+            400,
+            { nodeId, cwd },
+          )
+        }
+        if (nodeId !== 'local') {
+          let registered: boolean
+          try {
+            registered = ctx.host.nodeIpc.isOnline(nodeId)
+          } catch (err) {
+            throw new HelmxError(
+              'validation_error',
+              `cannot verify node '${nodeId}' registration (${err instanceof HelmxError ? err.code : 'unknown'}): ${err instanceof Error ? err.message : String(err)}`,
+              400,
+              { nodeId },
+            )
+          }
+          if (!registered) {
+            throw new HelmxError(
+              'validation_error',
+              `node '${nodeId}' is not currently registered on this Hub (unknown id or disconnected); refusing to target an arbitrary coordinate`,
+              400,
+              { nodeId },
+            )
+          }
+        }
+        return { nodeId, cwd }
       }
 
       ctx.action<{ nodeId?: string; cwd?: string }, ScopedSkillCatalog>({
         id: 'skill_catalog',
         description:
-          'List the merged skill catalog at a physical coordinate (nodeId, cwd): Hub skills (dataDir > machine-level shared roots) plus the node workspace read-only skills; same-name node ids are shadowed (reported in shadowedNodeSkillIds) and node scan failures in nodeUnavailable. Conversation context binds to the conversation coordinates and rejects explicit nodeId/cwd; a context-free call requires the explicit pair',
+          'List the merged skill catalog at a physical coordinate (nodeId, cwd): Hub skills (dataDir > machine-level shared roots) plus the node workspace read-only skills; same-name node ids are shadowed (reported in shadowedNodeSkillIds) and node scan failures in nodeUnavailable. Context-free only (scope excludes every session-context call): a context-free call must carry the explicit registered coordinate pair',
         inputSchema: {
           type: 'object',
           properties: {
-            nodeId: { type: 'string', minLength: 1, description: 'Explicit target node id (only accepted without conversation context, paired with cwd)' },
-            cwd: { type: 'string', minLength: 1, description: 'Absolute working directory on the target node (only accepted without conversation context, paired with nodeId)' },
+            nodeId: { type: 'string', minLength: 1, description: 'Target node id (must be currently registered on this Hub; paired with cwd)' },
+            cwd: { type: 'string', minLength: 1, description: 'Absolute working directory on the target node (paired with nodeId)' },
           },
           additionalProperties: false,
         },
         outputSchema: {
           type: 'object',
           properties: {
-            nodeId: { type: 'string', description: 'Effective coordinate node id (normalized to local)' },
+            nodeId: { type: 'string', description: 'Effective coordinate node id' },
             cwd: { type: 'string', description: 'Effective coordinate working directory' },
             skills: { type: 'array', items: SKILL_SUMMARY_JSON_SCHEMA, description: 'Merged effective catalog (Hub data > agents > node supplements), sorted by id' },
             shadowedNodeSkillIds: { type: 'array', items: { type: 'string' }, description: 'Node skill ids shadowed by a same-name Hub skill (the Hub version is the effective one)' },
@@ -489,8 +514,12 @@ export function createProfilePlugin(): PluginDefinition {
         } satisfies JsonSchema,
         exposeToPrompt: false,
         idempotent: true,
-        async handler(input, context) {
-          const target = resolveScopedSkillTarget(context, input)
+        // The real ACL: an explicit empty list excludes every conversation-carrying call
+        // (run_action / workflow / HTTP body.conversationId) before the handler; only
+        // context-free human HTTP / CLI calls reach it (see the block comment above).
+        scope: { conversationIds: [] },
+        async handler(input) {
+          const target = resolveScopedSkillTarget(input)
           return listScopedSkills(skills, ctx.host, target.nodeId, target.cwd)
         },
       })
@@ -498,14 +527,14 @@ export function createProfilePlugin(): PluginDefinition {
       ctx.action<{ skillId: string; path?: string; nodeId?: string; cwd?: string }, { text: string }>({
         id: 'skill_read',
         description:
-          "Read a skill file at a physical coordinate (nodeId, cwd), mirroring load_skill resolution: a Hub catalog hit (dataDir > machine-level shared roots) reads from the Hub, otherwise the node workspace source is read live. Conversation context binds to the conversation coordinates and rejects explicit nodeId/cwd; a context-free call requires the explicit pair",
+          "Read a skill file at a physical coordinate (nodeId, cwd), mirroring load_skill resolution: a Hub catalog hit (dataDir > machine-level shared roots) reads from the Hub, otherwise the node workspace source is read live. Context-free only (scope excludes every session-context call; the Profile.skills whitelist governs the model-facing load_skill tool instead): a context-free call must carry the explicit registered coordinate pair",
         inputSchema: {
           type: 'object',
           properties: {
             skillId: { type: 'string', minLength: 1, description: 'Skill id to read' },
             path: { type: 'string', minLength: 1, description: "Skill-relative file path (defaults to 'SKILL.md')" },
-            nodeId: { type: 'string', minLength: 1, description: 'Explicit target node id (only accepted without conversation context, paired with cwd)' },
-            cwd: { type: 'string', minLength: 1, description: 'Absolute working directory on the target node (only accepted without conversation context, paired with nodeId)' },
+            nodeId: { type: 'string', minLength: 1, description: 'Target node id (must be currently registered on this Hub; paired with cwd)' },
+            cwd: { type: 'string', minLength: 1, description: 'Absolute working directory on the target node (paired with nodeId)' },
           },
           required: ['skillId'],
           additionalProperties: false,
@@ -520,8 +549,12 @@ export function createProfilePlugin(): PluginDefinition {
         } satisfies JsonSchema,
         exposeToPrompt: false,
         idempotent: true,
-        async handler(input, context) {
-          const target = resolveScopedSkillTarget(context, input)
+        // Same ACL as skill_catalog: session-context calls are excluded entirely (a bound read
+        // would bypass the Profile.skills whitelist); the CLI resolves --current coordinates
+        // client-side and calls context-free with the explicit pair.
+        scope: { conversationIds: [] },
+        async handler(input) {
+          const target = resolveScopedSkillTarget(input)
           // Resolution order mirrors load_skill exactly: the Hub catalog (dataDir + shared
           // roots) is always read from the Hub -- a same-name node skill can never be reached
           // while the Hub one exists; only ids absent from every Hub root fall through to the
