@@ -553,5 +553,6 @@ test('整理后正文刷新失败：显式告警与重试，成功后编辑区�
     await act(async () => { retry.click() })
     assert.equal(editor(ui.host).value, '原文\n- 整理新增行', '重试成功后编辑区追上整理后正文')
     assert.ok(ui.host.querySelector('[role="alert"].memory-dream-refresh-error') === null, '成功后告警消除')
+    assert.match(ui.host.textContent!, /\/ 4000 chars/, '编辑区字数上限展示与 4000 硬上限一致')
   } finally { ui.unmount() }
 })

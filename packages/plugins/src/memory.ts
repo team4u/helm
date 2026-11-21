@@ -2,13 +2,14 @@
  * builtin:memory: the fully autonomous long-term memory plugin (locked: false, enabled by default).
  *
  * Responsibilities (orthogonal to builtin:profile; zero memory awareness in kernel/protocol):
- * - MemoryStore manages `<dataDir>/profiles/<id>/MEMORY.md` itself (file lock + the 64k cap's single
+ * - MemoryStore manages `<dataDir>/profiles/<id>/MEMORY.md` itself (file lock + the 4k cap's single
  *   authoritative point, see memory/store.ts); the on-disk full text is the single authority, never entering public docs;
  * - the private ctx.doc('state') persists compact state: disabledProfiles (per-Profile switch)
  *   and initializedProfiles (distinguishing "never initialized" from "initialized then deleted" across restarts);
- * - before_turn: with a Profile's memory off, read no file, inject no section, and strip the
- *   update_memory tool; with it on, inject memory.content / memory.guide / memory.assets-missing by content;
- * - the update_memory tool: the execute entry re-checks the per-Profile switch (off -> 403);
+ * - before_turn: with a Profile's memory off OR on child sessions (subagents, workflow/swarm/superagent
+ *   workers), read no file, inject no section, and strip the update_memory tool;
+ *   on top-level conversations with memory on, inject memory.content / memory.guide / memory.assets-missing;
+ * - the update_memory tool: the execute entry re-checks both top-level session eligibility (403) and the per-Profile switch (403);
  * - three ctx.actions (get / set / configure) auto-map to HTTP / CLI (helmx memory
  *   get|set|configure) / Agent Tool / Web invokeAction -- five ends;
  * - the daily Dream (see memory/dream.ts): turn_settled collects bounded redacted candidates into
@@ -26,7 +27,7 @@
  */
 import { HelmxError, PROFILE_DETAIL_SECTION_SLOT, type HelmxHostProfilesPort, type PluginActionContext, type PluginDefinition } from '@helmx/protocol'
 import { resolvePluginClientAssets } from './asset-paths.js'
-import { MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MemoryStore } from './memory/store.js'
+import { isMemorySessionEligible, MEMORY_PLUGIN_ID, MAX_MEMORY_CHARS, MemoryStore } from './memory/store.js'
 import {
   createDreamEngine,
   defaultDreamTimezone,
@@ -37,6 +38,7 @@ import {
 } from './memory/dream.js'
 
 export {
+  isMemorySessionEligible,
   MEMORY_PLUGIN_ID,
   MAX_MEMORY_CHARS,
   MEMORY_DEFAULT,
@@ -85,7 +87,8 @@ export function isProfileMemoryEnabled(
 const MEMORY_TRUNCATION_NOTE = `\n[ helmx note: MEMORY.md exceeds the ${MAX_MEMORY_CHARS}-character cap; the above is the first ${MAX_MEMORY_CHARS} characters; use update_memory(mode='replace') to consolidate and trim memory ]`
 
 /** Memory tool usage hint (injected dynamically; SYSTEM.md no longer hardcodes it). */
-const MEMORY_USAGE_NOTE = 'Use `update_memory` to save stable user preferences and conventions.'
+const MEMORY_USAGE_NOTE =
+  'Only call `update_memory` when the user explicitly asks to remember/forget something or corrects a durable preference; daily Dream consolidates normal turns automatically. Never store pending deploy/commit lists, transient status, or facts already in repo docs.'
 
 /** Public port: validate the ID and read the Profile (no guessing of missing targets). */
 async function requireProfile(profiles: HelmxHostProfilesPort, profileId: string): Promise<void> {
@@ -305,8 +308,9 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
 
       ctx.hook.onBeforeTurn(async (turn) => {
         const profileId = turn.conversation.profileId
-        if (!isEnabled(profileId)) {
-          // Per-Profile memory off: read no file, inject nothing, and strip the update_memory tool.
+        if (!isEnabled(profileId) || !isMemorySessionEligible(turn.conversation)) {
+          // Memory off for this Profile, or child session (subagent/workflow/swarm/worker):
+          // read no file, inject nothing, and strip the update_memory tool.
           if (turn.tools.some((t) => t.name === 'update_memory')) {
             return {
               action: 'transform',
@@ -378,7 +382,7 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
 
       ctx.tool<{ text: string; mode: 'append' | 'replace' }>({
         name: 'update_memory',
-        description: 'Update the current conversation Profile\'s MEMORY.md. append adds content; replace swaps the full text (over 64000 chars requires a replace to trim first).',
+        description: `Update the current conversation Profile's MEMORY.md (top-level conversations only). append adds content; replace swaps the full text (over ${MAX_MEMORY_CHARS} chars requires a replace to trim first).`,
         inputSchema: {
           type: 'object',
           properties: { text: { type: 'string' }, mode: { type: 'string', enum: ['append', 'replace'] } },
@@ -387,6 +391,14 @@ export function createMemoryPlugin(options: { dream?: DreamEngineOptions } = {})
         },
         async execute(input, context) {
           const conversation = ctx.host.getConversation(context.conversationId)
+          if (!isMemorySessionEligible(conversation)) {
+            throw new HelmxError(
+              'memory_session_not_eligible',
+              `Conversation ${conversation.id} is a child conversation; calling update_memory is only allowed in top-level conversations`,
+              403,
+              { conversationId: conversation.id, profileId: conversation.profileId },
+            )
+          }
           const profileId = conversation.profileId
           if (!isEnabled(profileId)) {
             throw new HelmxError(

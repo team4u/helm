@@ -187,7 +187,7 @@ test('memory：set 动作超限在写盘前拒绝（MEMORY.md 不半截写入）
   }
 })
 
-test('memory：写入路径无绕过上限参数（任何调用均强制 64k）', { timeout: 60_000 }, async () => {
+test('memory：写入路径无绕过上限参数（任何调用均强制 4k）', { timeout: 60_000 }, async () => {
   const dataDir = mkdtempSync(join(tmpdir(), 'helmx-mem-nolimit-'))
   try {
     const store = new MemoryStore(createProfileFileHost(dataDir))

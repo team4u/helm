@@ -4,14 +4,14 @@
  * - Manages reads/writes and initialization of `<dataDir>/profiles/<profileId>/MEMORY.md`;
  * - Obtains the Profile directory, file lock, and atomic-write capability through public host ports,
  *   serialized by real path within the same Hub process, atomically flushed;
- * - Every write path enforces a uniform 64_000-character cap on the **merged** final content inside the file lock:
+ * - Every write path enforces a uniform 4_000-character cap on the **merged** final content inside the file lock:
  *   concurrent calls cannot each "pre-read the old value + pass the check" and stack past the cap;
  *   over the limit it throws HelmxError('memory_limit_exceeded', 400) explicitly, never writing half a file.
  */
 import { createHash } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { HelmxError, type HelmxHostApi } from '@helmx/protocol'
+import { HelmxError, type ConversationSummary, type HelmxHostApi } from '@helmx/protocol'
 
 type MemoryFileHost = Pick<HelmxHostApi, 'profiles' | 'withFileLock' | 'atomicWriteFile'>
 
@@ -36,9 +36,23 @@ export const MEMORY_PLUGIN_ID = 'builtin:memory' as const
 
 /**
  * The MEMORY.md long-term-memory character cap (the single source of truth of this line of defense):
- * long-term memory is injected wholesale into the system prompt every turn; without a cap, per-call cost would grow unboundedly.
+ * long-term memory is injected wholesale into the system prompt on every eligible turn; keeping the
+ * hard cap tight (4k chars) prevents unbounded per-turn token tax while still covering durable
+ * preferences and external environment facts.
  */
-export const MAX_MEMORY_CHARS = 64_000
+export const MAX_MEMORY_CHARS = 4_000
+
+/**
+ * Only top-level conversations (`parentConversationId === undefined`) participate in `MEMORY.md`
+ * injection and `update_memory`. Delegated child sessions (subagents, workflow agents, swarm
+ * workers, superagent workers) receive only the task context passed by their parent, stay lean
+ * without paying per-turn memory token tax, and cannot concurrently mutate Profile-wide memory.
+ */
+export function isMemorySessionEligible(
+  conversation: Pick<ConversationSummary, 'parentConversationId'>,
+): boolean {
+  return conversation.parentConversationId === undefined
+}
 
 /** Initial default content (a legal placeholder skeleton before the first memory). */
 export const MEMORY_DEFAULT = ['# Memory', '', ''].join('\n')
@@ -132,8 +146,8 @@ export class MemoryStore {
    * (never "check outside, write inside"). The current content is re-read inside the closure and
    * must hash exactly to expectedHash (captured when the dream started); a mismatch or a vanished
    * file resolves { applied: false } without writing — the caller keeps candidates and diagnostics
-   * and never clobbers a concurrent human edit. The 64k cap is re-enforced on the final text here
-   * as the last authoritative gate before the atomic write.
+   * and never clobbers a concurrent human edit. The hard cap (`MAX_MEMORY_CHARS`) is re-enforced on
+   * the final text here as the last authoritative gate before the atomic write.
    *
    * `opts.guard` (policy from the dream engine, evaluated by the mechanism here): re-checked inside
    * the lock AFTER the hash re-validation and immediately before the write — a per-Profile memory

@@ -1,7 +1,8 @@
 node_modules/
 dist/
 *.log
-.helmx/
+.helmx/*
+!.helmx/skills/
 .DS_Store
 node_modules
 
