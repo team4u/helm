@@ -5,7 +5,7 @@
  * - 纯函数：parseDreamModelOutput 严格 JSON/形状/空白/上限/预算（围栏拒绝）、stripExcerptNoise
  *   围栏代码/命令/日志剥离、低价值输入过滤、nextDailyRunAt 每日/时区、
  *   extractFinalAssistantText 只取文本块并剥离代码/日志噪声、dreamBudgetChars；
- * - MemoryStore CAS：成功写回、内容变更冲突不写、文件消失冲突不写、64k 锁内拒绝；
+ * - MemoryStore CAS：成功写回、内容变更冲突不写、文件消失冲突不写、4k 锁内拒绝；
  * - 引擎：0 候选零 completeText、模型成功 CAS 应用并消费候选、坏 JSON 零写回保留候选、
  *   预算超限拒绝、无模型会话合法跳过、disabled Profile 403、CAS 冲突放弃写回；
  * - 复核切片：模型在途/等锁期间关闭记忆绝不写回（锁内 guard）、采集 enrichment 在途
@@ -86,7 +86,7 @@ test('dream 纯函数：parseDreamModelOutput 严格校验（单一裸 JSON 对�
     ['{"memory":123}', 8000, 'shape'],
     ['{"memory":"   "}', 8000, 'blank'],
     [`{"memory":"${'x'.repeat(MAX_MEMORY_CHARS + 1)}"}`, MAX_MEMORY_CHARS + 10, 'over_cap'],
-    [`{"memory":"${'x'.repeat(9_000)}"}`, 8000, 'over_budget'],
+    [`{"memory":"${'x'.repeat(3_500)}"}`, 3_000, 'over_budget'],
   ]
   for (const [raw, budget, reason] of cases) {
     assert.throws(
@@ -98,9 +98,12 @@ test('dream 纯函数：parseDreamModelOutput 严格校验（单一裸 JSON 对�
       `${reason} 应被拒绝：${raw.slice(0, 40)}`,
     )
   }
-  // 预算边界：目标预算 max(2x 目标, 当前 + 1000)
+  // 预算边界：min(MAX_MEMORY_CHARS, max(2x 目标, 当前))——无 +1000 膨胀棘轮，超标存量强制净缩减
+  assert.equal(DREAM_TARGET_CHARS, 1_500)
   assert.equal(dreamBudgetChars(0), DREAM_TARGET_CHARS * 2)
-  assert.equal(dreamBudgetChars(60_000), 61_000)
+  assert.equal(dreamBudgetChars(2_500), DREAM_TARGET_CHARS * 2)
+  assert.equal(dreamBudgetChars(3_500), 3_500)
+  assert.equal(dreamBudgetChars(MAX_MEMORY_CHARS + 2_000), MAX_MEMORY_CHARS)
 })
 
 test('dream 纯函数：selectCandidatesForDream 新近优先选整条、按时间送出、预算内有界', { timeout: 60_000 }, () => {
@@ -243,7 +246,7 @@ test('dream 纯函数：entriesUpToSettledTurn 按 lastEntryId 截断（下一�
 // MemoryStore CAS
 // ---------------------------------------------------------------------------
 
-test('MemoryStore 梦境 CAS：成功、冲突、文件消失、64k 锁内拒绝', { timeout: 60_000 }, async (t) => {
+test('MemoryStore 梦境 CAS：成功、冲突、文件消失、4k 锁内拒绝', { timeout: 60_000 }, async (t) => {
   const dir = scratchDir(t, 'memory-cas')
   const fileHost = createProfileFileHost(dir)
   const store = new MemoryStore(fileHost)
@@ -264,7 +267,7 @@ test('MemoryStore 梦境 CAS：成功、冲突、文件消失、64k 锁内拒绝
   assert.deepEqual(await store.commitDreamMemory('assistant', hash2, '# Rebuild'), { applied: false })
   assert.equal(existsSync(join(dir, 'profiles', 'assistant', 'MEMORY.md')), false)
 
-  // 64k 锁内拒绝（正确 hash）
+  // 4k 锁内拒绝（正确 hash）
   await store.ensureMemory('assistant')
   const { hash: hash3 } = await store.readMemoryWithHash('assistant')
   await assert.rejects(
@@ -602,7 +605,7 @@ test('dream 执行：坏 JSON / 超预算零写回且保留候选', { timeout: 6
   assert.equal(await h.store.getMemory('assistant'), '# Memory\n旧偏好。', '坏 JSON 不写回')
   assert.equal(readCandidates(h, 'assistant').length, 1, '候选保留供下次重试')
 
-  h.backend.completeTextImpl = async () => `{"memory":"${'x'.repeat(9_500)}"}`
+  h.backend.completeTextImpl = async () => `{"memory":"${'x'.repeat(3_500)}"}`
   await assert.rejects(
     () => h.host.invokeAction('builtin:memory', 'dream', { profileId: 'assistant' }),
     (err: unknown) => err instanceof HelmxError && (err.details as { reason?: string })?.reason === 'over_budget',

@@ -8,6 +8,7 @@
  */
 import type { HelmxLocale, LocalizedText } from '@helmx/plugin-client'
 import { resolveLocalizedText } from '@helmx/plugin-client'
+import { MAX_MEMORY_CHARS } from './models.js'
 
 /** Section heading shown in the profile detail drawer. */
 export const MEMORY_SECTION_TITLE: LocalizedText = {
@@ -44,9 +45,12 @@ export const MEMORY_DISABLED_HINT: LocalizedText = {
   'zh-CN': '已为此角色关闭长期记忆：对话中不会注入 MEMORY.md，也不会提供 update_memory 工具。开关即时生效，已保存的记忆内容保留在磁盘上。',
 }
 
-/** Editor size counters (`n / 65536 chars`, optionally with line count). */
+/** Editor size counters (`n / 4000 chars`, optionally with line count). */
 export function memoryCharCount(chars: number, locale: HelmxLocale): string {
-  return resolveLocalizedText({ en: `${chars} / 65536 chars`, 'zh-CN': `${chars} / 65536 字符` }, locale)
+  return resolveLocalizedText(
+    { en: `${chars} / ${MAX_MEMORY_CHARS} chars`, 'zh-CN': `${chars} / ${MAX_MEMORY_CHARS} 字符` },
+    locale,
+  )
 }
 export function memoryLineCount(lines: number, locale: HelmxLocale): string {
   return resolveLocalizedText({ en: ` · ${lines} lines`, 'zh-CN': ` · ${lines} 行` }, locale)

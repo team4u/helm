@@ -17,7 +17,8 @@ import assert from 'node:assert/strict'
 import { HelmxError, type ConversationSummary, type PluginDefinition } from '@helmx/protocol'
 import { PluginHost, type PluginDocStore, type PluginHostBackend } from '../../kernel/src/plugins/index.js'
 import { ProfileService } from '../../kernel/src/services/index.js'
-import { MAX_MEMORY_CHARS, createMemoryPlugin, isProfileMemoryEnabled, type MemoryPluginDoc } from '../src/memory.js'
+import { MAX_MEMORY_CHARS, createMemoryPlugin, isMemorySessionEligible, isProfileMemoryEnabled, type MemoryPluginDoc } from '../src/memory.js'
+import { MAX_MEMORY_CHARS as CLIENT_MAX_MEMORY_CHARS } from '../src/memory/client/models.js'
 import { MemoryStore } from '../src/memory/store.js'
 import { createProfilePlugin } from '../src/profile.js'
 import { createProfileFileHost } from '../../kernel/test/helpers/profile-file-host.js'
@@ -33,6 +34,7 @@ const makeConversation = (id: number, profileId = 'assistant'): ConversationSumm
   makeConversationSummary({ id, profileId, model: 'faux/model' })
 
 function makeBackend(): PluginHostBackend & {
+  conversations: Map<number, ConversationSummary>
   notifications: Array<{ title: string; body: string; level: string }>
 } {
   const conversations = new Map<number, ConversationSummary>()
@@ -280,6 +282,47 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     }
   })
 
+  await t.test('before_turn 与 update_memory：子会话（subagent/workflow/swarm/worker）不注入记忆且禁用工具，顶层会话保留', async () => {
+    const dir = join(scratchRoot, 't-scope')
+    const { host, store, backend } = await setup(dir)
+    await store.updateMemory('assistant', '# 仅顶层会话可见', 'replace')
+    const childConv = makeConversationSummary({ id: 30, profileId: 'assistant', parentConversationId: 1, ownedBy: 'helmx', model: 'faux/model' })
+    const humanChildConv = makeConversationSummary({ id: 31, profileId: 'assistant', parentConversationId: 1, ownedBy: 'human', model: 'faux/model' })
+    const topLevelHelmx = makeConversationSummary({ id: 33, profileId: 'assistant', ownedBy: 'helmx', model: 'faux/model' })
+    backend.conversations.set(childConv.id, childConv)
+    backend.conversations.set(humanChildConv.id, humanChildConv)
+    backend.conversations.set(topLevelHelmx.id, topLevelHelmx)
+
+    assert.equal(isMemorySessionEligible(makeConversation(1)), true)
+    assert.equal(isMemorySessionEligible(topLevelHelmx), true)
+    assert.equal(isMemorySessionEligible(childConv), false)
+    assert.equal(isMemorySessionEligible(humanChildConv), false)
+
+    for (const conv of [childConv, humanChildConv]) {
+      const turn = { ...makeTurn('assistant'), conversation: conv }
+      const result = await host.runHook('before_turn', turn as never)
+      assert.equal(result.action, 'transform', '带 update_memory 工具时应 transform 剥离工具')
+      assert.equal(result.value.tools.some((tool: { name: string }) => tool.name === 'update_memory'), false, '子会话必须剥离 update_memory')
+      assert.equal(result.value.sections.some((s: { id: string }) => s.id.startsWith('memory.')), false, '子会话不得注入任何 memory 段落')
+
+      // 执行期双防线：即使绕过 before_turn 直接调用 update_memory 也 403 拒绝
+      await assert.rejects(
+        () => host.executeTool('update_memory', { text: 'leak', mode: 'append' }, { conversationId: conv.id }),
+        (err: unknown) => err instanceof HelmxError && err.code === 'memory_session_not_eligible' && err.status === 403,
+      )
+    }
+
+    // 顶层常驻会话（如 SuperAgent 中枢）仍正常获得记忆段落
+    const topResult = await host.runHook('before_turn', { ...makeTurn('assistant'), conversation: topLevelHelmx } as never)
+    assert.equal(topResult.action, 'transform')
+    assert.ok(topResult.value.sections.some((s: { id: string }) => s.id === 'memory.content'))
+
+    // 未初始化 Profile 在子会话跑 before_turn 不得触发惰性创建 MEMORY.md
+    const coderChild = makeConversationSummary({ id: 32, profileId: 'coder', parentConversationId: 2, ownedBy: 'helmx', model: 'faux/model' })
+    await host.runHook('before_turn', { ...makeTurn('coder', false), conversation: coderChild } as never)
+    assert.equal(existsSync(join(dir, 'profiles', 'coder', 'MEMORY.md')), false, '子会话不触发 MEMORY.md 惰性创建')
+  })
+
   await t.test('update_memory 执行期守卫：关闭的 Profile 403、开启的正常写入', async () => {
     const dir = join(scratchRoot, 't6')
     const { host, store } = await setup(dir)
@@ -338,19 +381,20 @@ test('memory 插件行为', { timeout: 60_000 }, async (t) => {
     void profiles
   })
 
-  await t.test('MEMORY.md 上限常量导出为 64000', () => {
-    assert.equal(MAX_MEMORY_CHARS, 64_000)
+  await t.test('MEMORY.md 上限常量导出为 4000 且与客户端镜像一致', () => {
+    assert.equal(MAX_MEMORY_CHARS, 4_000)
+    assert.equal(CLIENT_MAX_MEMORY_CHARS, MAX_MEMORY_CHARS)
   })
 
-  await t.test('64k 上限：replace/append 超限显式拒绝且不写半截（跨实例并发）', async () => {
+  await t.test('4k 上限：replace/append 超限显式拒绝且不写半截（跨实例并发）', async () => {
     const dir = join(scratchRoot, 't9')
     const { host, store } = await setup(dir)
-    await store.updateMemory('assistant', 'x'.repeat(64_000 - 100), 'replace')
+    await store.updateMemory('assistant', 'x'.repeat(MAX_MEMORY_CHARS - 100), 'replace')
     await assert.rejects(
       () => host.invokeAction('builtin:memory', 'set', { profileId: 'assistant', text: 'y'.repeat(200), mode: 'append' }),
       (err: unknown) => err instanceof HelmxError && err.code === 'memory_limit_exceeded' && err.status === 400,
     )
-    assert.equal((await store.getMemory('assistant')).length, 64_000 - 100, '拒绝后文件保持旧值')
+    assert.equal((await store.getMemory('assistant')).length, MAX_MEMORY_CHARS - 100, '拒绝后文件保持旧值')
   })
 
   await t.test('update_memory 超限显式拒绝（append 累计与 replace 直写双路径）', async () => {

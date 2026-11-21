@@ -8,6 +8,12 @@
  * memory section.
  */
 
+/**
+ * Client-side mirror of `MAX_MEMORY_CHARS` in `memory/store.ts` (client bundles
+ * are self-contained and cannot import Node modules; parity is asserted in tests).
+ */
+export const MAX_MEMORY_CHARS = 4_000
+
 /** Read subset of the backend `dream_status` action output the UI consumes. */
 export interface DreamStatusResult {
   profileId?: string
