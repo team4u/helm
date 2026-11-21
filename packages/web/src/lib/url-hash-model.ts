@@ -19,7 +19,7 @@ import { isSameResolvedTarget, isPrototypeParamKey, SCREEN_PARAM_KEY_PATTERN, ty
  * - `views/<pluginId>/<screenId>`                                plugin full-screen view
  * - `settings/profiles[/<profileId>]`                            profile center
  * - `settings/models[/<providerId>|/defaults|/<providerId>/defaults]` model center (defaults is the reserved segment = global-default tab)
- * - `settings/skills[/<skillId>]`                                skill center
+ * - `settings/skills[/<skillId>]`                                skill center (may carry node/cwd scope env params, agent precedent)
  * - `settings/nodes[/<nodeId>]`                                  node center
  * - `settings/plugins[/<pluginId>]`                              plugin center
  */
@@ -115,12 +115,12 @@ function parseHashLineRange(raw: string | null): { startLine?: number; endLine?:
 export const PRIMARY_SCREEN_PARAM_PREFIX = 'sp.'
 export const SPLIT_SCREEN_PARAM_PREFIX = 'ssp.'
 
-/** Query param names of the agent target draft env in the hash (one set at the top level for the primary screen, one inside the split value; scopes never overlap). */
+/** Query param names of the target env (agent draft env / skills center scope) in the hash (one set at the top level for the primary screen, one inside the split value; scopes never overlap). */
 const AGENT_NODE_PARAM = 'node'
 const AGENT_CWD_PARAM = 'cwd'
 
-/** Extract the agent draft env from the query string (only non-empty values apply; empty strings count as unset). */
-function extractAgentEnv(params: URLSearchParams): { nodeId?: string; cwd?: string } {
+/** Extract a target env from the query string (only non-empty values apply; empty strings count as unset). */
+function extractTargetEnv(params: URLSearchParams): { nodeId?: string; cwd?: string } {
   const node = params.get(AGENT_NODE_PARAM)
   const cwd = params.get(AGENT_CWD_PARAM)
   return {
@@ -129,17 +129,17 @@ function extractAgentEnv(params: URLSearchParams): { nodeId?: string; cwd?: stri
   }
 }
 
-/** Attach fields only when env params are actually carried, keeping the shape of env-less agent targets stable. */
-function applyAgentEnv(
-  target: { kind: 'agent'; profileId: string },
+/** Attach fields only when env params are actually carried, keeping the shape of env-less targets stable. */
+function applyTargetEnv(
+  target: { kind: 'agent'; profileId: string } | { kind: 'skills'; skillId?: string },
   env: { nodeId?: string; cwd?: string },
 ): ResolvedTarget {
   return env.nodeId === undefined && env.cwd === undefined ? target : { ...target, ...env }
 }
 
-/** Serialize the env params of an agent target (stable lexicographic order; escaping handled by URLSearchParams). */
-function formatAgentEnvParams(target: ResolvedTarget): Array<[string, string]> {
-  if (target.kind !== 'agent') return []
+/** Serialize the env params of an env-carrying target (agent draft env or the skills center physical scope; stable lexicographic order; escaping handled by URLSearchParams). */
+function formatTargetEnvParams(target: ResolvedTarget): Array<[string, string]> {
+  if (target.kind !== 'agent' && target.kind !== 'skills') return []
   const pairs: Array<[string, string]> = []
   if (target.nodeId !== undefined && target.nodeId !== '') pairs.push([AGENT_NODE_PARAM, target.nodeId])
   if (target.cwd !== undefined && target.cwd !== '') pairs.push([AGENT_CWD_PARAM, target.cwd])
@@ -312,10 +312,10 @@ function formatTargetValue(target: ResolvedTarget): string {
 /**
  * Parse a split value: shares the same canonical target paths as the primary
  * screen (including settings/views hierarchy and center sub-item segments);
- * only agent targets may carry an embedded query `?node=&cwd=` after the path
- * (center sub-items and tabs are already path segments, screen params always
- * live in the top-level ssp.* namespace — nothing else travels via a split
- * query anymore).
+ * agent and skills targets may carry an embedded query `?node=&cwd=` after
+ * the path (the agent draft env / the skills center physical scope; center
+ * sub-items and tabs are already path segments, screen params always live in
+ * the top-level ssp.* namespace — nothing else travels via a split query).
  */
 function parseSplitTargetValue(raw: string): ResolvedTarget | null {
   const queryIdx = raw.indexOf('?')
@@ -323,16 +323,16 @@ function parseSplitTargetValue(raw: string): ResolvedTarget | null {
   const baseTarget = parseTargetValue(path)
   if (baseTarget === null) return null
   if (queryIdx === -1) return baseTarget
-  if (baseTarget.kind !== 'agent') return baseTarget
+  if (baseTarget.kind !== 'agent' && baseTarget.kind !== 'skills') return baseTarget
   const params = new URLSearchParams(raw.slice(queryIdx + 1))
-  return applyAgentEnv(baseTarget, extractAgentEnv(params))
+  return applyTargetEnv(baseTarget, extractTargetEnv(params))
 }
 
 function formatSplitTarget(target: ResolvedTarget): string {
   const base = formatTargetValue(target)
-  const agentEnv = formatAgentEnvParams(target)
-  if (agentEnv.length === 0) return base
-  const env = new URLSearchParams(agentEnv).toString()
+  const envParams = formatTargetEnvParams(target)
+  if (envParams.length === 0) return base
+  const env = new URLSearchParams(envParams).toString()
   return `${base}?${env}`
 }
 
@@ -404,9 +404,11 @@ export function parseLocationHash(rawHash: string): WorkspaceLocationState {
   const splitRaw = params.get('split')
   const workbenchTab = params.get('wb')
   let primaryTarget = parseTargetValue(path) ?? DEFAULT_PRIMARY
-  // The draft env of an agent standby primary comes from top-level node/cwd params (an agent env inside the split is encoded within the split value).
-  if (primaryTarget.kind === 'agent') {
-    primaryTarget = applyAgentEnv(primaryTarget, extractAgentEnv(params))
+  // The draft env of an agent standby primary (and the physical scope of a
+  // skills center primary) comes from top-level node/cwd params; env values of
+  // a split target are encoded inside the split value itself.
+  if (primaryTarget.kind === 'agent' || primaryTarget.kind === 'skills') {
+    primaryTarget = applyTargetEnv(primaryTarget, extractTargetEnv(params))
   }
   const splitTarget = splitRaw === null || splitRaw === '' ? null : parseSplitTargetValue(splitRaw)
 
@@ -445,8 +447,8 @@ function applyScreenParams(
 /** Always return the canonical form starting with `#/`; the default state outputs `#/settings/profiles`; command-palette is never serialized. */
 export function formatLocationHash(state: WorkspaceLocationState): string {
   const query: Array<[string, string]> = []
-  // The draft env (node/cwd) of an agent standby target serializes into the primary's top-level namespace; the split carries its own inside the split string.
-  query.push(...formatAgentEnvParams(state.primaryTarget))
+  // The env (node/cwd) of an agent standby target (draft env) or a skills center target (physical scope) serializes into the primary's top-level namespace; the split carries its own inside the split string.
+  query.push(...formatTargetEnvParams(state.primaryTarget))
   if (state.splitTarget !== null) query.push(['split', formatSplitTarget(state.splitTarget)])
   // Primary/split screen params occupy the sp.* / ssp.* namespaces respectively: the same screen open twice never crosses params.
   query.push(...formatScreenParams(state.primaryTarget, PRIMARY_SCREEN_PARAM_PREFIX))

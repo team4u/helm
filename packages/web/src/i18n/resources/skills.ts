@@ -11,7 +11,33 @@ export const skillsMessages = {
   // ('all'/'builtin' reuse common.all / common.builtIn).
   'skills.category.plugins': { en: 'Plugins', 'zh-CN': '插件' },
   'skills.category.shared': { en: 'Shared', 'zh-CN': '共享' },
+  'skills.category.node': { en: 'Node', 'zh-CN': '节点' },
   'skills.category.workspace': { en: 'Workspace', 'zh-CN': '工作区' },
+
+  // Skill scope picker (physical nodeId+cwd coordinates; Hub is the default).
+  'skills.scope.label': { en: 'Skill scope', 'zh-CN': '技能作用域' },
+  'skills.scope.hub': { en: 'Hub (global)', 'zh-CN': 'Hub（全局）' },
+  'skills.scope.hubMeta': { en: 'Hub dataDir and shared roots', 'zh-CN': 'Hub 数据目录与共享根' },
+  'skills.scope.conversationMeta': { en: 'Conversation', 'zh-CN': '会话' },
+  'skills.scope.profileMeta': { en: 'Profile', 'zh-CN': '角色' },
+  'skills.scope.loading': { en: 'Loading merged catalog…', 'zh-CN': '正在加载合并目录…' },
+  'skills.scope.loadFailed': {
+    en: 'Failed to load the merged skill catalog: {error}',
+    'zh-CN': '加载合并技能目录失败：{error}',
+  },
+  'skills.scope.retry': { en: 'Retry', 'zh-CN': '重试' },
+  'skills.scope.nodeUnavailable': {
+    en: 'Node skill library unavailable: {reason}',
+    'zh-CN': '节点技能库不可用：{reason}',
+  },
+  'skills.scope.shadowed': {
+    en: 'Same-name Hub skills win; node copies not listed: {ids}',
+    'zh-CN': '同名 Hub 技能优先生效，节点副本未收录：{ids}',
+  },
+  'skills.scope.reloadTitle': { en: 'Reload the scoped skill catalog', 'zh-CN': '重新加载作用域技能目录' },
+
+  // Node-sourced skill detail (scope note under the drawer title).
+  'skills.drawer.nodeSource': { en: 'Node workspace source: {node} · {cwd}', 'zh-CN': '节点工作区来源：{node} · {cwd}' },
 
   // SkillCard copy.
   'skills.card.noDescription': { en: 'No description', 'zh-CN': '暂无描述' },

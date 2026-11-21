@@ -14,6 +14,7 @@ import {
   renderSkillDocMarkdown,
   skillFileLanguage,
 } from './skill-reader-model.js'
+import type { SkillScope } from './skill-scope-model.js'
 
 export interface SkillDetailDrawerProps {
   skill: SkillSummary | null
@@ -25,6 +26,9 @@ export interface SkillDetailDrawerProps {
   initialContent?: string
   /** Custom file reading implementation; defaults to skillsApi.read. */
   readSkill?: (id: string, path?: string) => Promise<{ text: string }>
+  /** Physical coordinates of the current scope: node-sourced skills display
+   * their node workspace provenance (and are read via the caller's reader). */
+  nodeScope?: SkillScope
 }
 
 /** Reading mode for Markdown files: rich rendering or monospace source. */
@@ -58,6 +62,7 @@ export function SkillDetailDrawer({
   inline = false,
   initialContent,
   readSkill,
+  nodeScope,
 }: SkillDetailDrawerProps): React.JSX.Element {
   const { t } = useWebLocale()
   const [loading, setLoading] = useState(false)
@@ -120,7 +125,7 @@ export function SkillDetailDrawer({
       ? 'badge badge-neutral'
       : sourceBadge?.variant === 'plugin'
         ? 'badge badge-neutral mono'
-        : sourceBadge?.variant === 'agents'
+        : sourceBadge?.variant === 'agents' || sourceBadge?.variant === 'node'
           ? 'badge badge-accent'
           : 'badge badge-neutral'
 
@@ -174,6 +179,11 @@ export function SkillDetailDrawer({
                 )}
                 {skill?.source === 'agents' && (
                   <div className="text-subtle">{t('skills.drawer.machineSharedRoot')}</div>
+                )}
+                {skill?.source === 'node' && nodeScope !== undefined && (
+                  <div className="text-subtle break-word" title={`${nodeScope.nodeId} ${nodeScope.cwd}`}>
+                    {t('skills.drawer.nodeSource', { node: nodeScope.nodeId, cwd: nodeScope.cwd })}
+                  </div>
                 )}
               </div>
             </div>

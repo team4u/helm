@@ -36,7 +36,9 @@ import { CompletionPopover } from './CompletionPopover.js'
 import { ModelPickerControl } from './ModelPicker.js'
 import { focusWithCaret } from './composer-controller.js'
 import { envDraftOnNodeChange, useIsMobile } from './composer-model.js'
-import { slashMenuSkills } from './slash-menu-skills.js'
+import { standbySkillScope } from '../skills/skill-scope-model.js'
+import { useScopedSkillCatalog } from '../skills/use-scoped-skills.js'
+import { slashMenuSkillsWithScope } from './slash-menu-skills.js'
 import { autoGrowTextarea, useComposerPopovers, useElementWidthResize } from './use-composer-popovers.js'
 import {
   COMPOSER_SHORTCUTS,
@@ -112,9 +114,22 @@ export function AgentStandbyPane({ profileId, nodeId, cwd, isSplit, onCloseSplit
     () => pluginSlashCommandsFor(groupedUi.commands, anchoredConversation),
     [groupedUi.commands, anchoredConversation],
   )
+  // '/' 技能菜单按草稿有效环境（显式定制优先，否则角色显式 cwd）补入节点
+  // 工作区技能；未定制且角色无 cwd 时保持 Hub 基底（运行时工作区不猜测）。
+  const standbyScope = useMemo(
+    () => standbySkillScope(draft, profile),
+    [draft.envCustomized, draft.envNodeId, draft.envCwd, profile],
+  )
+  const scopedSkillCatalog = useScopedSkillCatalog(standbyScope, invokePluginAction)
   const availableSkills = useMemo(
-    () => (profile !== undefined ? slashMenuSkills(profile, skills, enabledPluginIds) : []),
-    [profile, skills, enabledPluginIds],
+    () =>
+      slashMenuSkillsWithScope(
+        profile,
+        skills,
+        enabledPluginIds,
+        scopedSkillCatalog.catalog?.skills,
+      ),
+    [profile, skills, enabledPluginIds, scopedSkillCatalog.catalog],
   )
   const commandPendingRef = useRef(false)
   const [commandPending, setCommandPending] = useState(false)

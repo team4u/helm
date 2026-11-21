@@ -462,3 +462,113 @@ test('overview 筛选参数：sp.* 写入默认 replace 不入栈，跨坐标 pu
 // （零插件 ID 特判 + slotProps 组装）；tsx 对 src/*.tsx 的经典 JSX 转换使
 // icons.tsx 等共享组件无法在本测试进程内运行时渲染，故本文件专注 Provider
 // 导航行为（地址栏、历史栈、参数隔离）的浏览器式交互验收。
+
+// ---------------------------------------------------------------------------
+// skills 作用域环境：物理坐标 (node, cwd) 沿 agent 待命目标的顶层查询参数先例
+// ---------------------------------------------------------------------------
+
+test('skills 作用域环境：深链还原、openTarget replace 切换、详情开合保留作用域、后退/前进可恢复', { timeout: 60_000 }, async (t) => {
+  stubFetch()
+  t.after(() => (globalThis.fetch as unknown as { restore: () => void }).restore())
+  snapshotDelayMs = 0
+
+  let captured: ProbeSnapshot | undefined
+  let openTargetFn: ((target: HelmxStoreValue['primaryTarget']) => void) | undefined
+
+  function SkillsProbe(): React.ReactNode {
+    const store = useHelmxStore()
+    openTargetFn = (t2) => store.openTarget(t2)
+    captured = {
+      primaryTarget: store.primaryTarget,
+      splitTarget: store.splitTarget,
+      hash: '',
+      historyLength: window.history.length,
+    }
+    return e('div', { 'data-skills-probe': 'primary' }, JSON.stringify(store.primaryTarget))
+  }
+
+  resetLocation('#/settings/skills?node=remote-1&cwd=%2Fremote%2Fwork')
+  const host = document.createElement('div')
+  document.body.appendChild(host)
+  let root: Root | undefined
+  act(() => {
+    root = createRoot(host)
+    root.render(e(HelmxStoreProvider, null, e(SkillsProbe)))
+  })
+  const settle = async (): Promise<void> => {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 25))
+    })
+  }
+  const probe = (): ProbeSnapshot => ({ ...captured!, hash: window.location.hash, historyLength: window.history.length })
+  try {
+    await settle()
+    assert.deepEqual(
+      probe().primaryTarget,
+      { kind: 'skills', nodeId: 'remote-1', cwd: '/remote/work' },
+      '深链作用域环境从地址栏还原',
+    )
+
+    // 作用域切换（环境变化，agent 草稿环境先例）默认 replace，不新增历史记录
+    const before = probe()
+    await act(async () => {
+      openTargetFn!({ kind: 'skills', nodeId: 'local', cwd: '/root/code/helm' })
+    })
+    await settle()
+    let current = probe()
+    assert.equal(current.historyLength, before.historyLength, '仅作用域环境变化 replace')
+    assert.equal(current.hash, '#/settings/skills?node=local&cwd=%2Froot%2Fcode%2Fhelm')
+
+    // 回 Hub：环境清空，地址栏收敛回无参形态
+    await act(async () => {
+      openTargetFn!({ kind: 'skills' })
+    })
+    await settle()
+    assert.equal(window.location.hash, '#/settings/skills')
+
+    // 带作用域打开详情（SkillCenter 的 handleSelectSkill 同构入口）push 入栈
+    await act(async () => {
+      openTargetFn!({ kind: 'skills', skillId: 'deploy-runbook', nodeId: 'remote-1', cwd: '/remote/work' })
+    })
+    await settle()
+    current = probe()
+    assert.equal(current.hash, '#/settings/skills/deploy-runbook?node=remote-1&cwd=%2Fremote%2Fwork')
+    assert.deepEqual(
+      current.primaryTarget,
+      { kind: 'skills', skillId: 'deploy-runbook', nodeId: 'remote-1', cwd: '/remote/work' },
+    )
+    assert.equal(current.historyLength, before.historyLength + 1, '打开详情 push 入栈')
+
+    // 关闭详情（保留作用域环境）后浏览器后退：还原 Hub 列表；前进还原带作用域的列表
+    await act(async () => {
+      openTargetFn!({ kind: 'skills', nodeId: 'remote-1', cwd: '/remote/work' })
+    })
+    await settle()
+    current = probe()
+    assert.deepEqual(
+      current.primaryTarget,
+      { kind: 'skills', nodeId: 'remote-1', cwd: '/remote/work' },
+      '关闭详情保留作用域环境（同槽 replace）',
+    )
+    await act(async () => {
+      window.history.back()
+    })
+    await settle()
+    current = probe()
+    assert.deepEqual(current.primaryTarget, { kind: 'skills' }, '后退还原 Hub 列表')
+    await act(async () => {
+      window.history.forward()
+    })
+    await settle()
+    current = probe()
+    assert.deepEqual(
+      current.primaryTarget,
+      { kind: 'skills', nodeId: 'remote-1', cwd: '/remote/work' },
+      '前进还原带作用域环境的技能中心',
+    )
+  } finally {
+    act(() => root?.unmount())
+    host.remove()
+  }
+})
+
