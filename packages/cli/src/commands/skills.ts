@@ -8,7 +8,7 @@
  *   cwd locally, and no conversation context is attached to the action call —
  *   keeping the call shape identical to the explicit --node/--cwd surface.
  * - --node <id> + --cwd <dir>: explicit physical coordinates written into the action
- *   input (trusted CLI surface, same trust level as `helmx api`); the two flags must
+ *   input (trusted CLI surface, same trust level as the explicit --node/--cwd coordinate input); the two flags must
  *   appear together and are mutually exclusive with --current.
  * Scoped calls go through the plugin action endpoints (POST /api/actions/...) so the
  * CLI adds no server contract beyond the standard action mapping; responses are
